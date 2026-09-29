@@ -1,0 +1,67 @@
+# Environment
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+frontend/.env.local
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+backend/.venv/
+backend/venv/
+.venv/
+venv/
+env/
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.cover
+
+# Uploads & generated artifacts (keep directory structure)
+backend/uploads/reports/*
+backend/uploads/xrays/*
+backend/uploads/explainability/*
+!backend/uploads/reports/.gitkeep
+!backend/uploads/xrays/.gitkeep
+!backend/uploads/explainability/.gitkeep
+
+# Model checkpoints (large binaries; keep structure)
+backend/models/xray/**/*.pt
+backend/models/xray/**/*.pth
+backend/models/xray/**/*.onnx
+!backend/models/xray/**/.gitkeep
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.log
+npm-debug.log*
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Docker volumes
+postgres_data/
+
+# Misc
+*.sqlite
+*.db
+.cache/

@@ -1,0 +1,1390 @@
+/* MediSense AI Dashboard Styling - Premium Medical SaaS
+   Master Update: Exact Visual Match to Original Reference UI (#4)
+   3D Glassmorphism + Soft Luminous Glow + Realistic Medical Depth */
+
+:root {
+  --ms-bg: #f7fcff;
+  --ms-bg-subtle: #eff8ff;
+  --ms-blue: #0ea5e9;
+  --ms-blue-dark: #0284c7;
+  --ms-cyan: #38bdf8;
+  --ms-navy: #082b61;
+  --ms-muted: #54708f;
+  --ms-border: rgba(66, 180, 240, 0.26);
+  --ms-glass: rgba(255, 255, 255, 0.84);
+
+  --ms-emergency: #ef4444;
+  --ms-emergency-soft: #fff5f5;
+  --ms-consult: #0ea5e9;
+  --ms-consult-soft: #f0f9ff;
+  --ms-shop: #10b981;
+  --ms-shop-soft: #f0fdf4;
+  --ms-purple: #7c3aed;
+  --ms-orange: #f97316;
+
+  /* 3D Specular Highlight System */
+  --ms-specular-top: inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  --ms-specular-box: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 1px 0 0 rgba(255, 255, 255, 0.7);
+}
+
+/* Widen layout container specifically for Dashboard desktop full-screen view */
+.app-main:has(.dashboard-page) {
+  max-width: 1536px;
+  width: 100%;
+  padding: 0.5rem 1.25rem;
+  margin: 0 auto;
+}
+
+/* ==================================================
+   3D MEDICAL-TECH PAGE BACKGROUND & AMBIENT DEPTH
+   ================================================== */
+.dashboard-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  box-sizing: border-box;
+  color: var(--ms-navy);
+  background:
+    radial-gradient(1200px 700px at 18% 10%, rgba(56, 189, 248, 0.14), transparent 60%),
+    radial-gradient(1000px 650px at 85% 15%, rgba(14, 165, 233, 0.12), transparent 55%),
+    radial-gradient(900px 550px at 50% 55%, rgba(34, 211, 238, 0.08), transparent 60%),
+    radial-gradient(800px 500px at 85% 90%, rgba(16, 185, 129, 0.06), transparent 50%),
+    radial-gradient(750px 450px at 12% 88%, rgba(239, 68, 68, 0.05), transparent 50%),
+    linear-gradient(180deg, #ffffff 0%, #f4fbff 30%, #ebf7ff 100%);
+  border: 1px solid rgba(66, 180, 240, 0.28);
+  border-radius: 20px;
+  padding: 0.85rem 1.25rem 1.1rem;
+  box-shadow:
+    0 20px 50px rgba(8, 43, 97, 0.05),
+    0 4px 16px rgba(14, 165, 233, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  overflow: hidden;
+}
+
+/* Layered soft ambient light blooms */
+.dashboard-page::before {
+  content: '';
+  position: absolute;
+  top: -80px;
+  right: 5%;
+  width: 500px;
+  height: 400px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.18) 0%, rgba(14, 165, 233, 0.05) 50%, transparent 70%);
+  filter: blur(60px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.dashboard-page::after {
+  content: '';
+  position: absolute;
+  bottom: -60px;
+  left: 8%;
+  width: 450px;
+  height: 350px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(16, 185, 129, 0.08) 0%, rgba(56, 189, 248, 0.05) 45%, transparent 70%);
+  filter: blur(70px);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ==================================================
+   1. HERO / WELCOME SECTION (3-COLUMN DESKTOP COMPOSITION)
+   LEFT GREETING & CTA -> CENTER-RIGHT SMART INSIGHTS -> FAR RIGHT REALISTIC STETHOSCOPE & GLOWING CROSS
+   ================================================== */
+.dashboard-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 18px;
+  min-height: 190px;
+  padding: 0.9rem 1.45rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.15rem;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(236, 248, 255, 0.90) 100%);
+  border: 1px solid rgba(66, 180, 240, 0.35);
+  box-shadow:
+    0 10px 32px rgba(14, 165, 233, 0.14),
+    0 0 35px rgba(56, 189, 248, 0.12),
+    var(--ms-specular-top);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  z-index: 1;
+}
+
+/* Luminous ambient hero glow orb */
+.dashboard-hero::before {
+  content: '';
+  position: absolute;
+  top: -40px;
+  right: -30px;
+  width: 400px;
+  height: 360px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(56, 189, 248, 0.28) 0%, rgba(14, 165, 233, 0.09) 50%, transparent 75%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Hero Left Column: Greeting & CTA */
+.dashboard-hero-left {
+  flex: 1.15;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  z-index: 3;
+  min-width: 280px;
+}
+
+.dashboard-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.75rem;
+  border-radius: 9999px;
+  background: #eaf7ff;
+  color: var(--ms-blue-dark);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid rgba(56, 189, 248, 0.38);
+  margin-bottom: 0.45rem;
+  box-shadow: 0 2px 10px rgba(56, 189, 248, 0.16);
+}
+
+.dashboard-hero-welcome {
+  font-size: 0.88rem;
+  color: var(--ms-muted);
+  font-weight: 500;
+  margin: 0 0 0.1rem 0;
+}
+
+.dashboard-hero-name {
+  font-size: 1.85rem;
+  font-weight: 800;
+  color: var(--ms-navy);
+  margin: 0 0 0.25rem 0;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+.dashboard-hero-subtitle {
+  font-size: 0.83rem;
+  color: var(--ms-muted);
+  margin: 0 0 0.6rem 0;
+  max-width: 400px;
+  line-height: 1.35;
+}
+
+.dashboard-hero-datetime {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--ms-muted);
+  font-size: 0.77rem;
+  font-weight: 500;
+  margin-bottom: 0.7rem;
+  flex-wrap: wrap;
+}
+
+.dashboard-hero-date-item {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.dashboard-hero-date-item svg {
+  color: var(--ms-blue);
+}
+
+.dashboard-hero-divider {
+  color: rgba(66, 180, 240, 0.45);
+  font-weight: 300;
+}
+
+.dashboard-hero-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.65rem 1.35rem;
+  border-radius: 11px;
+  border: none;
+  font-weight: 700;
+  font-size: 0.88rem;
+  color: #ffffff;
+  background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%);
+  box-shadow:
+    0 6px 22px rgba(14, 165, 233, 0.48),
+    0 0 20px rgba(56, 189, 248, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+  transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  text-decoration: none;
+}
+
+.dashboard-hero-cta:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 10px 28px rgba(14, 165, 233, 0.65),
+    0 0 26px rgba(56, 189, 248, 0.5);
+}
+
+.dashboard-hero-cta .cta-arrow {
+  display: inline-flex;
+  transition: transform 0.22s ease;
+}
+
+.dashboard-hero-cta:hover .cta-arrow {
+  transform: translateX(3px);
+}
+
+/* Hero Center-Right Column: Smart Insights Glass Card */
+.dashboard-hero-center {
+  flex: 0.95;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+}
+
+.dashboard-hero-info-card {
+  position: relative;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(255, 255, 255, 0.95);
+  border-left: 4px solid var(--ms-cyan);
+  border-radius: 16px;
+  padding: 0.9rem 1.15rem;
+  width: 100%;
+  max-width: 280px;
+  box-shadow:
+    0 10px 30px rgba(14, 165, 233, 0.16),
+    0 0 20px rgba(56, 189, 248, 0.12),
+    var(--ms-specular-box);
+}
+
+.dashboard-info-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.4rem;
+}
+
+.dashboard-info-badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ms-cyan);
+  box-shadow: 0 0 8px var(--ms-cyan);
+}
+
+.dashboard-info-card-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--ms-navy);
+  line-height: 1.3;
+  margin: 0;
+}
+
+.dashboard-info-card-desc {
+  font-size: 0.77rem;
+  color: var(--ms-muted);
+  line-height: 1.4;
+  margin: 0;
+}
+
+.dashboard-info-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.55rem;
+  padding-top: 0.45rem;
+  border-top: 1px solid rgba(66, 180, 240, 0.20);
+  font-size: 0.72rem;
+  color: var(--ms-blue-dark);
+  font-weight: 600;
+}
+
+/* Hero Far Right Column: Volumetric Stethoscope & Glowing Medical Cross */
+.dashboard-hero-right {
+  flex: 1.1;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  position: relative;
+  min-width: 320px;
+  height: 190px;
+  z-index: 2;
+}
+
+.dashboard-hero-visual-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.dashboard-hero-decorations {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Floating Circular Glass Medical Icons Surrounding Stethoscope */
+.hero-bubble {
+  position: absolute;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow:
+    0 8px 22px rgba(8, 43, 97, 0.08),
+    0 0 16px rgba(56, 189, 248, 0.38),
+    var(--ms-specular-top);
+  animation: heroFloat 3.8s ease-in-out infinite alternate;
+  z-index: 4;
+}
+
+@keyframes heroFloat {
+  0% { transform: translateY(0px); }
+  100% { transform: translateY(-7px); }
+}
+
+.hero-bubble-heart {
+  top: 10px;
+  right: 175px;
+  width: 38px;
+  height: 38px;
+  border: 1.5px solid rgba(239, 68, 68, 0.35);
+  color: #ef4444;
+  animation-delay: 0s;
+}
+
+.hero-bubble-doc {
+  bottom: 25px;
+  right: 195px;
+  width: 34px;
+  height: 34px;
+  border: 1.5px solid rgba(16, 185, 129, 0.35);
+  color: #10b981;
+  animation-delay: 1.8s;
+}
+
+.hero-bubble-report {
+  top: 14px;
+  right: 25px;
+  width: 36px;
+  height: 36px;
+  border: 1.5px solid rgba(124, 58, 237, 0.35);
+  color: #7c3aed;
+  animation-delay: 0.7s;
+}
+
+.hero-bubble-chart {
+  bottom: 20px;
+  right: 32px;
+  width: 38px;
+  height: 38px;
+  border: 1.5px solid rgba(56, 189, 248, 0.45);
+  color: var(--ms-blue);
+  animation-delay: 1.2s;
+}
+
+/* ==================================================
+   2. STATISTICS CARDS (HORIZONTAL COMPOSITION)
+   [ICON]  Title                →
+           Value          ~~~~~~~
+           Description
+   ================================================== */
+.dashboard-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.dashboard-stat-card {
+  position: relative;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 14px;
+  padding: 0.65rem 0.95rem;
+  border: 1px solid var(--ms-border);
+  box-shadow:
+    0 4px 18px rgba(8, 43, 97, 0.04),
+    var(--ms-specular-top);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  min-height: 70px;
+  transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+  overflow: hidden;
+  cursor: default;
+}
+
+.dashboard-stat-card:hover {
+  transform: translateY(-2px);
+}
+
+/* Specific Card Glow & Accents */
+.stat-card-green {
+  border-color: rgba(16, 185, 129, 0.3);
+  box-shadow:
+    0 4px 18px rgba(16, 185, 129, 0.12),
+    0 0 20px rgba(16, 185, 129, 0.14),
+    var(--ms-specular-top);
+}
+.stat-card-green:hover {
+  border-color: rgba(16, 185, 129, 0.58);
+  box-shadow:
+    0 8px 24px rgba(16, 185, 129, 0.22),
+    0 0 25px rgba(16, 185, 129, 0.20),
+    var(--ms-specular-top);
+}
+
+.stat-card-blue {
+  border-color: rgba(14, 165, 233, 0.3);
+  box-shadow:
+    0 4px 18px rgba(14, 165, 233, 0.12),
+    0 0 20px rgba(56, 189, 248, 0.15),
+    var(--ms-specular-top);
+}
+.stat-card-blue:hover {
+  border-color: rgba(56, 189, 248, 0.65);
+  box-shadow:
+    0 8px 24px rgba(14, 165, 233, 0.22),
+    0 0 25px rgba(56, 189, 248, 0.24),
+    var(--ms-specular-top);
+}
+
+.stat-card-purple {
+  border-color: rgba(124, 58, 237, 0.3);
+  box-shadow:
+    0 4px 18px rgba(124, 58, 237, 0.12),
+    0 0 20px rgba(124, 58, 237, 0.14),
+    var(--ms-specular-top);
+}
+.stat-card-purple:hover {
+  border-color: rgba(124, 58, 237, 0.58);
+  box-shadow:
+    0 8px 24px rgba(124, 58, 237, 0.22),
+    0 0 25px rgba(124, 58, 237, 0.18),
+    var(--ms-specular-top);
+}
+
+.stat-card-orange {
+  border-color: rgba(249, 115, 22, 0.3);
+  box-shadow:
+    0 4px 18px rgba(249, 115, 22, 0.12),
+    0 0 20px rgba(249, 115, 22, 0.14),
+    var(--ms-specular-top);
+}
+.stat-card-orange:hover {
+  border-color: rgba(249, 115, 22, 0.58);
+  box-shadow:
+    0 8px 24px rgba(249, 115, 22, 0.22),
+    0 0 25px rgba(249, 115, 22, 0.18),
+    var(--ms-specular-top);
+}
+
+/* Left Icon Tile */
+.dashboard-stat-left {
+  flex-shrink: 0;
+}
+
+.dashboard-stat-icon-tile {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.18s ease;
+}
+
+.dashboard-stat-card:hover .dashboard-stat-icon-tile {
+  transform: scale(1.06);
+}
+
+.dashboard-stat-tile-teal {
+  background: #ecfdf5;
+  color: var(--ms-shop);
+}
+
+.dashboard-stat-tile-blue {
+  background: #f0f9ff;
+  color: var(--ms-blue);
+}
+
+.dashboard-stat-tile-purple {
+  background: #f5f3ff;
+  color: var(--ms-purple);
+}
+
+.dashboard-stat-tile-orange {
+  background: #fff7ed;
+  color: var(--ms-orange);
+}
+
+/* Center Stat Content */
+.dashboard-stat-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-stat-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ms-navy);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-stat-value {
+  font-size: 1.6rem;
+  font-weight: 800;
+  color: var(--ms-navy);
+  line-height: 1.15;
+  margin: 1px 0;
+  letter-spacing: -0.02em;
+}
+
+.dashboard-stat-desc {
+  font-size: 0.7rem;
+  color: var(--ms-muted);
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Right Stat Sparkline & Arrow */
+.dashboard-stat-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 100%;
+  flex-shrink: 0;
+  gap: 0.2rem;
+}
+
+.dashboard-stat-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.65;
+  transition: transform 0.18s ease, opacity 0.18s ease;
+}
+
+.dashboard-stat-card:hover .dashboard-stat-arrow {
+  opacity: 1;
+  transform: translateX(2px);
+}
+
+.dashboard-stat-sparkline {
+  opacity: 0.8;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.dashboard-stat-card:hover .dashboard-stat-sparkline {
+  opacity: 1;
+  transform: scale(1.05);
+}
+
+/* ==================================================
+   3. MIDDLE SECTION (RECENT ASSESSMENTS + HEALTH TIPS)
+   EXACT SPEC: ONE SHARED ROW, SAME TOP, SAME BOTTOM, SAME HEIGHT!
+   RECENT ASSESSMENTS ≈ 66% (2/3), HEALTH TIPS ≈ 34% (1/3)
+   ================================================== */
+.dashboard-middle-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 2.08fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: stretch;
+  margin-bottom: 0;
+}
+
+.dashboard-card {
+  position: relative;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 16px;
+  padding: 0.8rem 1.15rem;
+  border: 1px solid var(--ms-border);
+  box-shadow:
+    0 6px 24px rgba(8, 43, 97, 0.04),
+    0 0 25px rgba(14, 165, 233, 0.10),
+    var(--ms-specular-top);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-recent-card {
+  justify-content: flex-start;
+}
+
+.dashboard-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+  padding-bottom: 0.45rem;
+  border-bottom: 1px solid rgba(66, 180, 240, 0.16);
+}
+
+.dashboard-card-title-group {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.dashboard-card-title-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ms-consult-soft);
+  color: var(--ms-blue);
+}
+
+.dashboard-card-title {
+  font-size: 0.96rem;
+  font-weight: 700;
+  color: var(--ms-navy);
+  margin: 0;
+}
+
+.dashboard-view-all-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: none;
+  border: none;
+  color: var(--ms-blue-dark);
+  font-weight: 600;
+  font-size: 0.8rem;
+  cursor: pointer;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  transition: all 0.18s ease;
+}
+
+.dashboard-view-all-btn:hover {
+  background: var(--ms-consult-soft);
+  color: var(--ms-cyan);
+}
+
+.dashboard-view-all-btn svg {
+  transition: transform 0.18s ease;
+}
+
+.dashboard-view-all-btn:hover svg {
+  transform: translateX(3px);
+}
+
+/* Recent Assessments List — Self-sizing, no excess space */
+.dashboard-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.dashboard-recent-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: #ffffff;
+  border: 1px solid rgba(66, 180, 240, 0.22);
+  border-radius: 12px;
+  padding: 0.6rem 0.85rem;
+  transition: all 0.18s ease;
+}
+
+.dashboard-recent-item:hover {
+  border-color: rgba(56, 189, 248, 0.55);
+  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.15);
+  transform: translateY(-1px);
+}
+
+.dashboard-recent-left {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Stacked Date Tile: 02 OCT 2026 */
+.dashboard-date-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 46px;
+  border-radius: 8px;
+  background: #f0f9ff;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  box-shadow: 0 2px 6px rgba(56, 189, 248, 0.12);
+  flex-shrink: 0;
+}
+
+.dashboard-date-day {
+  font-size: 1.02rem;
+  font-weight: 800;
+  color: var(--ms-navy);
+  line-height: 1;
+}
+
+.dashboard-date-month {
+  font-size: 0.58rem;
+  font-weight: 700;
+  color: var(--ms-blue-dark);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 1px;
+}
+
+.dashboard-date-year {
+  font-size: 0.54rem;
+  font-weight: 500;
+  color: var(--ms-muted);
+}
+
+.dashboard-recent-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-recent-title {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--ms-navy);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-recent-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-size: 0.72rem;
+  color: var(--ms-muted);
+}
+
+.meta-status-completed {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--ms-shop);
+  font-weight: 600;
+}
+
+.meta-report-avail {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--ms-blue-dark);
+  font-weight: 500;
+}
+
+.dashboard-recent-right {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-shrink: 0;
+}
+
+/* Pathway Badges */
+.dashboard-pathway-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.22rem 0.6rem;
+  border-radius: 9999px;
+  font-size: 0.73rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.dashboard-pathway-badge .pathway-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.pathway-badge-emergency {
+  background: var(--ms-emergency-soft);
+  color: var(--ms-emergency);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.pathway-badge-emergency .pathway-dot {
+  background: var(--ms-emergency);
+  box-shadow: 0 0 6px var(--ms-emergency);
+}
+
+.pathway-badge-consultation {
+  background: var(--ms-consult-soft);
+  color: var(--ms-consult);
+  border: 1px solid rgba(14, 165, 233, 0.25);
+}
+
+.pathway-badge-consultation .pathway-dot {
+  background: var(--ms-consult);
+  box-shadow: 0 0 6px var(--ms-consult);
+}
+
+.pathway-badge-mild {
+  background: #fffbeb;
+  color: #d97706;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.pathway-badge-mild .pathway-dot {
+  background: #d97706;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+}
+
+.pathway-badge-unknown {
+  background: #f1f5f9;
+  color: #64748b;
+  border: 1px solid rgba(100, 116, 139, 0.2);
+}
+
+.dashboard-recent-view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 7px;
+  background: #eaf7ff;
+  color: var(--ms-blue-dark);
+  border: 1px solid rgba(56, 189, 248, 0.32);
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+}
+
+.dashboard-recent-view-btn:hover {
+  background: linear-gradient(135deg, var(--ms-blue) 0%, var(--ms-cyan) 100%);
+  color: #ffffff;
+  border-color: transparent;
+  box-shadow: 0 3px 12px rgba(56, 189, 248, 0.35);
+}
+
+/* Empty State */
+.dashboard-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 1.35rem 1rem;
+  text-align: center;
+  background: #ffffff;
+  border-radius: 11px;
+  border: 1px dashed rgba(66, 180, 240, 0.3);
+}
+
+.dashboard-empty-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--ms-consult-soft);
+  color: var(--ms-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0.45rem;
+}
+
+.dashboard-empty-text {
+  font-size: 0.82rem;
+  color: var(--ms-muted);
+  margin: 0 0 0.65rem 0;
+  max-width: 290px;
+}
+
+/* Health Tips Card — Vertically Balanced to Match Recent Assessments Height Exactly */
+.dashboard-health-tips-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.dashboard-tip-container {
+  position: relative;
+  background: linear-gradient(145deg, #eaf7ff 0%, #f7fcff 100%);
+  border: 1px solid rgba(66, 180, 240, 0.28);
+  border-radius: 14px;
+  padding: 0.8rem 1rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex: 1;
+  box-shadow:
+    0 3px 12px rgba(8, 43, 97, 0.02),
+    var(--ms-specular-top);
+}
+
+.dashboard-tip-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+
+.dashboard-tip-icon-badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: #ffffff;
+  color: var(--ms-cyan);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 10px rgba(56, 189, 248, 0.25);
+}
+
+.dashboard-tip-title {
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--ms-navy);
+  margin: 0;
+}
+
+.dashboard-tip-desc {
+  font-size: 0.77rem;
+  color: var(--ms-muted);
+  line-height: 1.38;
+  margin: 0;
+}
+
+.dashboard-tip-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+/* Progress Indicator Bars */
+.dashboard-tip-progress {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+}
+
+.dashboard-tip-progress-bar {
+  height: 3px;
+  border-radius: 9999px;
+  background: rgba(66, 180, 240, 0.22);
+  flex: 1;
+  transition: all 0.3s ease;
+}
+
+.dashboard-tip-progress-bar.active {
+  background: linear-gradient(90deg, var(--ms-blue), var(--ms-cyan));
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.45);
+}
+
+.dashboard-tip-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.dashboard-tip-counter {
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--ms-muted);
+}
+
+.dashboard-tip-nav-btn {
+  width: 25px;
+  height: 25px;
+  border-radius: 6px;
+  background: #ffffff;
+  border: 1px solid rgba(66, 180, 240, 0.25);
+  color: var(--ms-blue);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.dashboard-tip-nav-btn:hover {
+  background: var(--ms-blue);
+  color: #ffffff;
+  border-color: var(--ms-blue);
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.35);
+}
+
+.dashboard-tip-disclaimer {
+  font-size: 0.67rem;
+  color: #829ab1;
+  margin: 0;
+  text-align: center;
+  line-height: 1.3;
+}
+
+/* ==================================================
+   4. BOTTOM CONTEXTUAL CARDS (NO EMPTY GAP ABOVE, 3 EQUAL-WIDTH CARDS):
+      - Emergency (Red/pink visual identity & Hospital/Ambulance watermark)
+      - Consult (Cyan/blue visual identity & Realistic Stethoscope watermark in lower-right)
+      - Medical Shops (Green/mint visual identity & Pharmacy storefront watermark)
+   ================================================== */
+.dashboard-pathway-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  width: 100%;
+  margin-top: 0;
+  align-items: stretch;
+}
+
+.dashboard-pathway-card {
+  position: relative;
+  border-radius: 16px;
+  padding: 1rem 1.2rem 1.05rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+  overflow: hidden;
+  height: 100%;
+  min-height: 160px;
+  box-sizing: border-box;
+}
+
+.dashboard-pathway-card:hover {
+  transform: translateY(-2px);
+}
+
+/* Card 1: Emergency */
+.dashboard-pathway-emergency {
+  background: linear-gradient(135deg, #fff5f5 0%, #fee2e2 65%, #fed7d7 100%);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  box-shadow:
+    0 4px 18px rgba(239, 68, 68, 0.12),
+    0 0 28px rgba(239, 68, 68, 0.18),
+    var(--ms-specular-top);
+}
+
+.dashboard-pathway-emergency:hover {
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow:
+    0 8px 28px rgba(239, 68, 68, 0.28),
+    0 0 35px rgba(239, 68, 68, 0.22),
+    var(--ms-specular-top);
+}
+
+/* Card 2: Consult */
+.dashboard-pathway-consult {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 65%, #bae6fd 100%);
+  border: 1px solid rgba(14, 165, 233, 0.35);
+  box-shadow:
+    0 4px 18px rgba(14, 165, 233, 0.14),
+    0 0 30px rgba(56, 189, 248, 0.20),
+    var(--ms-specular-top);
+}
+
+.dashboard-pathway-consult:hover {
+  border-color: rgba(56, 189, 248, 0.6);
+  box-shadow:
+    0 8px 28px rgba(14, 165, 233, 0.28),
+    0 0 36px rgba(56, 189, 248, 0.26),
+    var(--ms-specular-top);
+}
+
+/* Card 3: Medical Shops */
+.dashboard-pathway-shops {
+  background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 65%, #bbf7d0 100%);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  box-shadow:
+    0 4px 18px rgba(16, 185, 129, 0.12),
+    0 0 28px rgba(16, 185, 129, 0.16),
+    var(--ms-specular-top);
+}
+
+.dashboard-pathway-shops:hover {
+  border-color: rgba(16, 185, 129, 0.6);
+  box-shadow:
+    0 8px 28px rgba(16, 185, 129, 0.28),
+    0 0 35px rgba(16, 185, 129, 0.22),
+    var(--ms-specular-top);
+}
+
+/* Scenic Atmospheric Watermarks */
+.pathway-watermark-canvas {
+  position: absolute;
+  right: -5px;
+  bottom: -5px;
+  width: 145px;
+  height: 125px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.dashboard-pathway-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.45rem;
+  position: relative;
+  z-index: 2;
+}
+
+.dashboard-pathway-icon-tile {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 3px 8px rgba(8, 43, 97, 0.06);
+}
+
+.pathway-icon-emergency {
+  background: #ffffff;
+  color: var(--ms-emergency);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+}
+
+.pathway-icon-consult {
+  background: #ffffff;
+  color: var(--ms-blue-dark);
+  border: 1px solid rgba(14, 165, 233, 0.25);
+}
+
+.pathway-icon-shops {
+  background: #ffffff;
+  color: var(--ms-shop);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.dashboard-pathway-title {
+  font-size: 1.12rem;
+  font-weight: 800;
+  color: var(--ms-navy);
+  margin: 0;
+}
+
+.dashboard-pathway-subtitle {
+  font-size: 0.78rem;
+  font-weight: 700;
+  margin: 0 0 0.2rem 0;
+  position: relative;
+  z-index: 2;
+}
+
+.pathway-subtitle-emergency {
+  color: #b91c1c;
+}
+
+.pathway-subtitle-consult {
+  color: #0369a1;
+}
+
+.pathway-subtitle-shops {
+  color: #047857;
+}
+
+.dashboard-pathway-desc {
+  font-size: 0.75rem;
+  color: #334155;
+  line-height: 1.38;
+  margin: 0 0 0.75rem 0;
+  position: relative;
+  z-index: 2;
+  flex: 1;
+}
+
+.dashboard-pathway-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  position: relative;
+  z-index: 2;
+}
+
+.dashboard-pathway-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.58rem 1rem;
+  border-radius: 9px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  border: none;
+  box-sizing: border-box;
+}
+
+.dashboard-pathway-btn svg {
+  transition: transform 0.18s ease;
+}
+
+.dashboard-pathway-btn:hover svg {
+  transform: translateX(3px);
+}
+
+.pathway-btn-emergency {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.38);
+}
+
+.pathway-btn-emergency:hover {
+  background: #b91c1c;
+  box-shadow: 0 6px 18px rgba(239, 68, 68, 0.55);
+  transform: translateY(-1px);
+}
+
+.pathway-btn-consult-primary {
+  background: linear-gradient(135deg, #0ea5e9 0%, #38bdf8 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.42);
+}
+
+.pathway-btn-consult-primary:hover {
+  box-shadow: 0 6px 20px rgba(56, 189, 248, 0.6);
+  transform: translateY(-1px);
+}
+
+.pathway-btn-consult-secondary {
+  background: #ffffff;
+  color: var(--ms-blue-dark);
+  border: 1px solid rgba(14, 165, 233, 0.45);
+}
+
+.pathway-btn-consult-secondary:hover {
+  background: #ffffff;
+  border-color: var(--ms-blue-dark);
+  box-shadow: 0 3px 10px rgba(56, 189, 248, 0.25);
+  transform: translateY(-1px);
+}
+
+.pathway-btn-shops {
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 14px rgba(16, 185, 129, 0.38);
+}
+
+.pathway-btn-shops:hover {
+  background: #047857;
+  box-shadow: 0 6px 18px rgba(16, 185, 129, 0.55);
+  transform: translateY(-1px);
+}
+
+/* ==================================================
+   5. RESPONSIVE BREAKPOINTS (COMPACT DESKTOP)
+   ================================================== */
+@media (max-width: 1200px) {
+  .dashboard-stat-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .dashboard-hero {
+    flex-wrap: wrap;
+    min-height: auto;
+  }
+
+  .dashboard-hero-right {
+    min-width: 280px;
+  }
+}
+
+@media (max-width: 900px) {
+  .dashboard-middle-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-pathway-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-hero-center {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .dashboard-hero-info-card {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .dashboard-page {
+    padding: 0.6rem;
+    gap: 12px;
+  }
+
+  .dashboard-stat-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-hero {
+    padding: 0.85rem;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .dashboard-hero-right {
+    justify-content: center;
+    min-width: unset;
+    height: 160px;
+  }
+
+  .dashboard-recent-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.55rem;
+  }
+
+  .dashboard-recent-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+}

@@ -70,11 +70,52 @@ class Settings(BaseSettings):
     ollama_model: str = Field(default="llama3.2", alias="OLLAMA_MODEL")
 
     provider_data_source: str = Field(default="", alias="PROVIDER_DATA_SOURCE")
+    provider_api_base_url: str = Field(default="", alias="PROVIDER_API_BASE_URL")
+    provider_api_key: str = Field(default="", alias="PROVIDER_API_KEY")
+
     facility_data_source: str = Field(default="", alias="FACILITY_DATA_SOURCE")
+    facility_api_base_url: str = Field(default="", alias="FACILITY_API_BASE_URL")
+    facility_api_key: str = Field(default="", alias="FACILITY_API_KEY")
+
     medical_shop_data_source: str = Field(
         default="",
         alias="MEDICAL_SHOP_DATA_SOURCE",
     )
+    medical_shop_api_base_url: str = Field(
+        default="",
+        alias="MEDICAL_SHOP_API_BASE_URL",
+    )
+    medical_shop_api_key: str = Field(
+        default="",
+        alias="MEDICAL_SHOP_API_KEY",
+    )
+
+    provider_page_size: int = Field(default=10, alias="PROVIDER_PAGE_SIZE")
+    facility_page_size: int = Field(default=10, alias="FACILITY_PAGE_SIZE")
+    medical_shop_page_size: int = Field(default=10, alias="MEDICAL_SHOP_PAGE_SIZE")
+
+    local_radius_km: int = Field(default=25, alias="LOCAL_RADIUS_KM")
+    expanded_radius_km: int = Field(default=50, alias="EXPANDED_RADIUS_KM")
+
+    map_default_zoom: int = Field(default=13, alias="MAP_DEFAULT_ZOOM")
+
+    geoapify_api_key: str = Field(default="", alias="GEOAPIFY_API_KEY")
+    geoapify_base_url: str = Field(
+        default="https://api.geoapify.com/v2/places",
+        alias="GEOAPIFY_BASE_URL",
+    )
+    geoapify_facility_category: str = Field(
+        default="healthcare.hospital",
+        alias="GEOAPIFY_FACILITY_CATEGORY",
+    )
+    geoapify_medical_shop_category: str = Field(
+        default="healthcare.pharmacy",
+        alias="GEOAPIFY_MEDICAL_SHOP_CATEGORY",
+    )
+    geoapify_default_radius_km: int = Field(default=25, alias="GEOAPIFY_DEFAULT_RADIUS_KM")
+    geoapify_expanded_radius_km: int = Field(default=50, alias="GEOAPIFY_EXPANDED_RADIUS_KM")
+    geoapify_page_size: int = Field(default=10, alias="GEOAPIFY_PAGE_SIZE")
+    geoapify_timeout_seconds: int = Field(default=10, alias="GEOAPIFY_TIMEOUT_SECONDS")
 
     # Version strings for audit logging (updated as modules mature)
     rules_version: str = "triage-rules-v0.1"

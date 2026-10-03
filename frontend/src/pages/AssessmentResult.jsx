@@ -199,7 +199,11 @@ export default function AssessmentResult() {
       <div className="action-row">
         {upper === 'EMERGENCY' ? (
           <>
-            <button type="button" className="btn btn-danger" onClick={() => navigate('/facilities')}>
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={() => navigate(`/facilities?emergency_only=true&assessment_id=${encodeURIComponent(id)}`)}
+            >
               Find Emergency Facilities
             </button>
             <button type="button" className="btn btn-secondary" onClick={() => navigate('/assistant')}>
@@ -210,10 +214,24 @@ export default function AssessmentResult() {
 
         {upper === 'CONSULTATION' ? (
           <>
-            <button type="button" className="btn btn-primary" onClick={() => navigate('/doctors')}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => {
+                const spec = result?.specialty || assessment?.specialty || '';
+                const query = spec
+                  ? `/doctors?specialization=${encodeURIComponent(spec)}&assessment_id=${encodeURIComponent(id)}`
+                  : `/doctors?assessment_id=${encodeURIComponent(id)}`;
+                navigate(query);
+              }}
+            >
               Find Doctors
             </button>
-            <button type="button" className="btn btn-secondary" onClick={() => navigate('/facilities')}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => navigate(`/facilities?assessment_id=${encodeURIComponent(id)}`)}
+            >
               Find Facilities
             </button>
             <button type="button" className="btn btn-secondary" onClick={() => navigate('/assistant')}>
@@ -227,7 +245,11 @@ export default function AssessmentResult() {
             <button type="button" className="btn btn-primary" onClick={() => navigate(`/assessment/${id}/details`)}>
               General Guidance
             </button>
-            <button type="button" className="btn btn-secondary" onClick={() => navigate('/medical-shops')}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => navigate(`/medical-shops?assessment_id=${encodeURIComponent(id)}`)}
+            >
               Find Medical Shops
             </button>
             <button type="button" className="btn btn-secondary" onClick={() => navigate('/assistant')}>

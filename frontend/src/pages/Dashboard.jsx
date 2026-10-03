@@ -614,7 +614,13 @@ export default function Dashboard() {
         </div>
 
         {/* Card 4: Appointments */}
-        <div className="dashboard-stat-card stat-card-orange">
+        <div
+          className="dashboard-stat-card stat-card-orange"
+          onClick={() => navigate('/appointments')}
+          style={{ cursor: 'pointer' }}
+          role="button"
+          tabIndex={0}
+        >
           <div className="dashboard-stat-left">
             <div className="dashboard-stat-icon-tile dashboard-stat-tile-orange">
               <CalendarIcon size={22} color="#f97316" />
@@ -915,7 +921,7 @@ export default function Dashboard() {
               Medical consultation recommended
             </div>
             <p className="dashboard-pathway-desc">
-              Find doctors or nearest hospital for proper evaluation and treatment.
+              Find a doctor for proper evaluation and treatment.
             </p>
           </div>
           <div className="dashboard-pathway-actions">
@@ -926,14 +932,6 @@ export default function Dashboard() {
             >
               <span>Find Doctors</span>
               <ArrowRightIcon size={14} color="#ffffff" />
-            </button>
-            <button
-              type="button"
-              className="dashboard-pathway-btn pathway-btn-consult-secondary"
-              onClick={() => navigate('/facilities')}
-            >
-              <span>Find Nearest Hospital</span>
-              <ArrowRightIcon size={14} color="#0284c7" />
             </button>
           </div>
         </div>

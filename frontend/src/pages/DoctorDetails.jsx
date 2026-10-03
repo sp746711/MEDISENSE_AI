@@ -41,18 +41,34 @@ export default function DoctorDetails() {
       <h1>Doctor Details</h1>
       <ErrorMessage message={error} onDismiss={() => setError('')} />
       {doctor ? <DoctorCard doctor={doctor} /> : null}
-      {doctor ? (
-        <button
-          type="button"
-          className="btn btn-primary"
-          onClick={() => navigate('/appointments/new', { state: { doctorId: doctor.doctor_id } })}
-        >
-          Book Demo Appointment
+
+      <div style={{ marginTop: '20px', display: 'flex', gap: '12px' }}>
+        {doctor ? (
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() =>
+              navigate('/appointments/new', {
+                state: {
+                  doctorId: doctor.doctor_id,
+                  doctorName: doctor.name,
+                  doctorSpecialization: doctor.specialization,
+                  doctorFacility: doctor.facility,
+                },
+              })
+            }
+          >
+            Book Demo Appointment
+          </button>
+        ) : null}
+        <button type="button" className="btn btn-secondary" onClick={() => navigate('/doctors')}>
+          Back to Doctors
         </button>
-      ) : null}
-      <button type="button" className="btn btn-secondary" onClick={() => navigate('/doctors')}>
-        Back
-      </button>
+      </div>
+
+      <p className="disclaimer-inline" style={{ marginTop: '16px' }}>
+        Appointment booking in MediSense AI is demonstration only. It creates an internal demonstration log and does not contact external healthcare providers.
+      </p>
     </div>
   );
 }

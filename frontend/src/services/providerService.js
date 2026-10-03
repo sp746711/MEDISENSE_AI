@@ -1,7 +1,17 @@
 import { apiRequest } from './api';
 
-export async function searchDoctors(params) {
-  const q = new URLSearchParams(params).toString();
+function cleanParams(params = {}) {
+  const clean = {};
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') {
+      clean[k] = v;
+    }
+  }
+  return clean;
+}
+
+export async function searchDoctors(params = {}) {
+  const q = new URLSearchParams(cleanParams(params)).toString();
   return apiRequest(`/doctors?${q}`);
 }
 

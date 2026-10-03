@@ -9,6 +9,7 @@ from typing import Any, Optional
 from sqlalchemy import (
     Date,
     DateTime,
+    Float,
     ForeignKey,
     String,
     Text,
@@ -201,6 +202,13 @@ class Doctor(Base):
     district: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    external_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    registration_number: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    registration_council: Mapped[Optional[str]] = mapped_column(String(150), nullable=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    contact: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     source: Mapped[str] = mapped_column(String(150), nullable=False)
     last_verified: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),
@@ -224,6 +232,10 @@ class Facility(Base):
     district: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    contact: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     emergency_available: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     source: Mapped[str] = mapped_column(String(150), nullable=False)
     last_verified: Mapped[Optional[datetime]] = mapped_column(
@@ -246,6 +258,10 @@ class MedicalShop(Base):
     district: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     city: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     address: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    contact: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    source_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     source: Mapped[str] = mapped_column(String(150), nullable=False)
     last_verified: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True),

@@ -1,5 +1,6 @@
 """Provider / doctor routes — legitimate data sources only."""
 
+from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Query
@@ -13,19 +14,31 @@ router = APIRouter(prefix="/doctors", tags=["Doctors"])
 @router.get("")
 def search_doctors(
     current_user: CurrentUser,
-    state: str = Query(..., min_length=2),
-    district: str = Query(..., min_length=2),
-    city: str | None = Query(default=None),
-    pin: str | None = Query(default=None),
-    specialization: str | None = Query(default=None),
+    specialization: Optional[str] = Query(default=None),
+    state: Optional[str] = Query(default=None),
+    district: Optional[str] = Query(default=None),
+    city: Optional[str] = Query(default=None),
+    pin: Optional[str] = Query(default=None),
+    latitude: Optional[float] = Query(default=None),
+    longitude: Optional[float] = Query(default=None),
+    radius_km: Optional[float] = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    assessment_id: Optional[str] = Query(default=None),
 ) -> dict:
     repo = ProviderRepository()
     return repo.search_doctors(
+        specialization=specialization,
         state=state,
         district=district,
         city=city,
         pin=pin,
-        specialization=specialization,
+        latitude=latitude,
+        longitude=longitude,
+        radius_km=radius_km,
+        page=page,
+        page_size=page_size,
+        assessment_id=assessment_id,
     )
 
 

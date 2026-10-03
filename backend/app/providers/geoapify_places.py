@@ -1,0 +1,798 @@
+"""Geoapify Places API client for nearby hospital and pharmacy discovery.
+
+Connects strictly to the official Geoapify Places API v2 (/v2/places).
+Adheres strictly to the MediSense AI core principle:
+NEVER fabricate healthcare records, coordinates, distances, contacts, or emergency status.
+Only real places returned by Geoapify / OpenStreetMap are presented.
+"""
+
+import logging
+import re
+from typing import Any, Optional
+import httpx
+
+from app.core.config import get_settings
+from app.providers.location_utils import calculate_distance_km
+
+logger = logging.getLogger(__name__)
+
+
+class RedactApiKeyFilter(logging.Filter):
+    """Logging filter that ensures apiKey query parameter values are always redacted in logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = re.sub(r"apiKey=[^&\s'\"]+", "apiKey=[REDACTED]", record.msg)
+        if record.args:
+            new_args = []
+            for arg in record.args:
+                if isinstance(arg, str):
+                    new_args.append(re.sub(r"apiKey=[^&\s'\"]+", "apiKey=[REDACTED]", arg))
+                else:
+                    new_args.append(arg)
+            record.args = tuple(new_args)
+        return True
+
+
+# Ensure httpx logger suppresses raw URL info logs containing query parameters
+_httpx_logger = logging.getLogger("httpx")
+_httpx_logger.setLevel(logging.WARNING)
+_httpx_logger.addFilter(RedactApiKeyFilter())
+logger.addFilter(RedactApiKeyFilter())
+logging.getLogger().addFilter(RedactApiKeyFilter())
+
+
+class GeoapifyPlacesClient:
+    """Client adapter for Geoapify Places API v2."""
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout_seconds: Optional[int] = None,
+    ) -> None:
+        settings = get_settings()
+        self.api_key = api_key if api_key is not None else settings.geoapify_api_key
+        self.base_url = (base_url or settings.geoapify_base_url).rstrip("/")
+        self.facility_category = settings.geoapify_facility_category
+        self.medical_shop_category = settings.geoapify_medical_shop_category
+        self.default_radius_km = settings.geoapify_default_radius_km
+        self.expanded_radius_km = settings.geoapify_expanded_radius_km
+        self.page_size = settings.geoapify_page_size
+        self.timeout_seconds = timeout_seconds or settings.geoapify_timeout_seconds
+
+    def is_configured(self) -> bool:
+        """True only if an API key and base URL are configured."""
+        return bool(
+            self.api_key
+            and self.api_key.strip()
+            and self.base_url
+            and self.base_url.strip()
+        )
+
+    def normalize_feature_to_facility(
+        self,
+        feature: dict[str, Any],
+        user_lat: float,
+        user_lon: float,
+    ) -> Optional[dict[str, Any]]:
+        """Normalize Geoapify place feature to canonical facility dictionary.
+
+        Returns None if coordinates are missing or invalid.
+        Never fabricates phone, coordinates, last_verified, or emergency status.
+        """
+        properties = feature.get("properties") or {}
+        geometry = feature.get("geometry") or {}
+        coords = geometry.get("coordinates") or []
+
+        # Extract latitude and longitude
+        lat = properties.get("lat")
+        lon = properties.get("lon")
+        if lat is None or lon is None:
+            if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+                lon = coords[0]
+                lat = coords[1]
+
+        if lat is None or lon is None:
+            return None
+
+        try:
+            f_lat = float(lat)
+            f_lon = float(lon)
+        except (ValueError, TypeError):
+            return None
+
+        # Validate coordinate ranges (-90 to 90 for lat, -180 to 180 for lon)
+        if not (-90.0 <= f_lat <= 90.0 and -180.0 <= f_lon <= 180.0):
+            return None
+
+        place_id = str(properties.get("place_id") or properties.get("id") or "")
+        name = properties.get("name") or properties.get("formatted") or "Healthcare Facility"
+
+        # Address & location components
+        address = properties.get("formatted") or properties.get("address_line1")
+        city = (
+            properties.get("city")
+            or properties.get("suburb")
+            or properties.get("town")
+            or properties.get("village")
+        )
+        state = properties.get("state")
+        district = (
+            properties.get("district")
+            or properties.get("county")
+            or properties.get("state_district")
+        )
+
+        # Contact information: only if supplied by source
+        datasource = properties.get("datasource") or {}
+        raw = datasource.get("raw") if isinstance(datasource, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+
+        contact = None
+        if raw.get("phone"):
+            contact = str(raw["phone"]).strip()
+        elif properties.get("phone"):
+            contact = str(properties["phone"]).strip()
+        elif isinstance(properties.get("contact"), dict) and properties["contact"].get("phone"):
+            contact = str(properties["contact"]["phone"]).strip()
+
+        # Emergency capability: NEVER assume emergency availability for a hospital.
+        # Only set if raw OSM data explicitly specifies "yes"
+        raw_emergency = str(raw.get("emergency", "")).lower().strip()
+        emergency_available = "yes" if raw_emergency == "yes" else None
+
+        # Source URL: only if supplied by source
+        source_url = None
+        if raw.get("website"):
+            source_url = str(raw["website"]).strip()
+        elif properties.get("website"):
+            source_url = str(properties["website"]).strip()
+        elif datasource.get("url"):
+            source_url = str(datasource["url"]).strip()
+
+        # Distance calculation via straight-line Haversine
+        dist_km = calculate_distance_km(user_lat, user_lon, f_lat, f_lon)
+
+        return {
+            "facility_id": place_id,
+            "external_id": place_id,
+            "name": name,
+            "type": "Hospital",
+            "state": state,
+            "district": district,
+            "city": city,
+            "address": address,
+            "latitude": f_lat,
+            "longitude": f_lon,
+            "contact": contact,
+            "emergency_available": emergency_available,
+            "has_emergency": bool(emergency_available == "yes"),
+            "source": "Geoapify / OpenStreetMap",
+            "source_url": source_url,
+            "last_verified": None,  # NEVER set to current time
+            "distance_km": dist_km,
+        }
+
+    def normalize_feature_to_medical_shop(
+        self,
+        feature: dict[str, Any],
+        user_lat: float,
+        user_lon: float,
+    ) -> Optional[dict[str, Any]]:
+        """Normalize Geoapify place feature to canonical medical shop dictionary.
+
+        Returns None if coordinates are missing or invalid.
+        Never fabricates phone, address, coordinates, or license numbers.
+        """
+        properties = feature.get("properties") or {}
+        geometry = feature.get("geometry") or {}
+        coords = geometry.get("coordinates") or []
+
+        lat = properties.get("lat")
+        lon = properties.get("lon")
+        if lat is None or lon is None:
+            if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+                lon = coords[0]
+                lat = coords[1]
+
+        if lat is None or lon is None:
+            return None
+
+        try:
+            f_lat = float(lat)
+            f_lon = float(lon)
+        except (ValueError, TypeError):
+            return None
+
+        if not (-90.0 <= f_lat <= 90.0 and -180.0 <= f_lon <= 180.0):
+            return None
+
+        place_id = str(properties.get("place_id") or properties.get("id") or "")
+        name = properties.get("name") or properties.get("formatted") or "Medical Shop / Pharmacy"
+
+        address = properties.get("formatted") or properties.get("address_line1")
+        city = (
+            properties.get("city")
+            or properties.get("suburb")
+            or properties.get("town")
+            or properties.get("village")
+        )
+        state = properties.get("state")
+        district = (
+            properties.get("district")
+            or properties.get("county")
+            or properties.get("state_district")
+        )
+
+        datasource = properties.get("datasource") or {}
+        raw = datasource.get("raw") if isinstance(datasource, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+
+        contact = None
+        if raw.get("phone"):
+            contact = str(raw["phone"]).strip()
+        elif properties.get("phone"):
+            contact = str(properties["phone"]).strip()
+        elif isinstance(properties.get("contact"), dict) and properties["contact"].get("phone"):
+            contact = str(properties["contact"]["phone"]).strip()
+
+        source_url = None
+        if raw.get("website"):
+            source_url = str(raw["website"]).strip()
+        elif properties.get("website"):
+            source_url = str(properties["website"]).strip()
+        elif datasource.get("url"):
+            source_url = str(datasource["url"]).strip()
+
+        dist_km = calculate_distance_km(user_lat, user_lon, f_lat, f_lon)
+
+        return {
+            "shop_id": place_id,
+            "external_id": place_id,
+            "name": name,
+            "location": address or city or None,
+            "state": state,
+            "district": district,
+            "city": city,
+            "address": address,
+            "latitude": f_lat,
+            "longitude": f_lon,
+            "contact": contact,
+            "source": "Geoapify / OpenStreetMap",
+            "source_url": source_url,
+            "last_verified": None,
+            "distance_km": dist_km,
+        }
+
+    def _query_places(
+        self,
+        category: str,
+        latitude: float,
+        longitude: float,
+        radius_km: float,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> dict[str, Any]:
+        """Perform a single bounded HTTP GET request to Geoapify Places API v2.
+
+        Note: Geoapify parameters use longitude,latitude order inside proximity and circle expressions.
+        """
+        if page > 2:
+            return {
+                "status": "success",
+                "message": "Maximum of 2 pages reached.",
+                "features": [],
+                "source_metadata": {
+                    "source": "Geoapify / OpenStreetMap",
+                    "configured": True,
+                    "source_url": "https://api.geoapify.com/v2/places",
+                },
+            }
+
+        if not self.is_configured():
+            return {
+                "status": "configuration_missing",
+                "message": "Nearby healthcare search is not configured.",
+                "features": [],
+                "source_metadata": {
+                    "source": "Geoapify / OpenStreetMap",
+                    "configured": False,
+                    "source_url": "https://api.geoapify.com/v2/places",
+                },
+            }
+
+        radius_meters = int(radius_km * 1000)
+        params = {
+            "categories": category,
+            "filter": f"circle:{longitude},{latitude},{radius_meters}",
+            "bias": f"proximity:{longitude},{latitude}",
+            "limit": page_size,
+            "offset": (page - 1) * page_size,
+            "apiKey": self.api_key,
+        }
+
+        try:
+            headers = {
+                "Accept": "application/json",
+                "User-Agent": "MediSenseAI-GeoapifyPlacesClient/1.0",
+            }
+            with httpx.Client(timeout=float(self.timeout_seconds)) as client:
+                response = client.get(self.base_url, params=params, headers=headers)
+
+                if response.status_code == 429:
+                    return {
+                        "status": "rate_limited",
+                        "message": "Nearby healthcare data source rate limit reached. Please try again shortly.",
+                        "features": [],
+                        "source_metadata": {
+                            "source": "Geoapify / OpenStreetMap",
+                            "configured": True,
+                            "source_url": "https://api.geoapify.com/v2/places",
+                        },
+                    }
+
+                if response.status_code in (401, 403):
+                    return {
+                        "status": "authorization_error",
+                        "message": "Nearby healthcare data source authorization failed.",
+                        "features": [],
+                        "source_metadata": {
+                            "source": "Geoapify / OpenStreetMap",
+                            "configured": True,
+                            "source_url": "https://api.geoapify.com/v2/places",
+                        },
+                    }
+
+                if response.status_code >= 500:
+                    return {
+                        "status": "source_error",
+                        "message": "Nearby healthcare data source is temporarily unavailable.",
+                        "features": [],
+                        "source_metadata": {
+                            "source": "Geoapify / OpenStreetMap",
+                            "configured": True,
+                            "source_url": "https://api.geoapify.com/v2/places",
+                        },
+                    }
+
+                if response.status_code != 200:
+                    return {
+                        "status": "source_error",
+                        "message": f"External healthcare place source returned an error (HTTP {response.status_code}).",
+                        "features": [],
+                        "source_metadata": {
+                            "source": "Geoapify / OpenStreetMap",
+                            "configured": True,
+                            "source_url": "https://api.geoapify.com/v2/places",
+                        },
+                    }
+
+                try:
+                    payload = response.json()
+                except Exception:
+                    return {
+                        "status": "source_error",
+                        "message": "Malformed response from healthcare data source.",
+                        "features": [],
+                        "source_metadata": {
+                            "source": "Geoapify / OpenStreetMap",
+                            "configured": True,
+                            "source_url": "https://api.geoapify.com/v2/places",
+                        },
+                    }
+
+                if not isinstance(payload, dict):
+                    return {
+                        "status": "source_error",
+                        "message": "Malformed response from healthcare data source.",
+                        "features": [],
+                        "source_metadata": {
+                            "source": "Geoapify / OpenStreetMap",
+                            "configured": True,
+                            "source_url": "https://api.geoapify.com/v2/places",
+                        },
+                    }
+
+                features = payload.get("features", [])
+                return {
+                    "status": "success",
+                    "features": features if isinstance(features, list) else [],
+                    "source_metadata": {
+                        "source": "Geoapify / OpenStreetMap",
+                        "configured": True,
+                        "source_url": "https://api.geoapify.com/v2/places",
+                    },
+                }
+
+        except httpx.TimeoutException:
+            logger.warning("Geoapify Places API request timed out after %ds", self.timeout_seconds)
+            return {
+                "status": "unavailable",
+                "message": "Nearby healthcare data source timed out.",
+                "features": [],
+                "source_metadata": {
+                    "source": "Geoapify / OpenStreetMap",
+                    "configured": True,
+                    "source_url": "https://api.geoapify.com/v2/places",
+                },
+            }
+        except httpx.RequestError as exc:
+            logger.warning("Geoapify Places API request network error: %s", exc)
+            return {
+                "status": "unavailable",
+                "message": "Nearby healthcare data source is currently unreachable.",
+                "features": [],
+                "source_metadata": {
+                    "source": "Geoapify / OpenStreetMap",
+                    "configured": True,
+                    "source_url": "https://api.geoapify.com/v2/places",
+                },
+            }
+        except Exception as exc:
+            logger.error("Unexpected error in GeoapifyPlacesClient: %s", exc)
+            return {
+                "status": "unavailable",
+                "message": "Nearby healthcare data source is currently unreachable.",
+                "features": [],
+                "source_metadata": {
+                    "source": "Geoapify / OpenStreetMap",
+                    "configured": True,
+                    "source_url": "https://api.geoapify.com/v2/places",
+                },
+            }
+
+    def search_places(
+        self,
+        category: str,
+        latitude: float,
+        longitude: float,
+        radius_km: Optional[float] = None,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> dict[str, Any]:
+        """Generic places query with 25km -> 50km radius expansion and max 2 pages enforcement."""
+        if page > 2:
+            return {
+                "status": "success",
+                "features": [],
+                "page": page,
+                "page_size": page_size,
+                "has_next": False,
+                "has_previous": True,
+                "expanded": False,
+                "expansion_message": None,
+                "message": "Maximum of 2 pages reached.",
+                "source_metadata": {
+                    "source": "Geoapify / OpenStreetMap",
+                    "configured": True,
+                    "source_url": "https://api.geoapify.com/v2/places",
+                },
+            }
+
+        default_radius = radius_km or self.default_radius_km
+        expanded_radius = self.expanded_radius_km
+
+        res = self._query_places(
+            category=category,
+            latitude=latitude,
+            longitude=longitude,
+            radius_km=default_radius,
+            page=page,
+            page_size=page_size,
+        )
+
+        if res["status"] != "success":
+            return res
+
+        features = res.get("features", [])
+        expanded = False
+        expansion_message = None
+
+        # Expansion ONLY when 0 features found on page 1
+        if not features and page == 1 and (radius_km is None or radius_km == default_radius):
+            exp_res = self._query_places(
+                category=category,
+                latitude=latitude,
+                longitude=longitude,
+                radius_km=expanded_radius,
+                page=1,
+                page_size=page_size,
+            )
+            if exp_res["status"] == "success" and exp_res.get("features"):
+                features = exp_res["features"]
+                expanded = True
+                expansion_message = (
+                    f"No matching places were found within {int(default_radius)} km. "
+                    f"Search expanded to approximately {int(expanded_radius)} km."
+                )
+
+        return {
+            "status": "success",
+            "features": features,
+            "page": page,
+            "page_size": page_size,
+            "has_next": (page < 2) and (len(features) == page_size),
+            "has_previous": (page > 1),
+            "expanded": expanded,
+            "expansion_message": expansion_message,
+            "source_metadata": res.get("source_metadata", {}),
+        }
+
+    def search_hospitals(
+        self,
+        latitude: float,
+        longitude: float,
+        radius_km: Optional[float] = None,
+        emergency_only: bool = False,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> dict[str, Any]:
+        """Search nearby hospitals using Geoapify Places API with 25km -> 50km radius expansion and max 2 pages."""
+        # Block page > 2 immediately without calling Geoapify
+        if page > 2:
+            return {
+                "status": "success",
+                "message": "Maximum of 2 pages reached.",
+                "data": [],
+                "facilities": [],
+                "page": page,
+                "page_size": page_size,
+                "has_next": False,
+                "has_previous": True,
+                "expanded": False,
+                "expansion_message": None,
+                "source_metadata": {
+                    "source": "Geoapify / OpenStreetMap",
+                    "configured": True,
+                    "source_url": "https://api.geoapify.com/v2/places",
+                },
+            }
+
+        default_radius = radius_km or self.default_radius_km
+        expanded_radius = self.expanded_radius_km
+
+        # 1. Primary query at default radius (25km)
+        res = self._query_places(
+            category=self.facility_category,
+            latitude=latitude,
+            longitude=longitude,
+            radius_km=default_radius,
+            page=page,
+            page_size=page_size,
+        )
+
+        if res["status"] != "success":
+            return {
+                "status": res["status"],
+                "message": res["message"],
+                "data": [],
+                "facilities": [],
+                "page": page,
+                "page_size": page_size,
+                "has_next": False,
+                "has_previous": page > 1,
+                "expanded": False,
+                "expansion_message": None,
+                "source_metadata": res.get("source_metadata", {}),
+            }
+
+        features = res["features"]
+        raw_items = [
+            self.normalize_feature_to_facility(feat, latitude, longitude)
+            for feat in features
+        ]
+        valid_items = [item for item in raw_items if item is not None]
+
+        # Proximity sort: nearest first
+        valid_items.sort(key=lambda x: x["distance_km"] if x.get("distance_km") is not None else float("inf"))
+
+        expanded = False
+        expansion_message = None
+        tried_expansion = False
+
+        # 2. Phase 2 expansion: ONLY when 0 results on page 1 and using default radius (25km)
+        if not valid_items and page == 1 and (radius_km is None or radius_km == default_radius):
+            tried_expansion = True
+            exp_res = self._query_places(
+                category=self.facility_category,
+                latitude=latitude,
+                longitude=longitude,
+                radius_km=expanded_radius,
+                page=1,
+                page_size=page_size,
+            )
+            if exp_res["status"] == "success" and exp_res["features"]:
+                exp_items = [
+                    self.normalize_feature_to_facility(feat, latitude, longitude)
+                    for feat in exp_res["features"]
+                ]
+                valid_exp_items = [item for item in exp_items if item is not None]
+                if valid_exp_items:
+                    valid_exp_items.sort(
+                        key=lambda x: x["distance_km"] if x.get("distance_km") is not None else float("inf")
+                    )
+                    valid_items = valid_exp_items
+                    expanded = True
+                    expansion_message = (
+                        f"No matching hospitals were found within {int(default_radius)} km. "
+                        f"Search expanded to approximately {int(expanded_radius)} km."
+                    )
+
+        # Emergency capability handling
+        if emergency_only:
+            verified_emergency = [item for item in valid_items if item.get("emergency_available") == "yes"]
+            if verified_emergency:
+                valid_items = verified_emergency
+                msg = f"Found {len(valid_items)} hospital(s) with verified emergency services."
+            else:
+                if valid_items:
+                    msg = (
+                        "Nearby hospital locations were found, but emergency-service availability "
+                        "is not verified by this geographic place source."
+                    )
+                else:
+                    if tried_expansion or (radius_km is not None and radius_km >= expanded_radius):
+                        msg = f"No matching hospitals were found within {int(expanded_radius)} km of your confirmed location."
+                    else:
+                        msg = f"No matching hospitals were found within {int(default_radius)} km of your confirmed location."
+        else:
+            if valid_items:
+                msg = f"Found {len(valid_items)} matching hospital(s)."
+            else:
+                if tried_expansion or (radius_km is not None and radius_km >= expanded_radius):
+                    msg = f"No matching hospitals were found within {int(expanded_radius)} km of your confirmed location."
+                else:
+                    msg = f"No matching hospitals were found within {int(default_radius)} km of your confirmed location."
+
+        # Maximum 2 pages: page 2 has_next is ALWAYS False
+        has_next = (page < 2) and (len(valid_items) == page_size)
+        has_previous = (page > 1)
+
+        return {
+            "status": "success",
+            "data": valid_items,
+            "facilities": valid_items,
+            "page": page,
+            "page_size": page_size,
+            "has_next": has_next,
+            "has_previous": has_previous,
+            "expanded": expanded,
+            "expansion_message": expansion_message,
+            "message": msg,
+            "source_metadata": {
+                "source": "Geoapify / OpenStreetMap",
+                "configured": True,
+                "source_url": "https://api.geoapify.com/v2/places",
+            },
+        }
+
+    def search_pharmacies(
+        self,
+        latitude: float,
+        longitude: float,
+        radius_km: Optional[float] = None,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> dict[str, Any]:
+        """Search nearby medical shops/pharmacies using Geoapify Places API with 25km -> 50km radius expansion and max 2 pages."""
+        # Block page > 2 immediately without calling Geoapify
+        if page > 2:
+            return {
+                "status": "success",
+                "message": "Maximum of 2 pages reached.",
+                "data": [],
+                "medical_shops": [],
+                "page": page,
+                "page_size": page_size,
+                "has_next": False,
+                "has_previous": True,
+                "expanded": False,
+                "expansion_message": None,
+                "disclaimer": "Medical shop listings do not include medication prescribing or dosage advice.",
+                "source_metadata": {
+                    "source": "Geoapify / OpenStreetMap",
+                    "configured": True,
+                    "source_url": "https://api.geoapify.com/v2/places",
+                },
+            }
+
+        default_radius = radius_km or self.default_radius_km
+        expanded_radius = self.expanded_radius_km
+
+        res = self._query_places(
+            category=self.medical_shop_category,
+            latitude=latitude,
+            longitude=longitude,
+            radius_km=default_radius,
+            page=page,
+            page_size=page_size,
+        )
+
+        if res["status"] != "success":
+            return {
+                "status": res["status"],
+                "message": res["message"],
+                "data": [],
+                "medical_shops": [],
+                "page": page,
+                "page_size": page_size,
+                "has_next": False,
+                "has_previous": page > 1,
+                "expanded": False,
+                "expansion_message": None,
+                "disclaimer": "Medical shop listings do not include medication prescribing or dosage advice.",
+                "source_metadata": res.get("source_metadata", {}),
+            }
+
+        features = res["features"]
+        raw_items = [
+            self.normalize_feature_to_medical_shop(feat, latitude, longitude)
+            for feat in features
+        ]
+        valid_items = [item for item in raw_items if item is not None]
+        valid_items.sort(key=lambda x: x["distance_km"] if x.get("distance_km") is not None else float("inf"))
+
+        expanded = False
+        expansion_message = None
+        tried_expansion = False
+
+        if not valid_items and page == 1 and (radius_km is None or radius_km == default_radius):
+            tried_expansion = True
+            exp_res = self._query_places(
+                category=self.medical_shop_category,
+                latitude=latitude,
+                longitude=longitude,
+                radius_km=expanded_radius,
+                page=1,
+                page_size=page_size,
+            )
+            if exp_res["status"] == "success" and exp_res["features"]:
+                exp_items = [
+                    self.normalize_feature_to_medical_shop(feat, latitude, longitude)
+                    for feat in exp_res["features"]
+                ]
+                valid_exp_items = [item for item in exp_items if item is not None]
+                if valid_exp_items:
+                    valid_exp_items.sort(
+                        key=lambda x: x["distance_km"] if x.get("distance_km") is not None else float("inf")
+                    )
+                    valid_items = valid_exp_items
+                    expanded = True
+                    expansion_message = (
+                        f"No matching pharmacies/medical shops were found within {int(default_radius)} km. "
+                        f"Search expanded to approximately {int(expanded_radius)} km."
+                    )
+
+        if valid_items:
+            msg = f"Found {len(valid_items)} matching medical shop(s)."
+        else:
+            if tried_expansion or (radius_km is not None and radius_km >= expanded_radius):
+                msg = f"No matching pharmacies/medical shops were found within {int(expanded_radius)} km of your confirmed location."
+            else:
+                msg = f"No matching pharmacies/medical shops were found within {int(default_radius)} km of your confirmed location."
+
+        # Maximum 2 pages: page 2 has_next is ALWAYS False
+        has_next = (page < 2) and (len(valid_items) == page_size)
+        has_previous = (page > 1)
+
+        return {
+            "status": "success",
+            "data": valid_items,
+            "medical_shops": valid_items,
+            "page": page,
+            "page_size": page_size,
+            "has_next": has_next,
+            "has_previous": has_previous,
+            "expanded": expanded,
+            "expansion_message": expansion_message,
+            "message": msg,
+            "disclaimer": "Medical shop listings do not include medication prescribing or dosage advice.",
+            "source_metadata": {
+                "source": "Geoapify / OpenStreetMap",
+                "configured": True,
+                "source_url": "https://api.geoapify.com/v2/places",
+            },
+        }

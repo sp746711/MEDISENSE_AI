@@ -120,3 +120,71 @@ def get_subject_from_token(token: str) -> str:
         raise TokenError("Token missing subject")
 
     return str(subject)
+
+
+def create_refresh_token(
+    subject: str,
+    expires_days: Optional[int] = None,
+    extra_claims: Optional[dict[str, Any]] = None,
+) -> str:
+    """Create a signed JWT refresh token."""
+
+    settings = get_settings()
+
+    days = (
+        expires_days
+        if expires_days is not None
+        else settings.refresh_token_expire_days
+    )
+
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=days)
+
+    payload: dict[str, Any] = {
+        "sub": str(subject),
+        "iat": int(now.timestamp()),
+        "exp": int(expire.timestamp()),
+        "type": "refresh",
+    }
+
+    if extra_claims:
+        payload.update(extra_claims)
+
+    return jwt.encode(
+        payload,
+        settings.jwt_secret_key,
+        algorithm=settings.algorithm,
+    )
+
+
+def decode_refresh_token(token: str) -> dict[str, Any]:
+    """Decode and validate a refresh JWT."""
+
+    if not token or not isinstance(token, str):
+        raise TokenError("Token is missing")
+
+    settings = get_settings()
+
+    try:
+        payload = jwt.decode(
+            token.strip(),
+            settings.jwt_secret_key,
+            algorithms=[settings.algorithm],
+        )
+    except JWTError as exc:
+        raise TokenError("Invalid or expired refresh token") from exc
+    except Exception as exc:
+        raise TokenError("Unable to validate refresh token") from exc
+
+    if not payload:
+        raise TokenError("Empty token payload")
+
+    if payload.get("type") != "refresh":
+        raise TokenError("Invalid token type")
+
+    subject = payload.get("sub")
+
+    if not subject:
+        raise TokenError("Token missing subject")
+
+    return payload

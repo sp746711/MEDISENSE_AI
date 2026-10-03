@@ -7,46 +7,75 @@ const STORAGE_KEY = 'medisense_assessment_draft';
 function loadDraft() {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
-    return raw
-      ? JSON.parse(raw)
-      : { assessmentId: null, inputTypes: [], stepIndex: 0 };
+    if (!raw) return { assessmentId: null, inputTypes: [], stepIndex: 0 };
+    const parsed = JSON.parse(raw);
+    return {
+      assessmentId: parsed?.assessmentId || null,
+      inputTypes: Array.isArray(parsed?.inputTypes) ? parsed.inputTypes : [],
+      stepIndex: typeof parsed?.stepIndex === 'number' ? parsed.stepIndex : 0,
+    };
   } catch {
     return { assessmentId: null, inputTypes: [], stepIndex: 0 };
   }
 }
 
 export function AssessmentProvider({ children }) {
-  const [draft, setDraft] = useState(loadDraft);
+  const [draft, setDraftState] = useState(loadDraft);
 
-  const persist = useCallback((next) => {
-    setDraft(next);
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+  // Single functional persistence updater that guarantees atomic merging against latest state
+  const setDraft = useCallback((updater) => {
+    setDraftState((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : { ...prev, ...updater };
+      try {
+        sessionStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      } catch (e) {
+        console.error('Failed to save assessment draft to sessionStorage', e);
+      }
+      return next;
+    });
   }, []);
 
   const setInputTypes = useCallback(
-    (inputTypes) => persist({ ...draft, inputTypes }),
-    [draft, persist],
+    (inputTypes) => {
+      setDraft((prev) => ({
+        ...prev,
+        inputTypes: Array.isArray(inputTypes) ? inputTypes : [],
+      }));
+    },
+    [setDraft],
   );
 
   const setAssessmentId = useCallback(
-    (assessmentId) => persist({ ...draft, assessmentId }),
-    [draft, persist],
+    (assessmentId) => {
+      setDraft((prev) => ({
+        ...prev,
+        assessmentId,
+      }));
+    },
+    [setDraft],
   );
 
   const clearDraft = useCallback(() => {
     const empty = { assessmentId: null, inputTypes: [], stepIndex: 0 };
-    persist(empty);
-  }, [persist]);
+    setDraftState(empty);
+    try {
+      sessionStorage.removeItem(STORAGE_KEY);
+    } catch (e) {
+      console.error('Failed to clear assessment draft from sessionStorage', e);
+    }
+  }, []);
 
   const value = useMemo(
     () => ({
-      ...draft,
+      assessmentId: draft.assessmentId,
+      inputTypes: draft.inputTypes,
+      stepIndex: draft.stepIndex,
       setInputTypes,
       setAssessmentId,
-      setDraft: persist,
+      setDraft,
       clearDraft,
     }),
-    [draft, setInputTypes, setAssessmentId, persist, clearDraft],
+    [draft.assessmentId, draft.inputTypes, draft.stepIndex, setInputTypes, setAssessmentId, setDraft, clearDraft],
   );
 
   return (

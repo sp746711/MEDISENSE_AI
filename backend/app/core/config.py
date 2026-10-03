@@ -37,6 +37,10 @@ class Settings(BaseSettings):
         default=60,
         alias="ACCESS_TOKEN_EXPIRE_MINUTES",
     )
+    refresh_token_expire_days: int = Field(
+        default=7,
+        alias="REFRESH_TOKEN_EXPIRE_DAYS",
+    )
     algorithm: str = Field(default="HS256", alias="ALGORITHM")
 
     cors_origins: str = Field(

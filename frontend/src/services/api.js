@@ -9,13 +9,23 @@ function getToken() {
   return localStorage.getItem('medisense_token');
 }
 
+export function getRefreshToken() {
+  return localStorage.getItem('medisense_refresh_token');
+}
+
 export function setAuthToken(token) {
   if (token) localStorage.setItem('medisense_token', token);
   else localStorage.removeItem('medisense_token');
 }
 
+export function setRefreshToken(token) {
+  if (token) localStorage.setItem('medisense_refresh_token', token);
+  else localStorage.removeItem('medisense_refresh_token');
+}
+
 export function clearAuthToken() {
   localStorage.removeItem('medisense_token');
+  localStorage.removeItem('medisense_refresh_token');
   localStorage.removeItem('medisense_user');
 }
 
@@ -47,6 +57,62 @@ function friendlyMessage(status, detail) {
     default:
       return 'Request failed. Please try again.';
   }
+}
+
+let refreshPromise = null;
+
+async function executeTokenRefresh() {
+  const refreshToken = localStorage.getItem('medisense_refresh_token');
+  if (!refreshToken) {
+    clearAuthToken();
+    throw new ApiError('No refresh token available. Please sign in again.', 401);
+  }
+
+  let res;
+  try {
+    res = await fetch(`${API_BASE_URL}/auth/refresh`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+  } catch {
+    throw new ApiError('Unable to reach the server to refresh token.', 0);
+  }
+
+  let data = null;
+  const text = await res.text();
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { detail: text };
+    }
+  }
+
+  if (!res.ok) {
+    clearAuthToken();
+    const detail = data?.detail ?? data?.message ?? 'Session expired. Please sign in again.';
+    throw new ApiError(friendlyMessage(res.status, detail), res.status, data);
+  }
+
+  if (!data?.access_token) {
+    clearAuthToken();
+    throw new ApiError('No access token returned from refresh endpoint.', 401);
+  }
+
+  setAuthToken(data.access_token);
+  return data.access_token;
+}
+
+function requestNewToken() {
+  if (!refreshPromise) {
+    refreshPromise = executeTokenRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 }
 
 export async function apiRequest(path, options = {}) {
@@ -88,9 +154,36 @@ export async function apiRequest(path, options = {}) {
   }
 
   if (!response.ok) {
-    if (response.status === 401) {
-      // Let AuthContext handle redirect; still throw
+    // Attempt automatic token refresh on 401
+    if (
+      response.status === 401 &&
+      !options._retry &&
+      options.token !== null &&
+      path !== '/auth/refresh' &&
+      path !== '/auth/login' &&
+      path !== '/auth/register'
+    ) {
+      const refreshToken = localStorage.getItem('medisense_refresh_token');
+      if (refreshToken) {
+        try {
+          const newAccessToken = await requestNewToken();
+          // Retry the original request ONCE with new access token
+          return await apiRequest(path, {
+            ...options,
+            _retry: true,
+            token: newAccessToken,
+          });
+        } catch (refreshErr) {
+          clearAuthToken();
+          throw refreshErr instanceof ApiError
+            ? refreshErr
+            : new ApiError('Session expired. Please sign in again.', 401);
+        }
+      } else {
+        clearAuthToken();
+      }
     }
+
     const detail = data?.detail ?? data?.message ?? null;
     throw new ApiError(friendlyMessage(response.status, detail), response.status, data);
   }

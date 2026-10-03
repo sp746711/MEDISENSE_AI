@@ -7,11 +7,15 @@ export const AuthContext = createContext(null);
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(authService.getStoredUser());
   const [token, setToken] = useState(() => localStorage.getItem('medisense_token'));
-  const [loading, setLoading] = useState(Boolean(localStorage.getItem('medisense_token')));
+  const [loading, setLoading] = useState(
+    Boolean(localStorage.getItem('medisense_token') || localStorage.getItem('medisense_refresh_token'))
+  );
   const [error, setError] = useState(null);
 
   const refreshUser = useCallback(async () => {
-    if (!localStorage.getItem('medisense_token')) {
+    const accessToken = localStorage.getItem('medisense_token');
+    const refreshToken = localStorage.getItem('medisense_refresh_token');
+    if (!accessToken && !refreshToken) {
       setUser(null);
       setToken(null);
       setLoading(false);
@@ -20,6 +24,7 @@ export function AuthProvider({ children }) {
     try {
       const me = await authService.getMe();
       setUser(me);
+      setToken(localStorage.getItem('medisense_token'));
       localStorage.setItem('medisense_user', JSON.stringify(me));
       setError(null);
       return me;

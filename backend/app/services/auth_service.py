@@ -1,9 +1,14 @@
 """Authentication service: register, login and token issuing."""
 
+from uuid import UUID
+
 from sqlalchemy.orm import Session
 
 from app.core.security import (
+    TokenError,
     create_access_token,
+    create_refresh_token,
+    decode_refresh_token,
     hash_password,
     verify_password,
 )
@@ -112,3 +117,52 @@ def issue_token_for_user(
     return create_access_token(
         subject=str(user.user_id),
     )
+
+
+def issue_tokens_for_user(
+    user: User,
+) -> tuple[str, str]:
+    """Create both access token and refresh token for user."""
+
+    if not user.user_id:
+        raise AuthError(
+            "User ID is missing.",
+            status_code=500,
+        )
+
+    access_token = create_access_token(subject=str(user.user_id))
+    refresh_token = create_refresh_token(subject=str(user.user_id))
+    return access_token, refresh_token
+
+
+def refresh_access_token(
+    db: Session,
+    refresh_token: str,
+) -> str:
+    """Validate a refresh token and issue a new access token."""
+
+    if not refresh_token or not isinstance(refresh_token, str):
+        raise AuthError("Refresh token is required.", status_code=401)
+
+    try:
+        payload = decode_refresh_token(refresh_token)
+    except TokenError as exc:
+        raise AuthError(
+            str(exc) or "Invalid or expired refresh token.",
+            status_code=401,
+        ) from exc
+
+    subject = payload.get("sub")
+    if not subject:
+        raise AuthError("Invalid token subject.", status_code=401)
+
+    try:
+        user_uuid = UUID(str(subject))
+    except (ValueError, TypeError) as exc:
+        raise AuthError("Invalid user identity in token.", status_code=401) from exc
+
+    user = db.query(User).filter(User.user_id == user_uuid).first()
+    if not user:
+        raise AuthError("User no longer exists.", status_code=401)
+
+    return create_access_token(subject=str(user.user_id))

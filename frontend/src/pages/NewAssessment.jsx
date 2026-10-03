@@ -688,7 +688,7 @@ const OPTIONS = [
 
 export default function NewAssessment() {
   const navigate = useNavigate();
-  const { setInputTypes, setAssessmentId, setDraft } = useAssessment();
+  const { setDraft } = useAssessment();
   const [selected, setSelected] = useState([]);
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -720,14 +720,12 @@ export default function NewAssessment() {
         inputTypes: selected,
         stepIndex: 0,
       });
-      setInputTypes(selected);
-      setAssessmentId(assessment.assessment_id);
 
       if (selected.includes(INPUT_TYPES.SYMPTOMS)) {
         navigate('/assessment/symptoms');
       } else if (selected.includes(INPUT_TYPES.MEDICAL_REPORT)) {
         navigate('/assessment/report');
-      } else {
+      } else if (selected.includes(INPUT_TYPES.XRAY)) {
         navigate('/assessment/xray');
       }
     } catch (err) {

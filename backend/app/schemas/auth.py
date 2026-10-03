@@ -80,7 +80,7 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
 
     access_token: str
-
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
 
 
@@ -101,7 +101,17 @@ class AuthUserResponse(BaseModel):
 class LoginResponse(BaseModel):
 
     access_token: str
-
+    refresh_token: Optional[str] = None
     token_type: str = "bearer"
-
     user: AuthUserResponse
+
+
+class RefreshTokenRequest(BaseModel):
+
+    refresh_token: str = Field(..., min_length=1)
+
+
+class RefreshTokenResponse(BaseModel):
+
+    access_token: str
+    token_type: str = "bearer"

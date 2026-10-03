@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import './Navbar.css';
@@ -130,6 +130,7 @@ function LogoutIcon({ size = 16, color = 'currentColor' }) {
 export default function Navbar() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [profileOpen, setProfileOpen] = useState(false);
   const profileRef = useRef(null);
 
@@ -182,7 +183,9 @@ export default function Navbar() {
 
         <NavLink
           to="/assessment/new"
-          className={({ isActive }) => `navbar-link ${isActive ? 'active' : ''}`}
+          className={({ isActive }) =>
+            `navbar-link ${isActive || location.pathname.startsWith('/assessment') ? 'active' : ''}`
+          }
         >
           <DocumentPlusIcon size={16} />
           <span>New Assessment</span>

@@ -642,10 +642,13 @@
   display: flex;
   flex-direction: column;
   height: 100%;
+  min-height: 0;
   box-sizing: border-box;
 }
 
 .dashboard-recent-card {
+  height: 100%;
+  min-height: 0;
   justify-content: flex-start;
 }
 
@@ -653,9 +656,13 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  min-height: 36px;
+  height: 36px;
   margin-bottom: 0.6rem;
   padding-bottom: 0.45rem;
   border-bottom: 1px solid rgba(66, 180, 240, 0.16);
+  box-sizing: border-box;
+  flex-shrink: 0;
 }
 
 .dashboard-card-title-group {
@@ -710,12 +717,18 @@
   transform: translateX(3px);
 }
 
-/* Recent Assessments List — Self-sizing, no excess space */
+/* Recent Assessments List — Fixed height for exactly 3 rows (3 x 64px + 2 x 8px = 208px) */
 .dashboard-recent-list {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 8px;
   width: 100%;
+  height: 208px;
+  min-height: 208px;
+  max-height: 208px;
+  box-sizing: border-box;
+  justify-content: flex-start;
+  overflow: hidden;
 }
 
 .dashboard-recent-item {
@@ -726,7 +739,13 @@
   background: #ffffff;
   border: 1px solid rgba(66, 180, 240, 0.22);
   border-radius: 12px;
-  padding: 0.6rem 0.85rem;
+  padding: 0 0.85rem;
+  flex: 0 0 64px;
+  height: 64px;
+  min-height: 64px;
+  max-height: 64px;
+  box-sizing: border-box;
+  overflow: hidden;
   transition: all 0.18s ease;
 }
 
@@ -742,6 +761,7 @@
   gap: 0.75rem;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 /* Stacked Date Tile: 02 OCT 2026 */
@@ -787,6 +807,7 @@
   gap: 0.18rem;
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 .dashboard-recent-title {
@@ -796,15 +817,20 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.25;
 }
 
 .dashboard-recent-meta {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  flex-wrap: wrap;
+  gap: 0.45rem;
+  flex-wrap: nowrap;
   font-size: 0.72rem;
   color: var(--ms-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
 }
 
 .meta-status-completed {
@@ -813,6 +839,7 @@
   gap: 0.25rem;
   color: var(--ms-shop);
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .meta-report-avail {
@@ -821,6 +848,7 @@
   gap: 0.25rem;
   color: var(--ms-blue-dark);
   font-weight: 500;
+  flex-shrink: 0;
 }
 
 .dashboard-recent-right {
@@ -910,16 +938,21 @@
   box-shadow: 0 3px 12px rgba(56, 189, 248, 0.35);
 }
 
-/* Empty State */
+/* Empty State — Fixed height matching exactly 3 rows (208px) */
 .dashboard-empty-state {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 1.35rem 1rem;
+  padding: 1rem;
+  width: 100%;
+  height: 208px;
+  min-height: 208px;
+  max-height: 208px;
+  box-sizing: border-box;
   text-align: center;
   background: #ffffff;
-  border-radius: 11px;
+  border-radius: 12px;
   border: 1px dashed rgba(66, 180, 240, 0.3);
 }
 
@@ -933,6 +966,7 @@
   align-items: center;
   justify-content: center;
   margin-bottom: 0.45rem;
+  flex-shrink: 0;
 }
 
 .dashboard-empty-text {
@@ -944,9 +978,11 @@
 
 /* Health Tips Card — Vertically Balanced to Match Recent Assessments Height Exactly */
 .dashboard-health-tips-card {
+  height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  justify-content: flex-start;
 }
 
 .dashboard-tip-container {
@@ -954,54 +990,61 @@
   background: linear-gradient(145deg, #eaf7ff 0%, #f7fcff 100%);
   border: 1px solid rgba(66, 180, 240, 0.28);
   border-radius: 14px;
-  padding: 0.8rem 1rem;
+  padding: 0.7rem 0.95rem;
   display: flex;
   flex-direction: column;
   justify-content: space-between;
   flex: 1;
+  min-height: 208px;
+  height: 208px;
+  max-height: 208px;
+  box-sizing: border-box;
   box-shadow:
     0 3px 12px rgba(8, 43, 97, 0.02),
     var(--ms-specular-top);
+  overflow: hidden;
 }
 
 .dashboard-tip-main {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 0.45rem;
+  gap: 0.35rem;
 }
 
 .dashboard-tip-icon-badge {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
   background: #ffffff;
   color: var(--ms-cyan);
   display: flex;
   align-items: center;
   justify-content: center;
   box-shadow: 0 3px 10px rgba(56, 189, 248, 0.25);
+  flex-shrink: 0;
 }
 
 .dashboard-tip-title {
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   font-weight: 700;
   color: var(--ms-navy);
   margin: 0;
+  line-height: 1.2;
 }
 
 .dashboard-tip-desc {
-  font-size: 0.77rem;
+  font-size: 0.75rem;
   color: var(--ms-muted);
-  line-height: 1.38;
+  line-height: 1.35;
   margin: 0;
 }
 
 .dashboard-tip-bottom {
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
-  margin-top: 0.6rem;
+  gap: 0.35rem;
+  margin-top: 0.35rem;
 }
 
 /* Progress Indicator Bars */
@@ -1377,14 +1420,31 @@
     height: 160px;
   }
 
+  .dashboard-recent-list {
+    height: auto;
+    min-height: 0;
+    max-height: none;
+  }
+
   .dashboard-recent-item {
+    flex: 0 0 auto;
+    height: auto;
+    min-height: 64px;
+    max-height: none;
     flex-direction: column;
     align-items: flex-start;
     gap: 0.55rem;
+    padding: 0.6rem 0.85rem;
   }
 
   .dashboard-recent-right {
     width: 100%;
     justify-content: space-between;
+  }
+
+  .dashboard-tip-container {
+    height: auto;
+    min-height: 180px;
+    max-height: none;
   }
 }

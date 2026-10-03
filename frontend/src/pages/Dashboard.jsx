@@ -659,13 +659,13 @@ export default function Dashboard() {
             </button>
           </div>
 
-          {!data?.recent_assessments?.length ? (
+          {(!data?.recent_assessments || data.recent_assessments.length === 0) ? (
             <div className="dashboard-empty-state">
               <div className="dashboard-empty-icon">
                 <DocumentCheckIcon size={22} color="#0ea5e9" />
               </div>
               <p className="dashboard-empty-text">
-                No assessments yet. Start a new assessment to begin.
+                No recent assessments yet. Start a new assessment to see your history here.
               </p>
               <button
                 type="button"
@@ -677,7 +677,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="dashboard-recent-list">
-              {data.recent_assessments.map((a) => {
+              {data.recent_assessments.slice(0, 3).map((a) => {
                 const { day, month, year } = parseDateParts(a.created_at);
                 const inputList = Array.isArray(a.input_types) ? a.input_types : [];
                 const inputCount = inputList.length || 1;

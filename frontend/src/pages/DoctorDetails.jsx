@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import DoctorCard from '../components/DoctorCard';
 import ErrorMessage from '../components/ErrorMessage';
 import LoadingScreen from '../components/LoadingScreen';
@@ -7,7 +7,10 @@ import { getDoctor } from '../services/providerService';
 
 export default function DoctorDetails() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const assessmentId = searchParams.get('assessment_id') || '';
+
   const [doctor, setDoctor] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -36,9 +39,13 @@ export default function DoctorDetails() {
 
   if (loading) return <LoadingScreen message="Loading provider..." />;
 
+  const backUrl = assessmentId
+    ? `/doctors?assessment_id=${encodeURIComponent(assessmentId)}${doctor?.specialization ? `&specialization=${encodeURIComponent(doctor.specialization)}` : ''}`
+    : '/doctors';
+
   return (
     <div className="page narrow">
-      <h1>Doctor Details</h1>
+      <h1>Healthcare Provider Details</h1>
       <ErrorMessage message={error} onDismiss={() => setError('')} />
       {doctor ? <DoctorCard doctor={doctor} /> : null}
 
@@ -61,7 +68,7 @@ export default function DoctorDetails() {
             Book Demo Appointment
           </button>
         ) : null}
-        <button type="button" className="btn btn-secondary" onClick={() => navigate('/doctors')}>
+        <button type="button" className="btn btn-secondary" onClick={() => navigate(backUrl)}>
           Back to Doctors
         </button>
       </div>

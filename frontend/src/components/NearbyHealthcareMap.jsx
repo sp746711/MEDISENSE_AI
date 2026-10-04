@@ -204,7 +204,7 @@ export default function NearbyHealthcareMap({
           <div style="font-size: 13px; line-height: 1.4; font-family: sans-serif; min-width: 180px;">
             <strong style="font-size: 14px; color: #0f172a;">${place.name || 'Medical Shop / Pharmacy'}</strong><br/>
             ${place.address ? `<div style="color: #64748b; font-size: 12px; margin-top: 2px;">${place.address}</div>` : ''}
-            ${place.distance_km != null ? `<div style="color: #1d4ed8; font-weight: 600; font-size: 12px; margin-top: 4px;">${place.distance_km} km away</div>` : ''}
+            ${place.distance_km != null ? `<div style="color: #1d4ed8; font-weight: 600; font-size: 12px; margin-top: 4px;">${Number(place.distance_km) < 1.0 ? `${Math.round(Math.round(Number(place.distance_km) * 1000) / 10) * 10} m away` : `${Number(place.distance_km).toFixed(1)} km away`}</div>` : ''}
             ${place.contact ? `<div style="color: #0f766e; font-size: 12px; margin-top: 4px;">Contact: ${place.contact}</div>` : ''}
             <div style="font-size: 11px; color: #94a3b8; margin-top: 6px; border-top: 1px solid #f1f5f9; padding-top: 4px;">
               Source: ${place.source || 'Geoapify / OpenStreetMap'}

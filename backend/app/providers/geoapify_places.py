@@ -197,17 +197,23 @@ class GeoapifyPlacesClient:
                 lon = coords[0]
                 lat = coords[1]
 
-        if lat is None or lon is None:
-            return None
+        f_lat: Optional[float] = None
+        f_lon: Optional[float] = None
+        dist_km: Optional[float] = None
 
-        try:
-            f_lat = float(lat)
-            f_lon = float(lon)
-        except (ValueError, TypeError):
-            return None
-
-        if not (-90.0 <= f_lat <= 90.0 and -180.0 <= f_lon <= 180.0):
-            return None
+        if lat is not None and lon is not None:
+            try:
+                cand_lat = float(lat)
+                cand_lon = float(lon)
+                if -90.0 <= cand_lat <= 90.0 and -180.0 <= cand_lon <= 180.0:
+                    f_lat = cand_lat
+                    f_lon = cand_lon
+                    if user_lat is not None and user_lon is not None:
+                        dist_km = calculate_distance_km(user_lat, user_lon, f_lat, f_lon)
+            except (ValueError, TypeError):
+                f_lat = None
+                f_lon = None
+                dist_km = None
 
         place_id = str(properties.get("place_id") or properties.get("id") or "")
         name = properties.get("name") or properties.get("formatted") or "Medical Shop / Pharmacy"
@@ -247,7 +253,10 @@ class GeoapifyPlacesClient:
         elif datasource.get("url"):
             source_url = str(datasource["url"]).strip()
 
-        dist_km = calculate_distance_km(user_lat, user_lon, f_lat, f_lon)
+        if f_lat is not None and f_lon is not None and user_lat is not None and user_lon is not None:
+            dist_km = calculate_distance_km(user_lat, user_lon, f_lat, f_lon)
+        else:
+            dist_km = None
 
         return {
             "shop_id": place_id,
@@ -275,6 +284,8 @@ class GeoapifyPlacesClient:
         radius_km: float,
         page: int = 1,
         page_size: int = 10,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
     ) -> dict[str, Any]:
         """Perform a single bounded HTTP GET request to Geoapify Places API v2.
 
@@ -305,12 +316,14 @@ class GeoapifyPlacesClient:
             }
 
         radius_meters = int(radius_km * 1000)
+        query_limit = limit if limit is not None else page_size
+        query_offset = offset if offset is not None else (page - 1) * page_size
         params = {
             "categories": category,
             "filter": f"circle:{longitude},{latitude},{radius_meters}",
             "bias": f"proximity:{longitude},{latitude}",
-            "limit": page_size,
-            "offset": (page - 1) * page_size,
+            "limit": query_limit,
+            "offset": query_offset,
             "apiKey": self.api_key,
         }
 
@@ -702,13 +715,16 @@ class GeoapifyPlacesClient:
         default_radius = radius_km or self.default_radius_km
         expanded_radius = self.expanded_radius_km
 
+        # Fetch candidate set covering the application's maximum 20 visible results
+        candidate_limit = max(page_size * 2, 20)
+
         res = self._query_places(
             category=self.medical_shop_category,
             latitude=latitude,
             longitude=longitude,
             radius_km=default_radius,
-            page=page,
-            page_size=page_size,
+            limit=candidate_limit,
+            offset=0,
         )
 
         if res["status"] != "success":
@@ -739,15 +755,15 @@ class GeoapifyPlacesClient:
         expansion_message = None
         tried_expansion = False
 
-        if not valid_items and page == 1 and (radius_km is None or radius_km == default_radius):
+        if not valid_items and (radius_km is None or radius_km == default_radius):
             tried_expansion = True
             exp_res = self._query_places(
                 category=self.medical_shop_category,
                 latitude=latitude,
                 longitude=longitude,
                 radius_km=expanded_radius,
-                page=1,
-                page_size=page_size,
+                limit=candidate_limit,
+                offset=0,
             )
             if exp_res["status"] == "success" and exp_res["features"]:
                 exp_items = [
@@ -766,6 +782,21 @@ class GeoapifyPlacesClient:
                         f"Search expanded to approximately {int(expanded_radius)} km."
                     )
 
+        # Safe debug logging (Section 17: coordinates, radius, candidate count, nearest/farthest distance)
+        nearest_dist = valid_items[0]["distance_km"] if valid_items else None
+        farthest_dist = valid_items[-1]["distance_km"] if valid_items else None
+        logger.info(
+            "Medical Shops search: user_lat=%s, user_lon=%s, radius=%skm, candidates_fetched=%d, valid_coords=%d, nearest=%s, farthest=%s, page=%d",
+            latitude,
+            longitude,
+            default_radius if not expanded else expanded_radius,
+            len(features) if not expanded else len(exp_res.get("features", [])),
+            len([i for i in valid_items if i.get("distance_km") is not None]),
+            f"{nearest_dist}km" if nearest_dist is not None else "None",
+            f"{farthest_dist}km" if farthest_dist is not None else "None",
+            page,
+        )
+
         if valid_items:
             msg = f"Found {len(valid_items)} matching medical shop(s)."
         else:
@@ -774,14 +805,20 @@ class GeoapifyPlacesClient:
             else:
                 msg = f"No matching pharmacies/medical shops were found within {int(default_radius)} km of your confirmed location."
 
+        # Slice application page after candidate-level nearest-first sorting
+        start_idx = (page - 1) * page_size
+        end_idx = start_idx + page_size
+        paged_items = valid_items[start_idx:end_idx]
+
         # Maximum 2 pages: page 2 has_next is ALWAYS False
-        has_next = (page < 2) and (len(valid_items) == page_size)
+        has_next = (page < 2) and (len(valid_items) > end_idx)
         has_previous = (page > 1)
 
         return {
             "status": "success",
-            "data": valid_items,
-            "medical_shops": valid_items,
+            "data": paged_items,
+            "medical_shops": paged_items,
+            "total_count": len(valid_items),
             "page": page,
             "page_size": page_size,
             "has_next": has_next,

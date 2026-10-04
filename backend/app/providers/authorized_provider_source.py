@@ -353,7 +353,6 @@ class AuthorizedProviderSource(ProviderSource):
                             "configured": True,
                         },
                     }
-
                 if response.status_code != 200:
                     return {
                         "status": "error",
@@ -520,6 +519,14 @@ class AuthorizedProviderSource(ProviderSource):
                 payload = response.json()
                 raw_items = payload.get("data") or payload.get("medical_shops") or []
                 normalized = [self.normalize_medical_shop(item, self.shop_source_name) for item in raw_items]
+                if latitude is not None and longitude is not None:
+                    from app.providers.location_utils import calculate_distance_km
+                    for item in normalized:
+                        if item.get("distance_km") is None and item.get("latitude") is not None and item.get("longitude") is not None:
+                            item["distance_km"] = calculate_distance_km(latitude, longitude, item["latitude"], item["longitude"])
+                    normalized.sort(
+                        key=lambda s: s["distance_km"] if s.get("distance_km") is not None else float("inf")
+                    )
 
                 has_next = payload.get("has_next")
                 if has_next is None:

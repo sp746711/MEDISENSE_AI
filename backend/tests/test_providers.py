@@ -188,10 +188,11 @@ def test_search_expansion_radius(db_session):
 # 12. Facility emergency_only
 def test_facility_emergency_only_filtering(db_session):
     tag = f"Fac_{uuid4().hex[:6]}"
+    state_unique = f"State_{tag}"
     fac_emerg = Facility(
         name=f"Emergency Hospital {tag}",
         type="Hospital",
-        state="TestFacState",
+        state=state_unique,
         district="TestFacDistrict",
         emergency_available="yes",
         source="Ministry of Health",
@@ -199,7 +200,7 @@ def test_facility_emergency_only_filtering(db_session):
     fac_clinic = Facility(
         name=f"Routine Clinic {tag}",
         type="Clinic",
-        state="TestFacState",
+        state=state_unique,
         district="TestFacDistrict",
         emergency_available="no",
         source="Ministry of Health",
@@ -208,7 +209,7 @@ def test_facility_emergency_only_filtering(db_session):
     db_session.commit()
 
     repo = ProviderRepository(db_session)
-    res = repo.search_facilities(state="TestFacState", district="TestFacDistrict", emergency_only=True)
+    res = repo.search_facilities(state=state_unique, district="TestFacDistrict", emergency_only=True)
     assert res["status"] == "ok"
     # None of the results should be routine clinic without emergency
     matching = [f for f in res["facilities"] if tag in f["name"]]

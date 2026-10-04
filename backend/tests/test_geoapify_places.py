@@ -504,3 +504,254 @@ def test_api_key_redacted_in_logs():
     filt.filter(rec)
     assert "SECRET_KEY_12345" not in rec.msg
     assert "apiKey=[REDACTED]" in rec.msg
+
+
+# 20. Medical Shops: TEST 1 — Nearest ordering
+def test_medical_shops_nearest_ordering():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    # Features at ~5.7, 1.2, 3.4, 0.6, 2.1 km
+    # Calculated offsets approximately:
+    # 0.6 km: lat offset ~0.0054
+    # 1.2 km: lat offset ~0.0108
+    # 2.1 km: lat offset ~0.0189
+    # 3.4 km: lat offset ~0.0306
+    # 5.7 km: lat offset ~0.0513
+    features_unsorted = [
+        make_mock_feature("s1", "Shop 5.7km", lat=user_lat + 0.0513, lon=user_lon),
+        make_mock_feature("s2", "Shop 1.2km", lat=user_lat + 0.0108, lon=user_lon),
+        make_mock_feature("s3", "Shop 3.4km", lat=user_lat + 0.0306, lon=user_lon),
+        make_mock_feature("s4", "Shop 0.6km", lat=user_lat + 0.0054, lon=user_lon),
+        make_mock_feature("s5", "Shop 2.1km", lat=user_lat + 0.0189, lon=user_lon),
+    ]
+
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"features": features_unsorted}
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon)
+
+    assert res["status"] == "success"
+    shops = res["medical_shops"]
+    assert len(shops) == 5
+
+    distances = [s["distance_km"] for s in shops]
+    # Check strictly ascending order
+    assert distances == sorted(distances)
+    assert shops[0]["name"] == "Shop 0.6km"
+    assert shops[1]["name"] == "Shop 1.2km"
+    assert shops[2]["name"] == "Shop 2.1km"
+    assert shops[3]["name"] == "Shop 3.4km"
+    assert shops[4]["name"] == "Shop 5.7km"
+
+
+# 21. Medical Shops: TEST 3 — Missing coordinates sorted last, never fabricate
+def test_medical_shops_missing_coordinates_sorted_last():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    feat_0_8 = make_mock_feature("s_08", "Shop 0.8km", lat=user_lat + 0.0072, lon=user_lon)
+    feat_none = {
+        "type": "Feature",
+        "properties": {
+            "place_id": "s_none",
+            "name": "Shop Unknown Coords",
+            "formatted": "Unknown Street",
+            "lat": None,
+            "lon": None,
+        },
+        "geometry": {"type": "Point", "coordinates": []},
+    }
+    feat_2_4 = make_mock_feature("s_24", "Shop 2.4km", lat=user_lat + 0.0216, lon=user_lon)
+
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"features": [feat_0_8, feat_none, feat_2_4]}
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon)
+
+    assert res["status"] == "success"
+    shops = res["medical_shops"]
+    assert len(shops) == 3
+
+    assert shops[0]["name"] == "Shop 0.8km"
+    assert shops[0]["distance_km"] is not None
+    assert shops[1]["name"] == "Shop 2.4km"
+    assert shops[1]["distance_km"] is not None
+    assert shops[2]["name"] == "Shop Unknown Coords"
+    assert shops[2]["distance_km"] is None  # Never fabricated
+
+
+# 22. Medical Shops: TEST 4 — 25 km returns results, NO 50 km expansion
+def test_medical_shops_25km_has_results_no_expansion():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    features_5 = [
+        make_mock_feature(f"s_{i}", f"Shop {i}", lat=user_lat + 0.005 * i, lon=user_lon)
+        for i in range(1, 6)
+    ]
+
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"features": features_5}
+
+    with patch.object(client, "_query_places", wraps=client._query_places) as spy_query:
+        mock_http = MagicMock(status_code=200)
+        mock_http.json.return_value = {"features": features_5}
+        with patch("httpx.Client.get", return_value=mock_http):
+            res = client.search_pharmacies(latitude=user_lat, longitude=user_lon)
+
+        assert res["status"] == "success"
+        assert len(res["medical_shops"]) == 5
+        assert res["expanded"] is False
+        assert spy_query.call_count == 1  # Only 1 query at 25km
+
+
+# 23. Medical Shops: TEST 5 — 25 km zero results expands to 50 km
+def test_medical_shops_25km_zero_results_expands_to_50km():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    call_count = 0
+    def mock_get(url, params=None, headers=None):
+        nonlocal call_count
+        call_count += 1
+        resp = MagicMock(status_code=200)
+        if "circle:77.5946,12.9716,25000" in params.get("filter", ""):
+            resp.json.return_value = {"features": []}
+        else:
+            # 50km returns results
+            feat = make_mock_feature("s_far", "Shop in 50km", lat=user_lat + 0.35, lon=user_lon)
+            resp.json.return_value = {"features": [feat]}
+        return resp
+
+    with patch("httpx.Client.get", side_effect=mock_get):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon)
+
+    assert res["status"] == "success"
+    assert res["expanded"] is True
+    assert len(res["medical_shops"]) == 1
+    assert res["medical_shops"][0]["name"] == "Shop in 50km"
+    assert call_count == 2  # Exactly 2 calls: 25km then 50km
+
+
+# 24. Medical Shops: TEST 6 — Pagination max 2 pages
+def test_medical_shops_pagination_max_two_pages():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    res_page_3 = client.search_pharmacies(latitude=12.9716, longitude=77.5946, page=3)
+    assert res_page_3["status"] == "success"
+    assert res_page_3["medical_shops"] == []
+    assert res_page_3["has_next"] is False
+    assert res_page_3["has_previous"] is True
+    assert "Maximum of 2 pages reached" in res_page_3["message"]
+
+
+# 25. Medical Shops: Controlled distance list (Section 19)
+def test_medical_shops_controlled_distance_list():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    # Input distances: 5.7, 1.2, 3.4, 0.6, 2.1, 0.8, 4.9, 1.5, 7.2, 3.0
+    # Expected order: 0.6, 0.8, 1.2, 1.5, 2.1, 3.0, 3.4, 4.9, 5.7, 7.2
+    distance_inputs = [5.7, 1.2, 3.4, 0.6, 2.1, 0.8, 4.9, 1.5, 7.2, 3.0]
+    features = [
+        make_mock_feature(f"c_{i}", f"Shop {d}km", lat=user_lat + (d / 111.0), lon=user_lon)
+        for i, d in enumerate(distance_inputs)
+    ]
+
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"features": features}
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon, page=1)
+
+    assert res["status"] == "success"
+    paged = res["medical_shops"]
+    assert len(paged) == 10
+
+    paged_distances = [p["distance_km"] for p in paged]
+    assert paged_distances == sorted(paged_distances)
+    assert paged[0]["name"] == "Shop 0.6km"
+    assert paged[1]["name"] == "Shop 0.8km"
+    assert paged[2]["name"] == "Shop 1.2km"
+    assert paged[3]["name"] == "Shop 1.5km"
+    assert paged[4]["name"] == "Shop 2.1km"
+    assert paged[5]["name"] == "Shop 3.0km"
+    assert paged[6]["name"] == "Shop 3.4km"
+    assert paged[7]["name"] == "Shop 4.9km"
+    assert paged[8]["name"] == "Shop 5.7km"
+    assert paged[9]["name"] == "Shop 7.2km"
+
+
+# 26. Medical Shops: Mixed candidate set (Section 20 - real bug scenario)
+def test_medical_shops_mixed_candidate_pool_real_bug():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    # Candidate A=5.7, B=5.9, C=6.2, D=0.7, E=1.4, F=2.0
+    candidates = [
+        ("Candidate A", 5.7),
+        ("Candidate B", 5.9),
+        ("Candidate C", 6.2),
+        ("Candidate D", 0.7),
+        ("Candidate E", 1.4),
+        ("Candidate F", 2.0),
+    ]
+    features = [
+        make_mock_feature(f"cand_{i}", name, lat=user_lat + (d / 111.0), lon=user_lon)
+        for i, (name, d) in enumerate(candidates)
+    ]
+
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"features": features}
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon, page=1)
+
+    assert res["status"] == "success"
+    paged = res["medical_shops"]
+    assert len(paged) == 6
+
+    expected_names = [
+        "Candidate D",  # 0.7 km
+        "Candidate E",  # 1.4 km
+        "Candidate F",  # 2.0 km
+        "Candidate A",  # 5.7 km
+        "Candidate B",  # 5.9 km
+        "Candidate C",  # 6.2 km
+    ]
+    actual_names = [p["name"] for p in paged]
+    assert actual_names == expected_names
+
+
+# 27. Medical Shops: 20 candidate pool slicing into Page 1 and Page 2 (Section 21/22)
+def test_medical_shops_twenty_candidate_pool_pagination_continuity():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    # 20 candidates with distances 0.5 to 10.0
+    features_20 = [
+        make_mock_feature(f"pool_{i}", f"Shop {i}", lat=user_lat + ((i * 0.5 + 0.5) / 111.0), lon=user_lon)
+        for i in range(20)
+    ]
+
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"features": features_20}
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        page1 = client.search_pharmacies(latitude=user_lat, longitude=user_lon, page=1)
+        page2 = client.search_pharmacies(latitude=user_lat, longitude=user_lon, page=2)
+
+    assert len(page1["medical_shops"]) == 10
+    assert len(page2["medical_shops"]) == 10
+    assert page1["has_next"] is True
+    assert page2["has_next"] is False  # Max 2 pages
+
+    page1_max_dist = max(s["distance_km"] for s in page1["medical_shops"])
+    page2_min_dist = min(s["distance_km"] for s in page2["medical_shops"])
+
+    # Page 1 nearest 10 are all closer than or equal to Page 2
+    assert page1_max_dist <= page2_min_dist
+
+

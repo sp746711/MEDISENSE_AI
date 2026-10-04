@@ -99,6 +99,14 @@ class Settings(BaseSettings):
 
     map_default_zoom: int = Field(default=13, alias="MAP_DEFAULT_ZOOM")
 
+    google_places_api_key: str = Field(default="", alias="GOOGLE_PLACES_API_KEY")
+    google_places_base_url: str = Field(
+        default="https://places.googleapis.com/v1",
+        alias="GOOGLE_PLACES_BASE_URL",
+    )
+    google_places_page_size: int = Field(default=10, alias="GOOGLE_PLACES_PAGE_SIZE")
+    google_places_radius_km: int = Field(default=25, alias="GOOGLE_PLACES_RADIUS_KM")
+
     geoapify_api_key: str = Field(default="", alias="GEOAPIFY_API_KEY")
     geoapify_base_url: str = Field(
         default="https://api.geoapify.com/v2/places",

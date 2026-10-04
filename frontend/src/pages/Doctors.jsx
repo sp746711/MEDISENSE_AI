@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import DoctorCard from '../components/DoctorCard';
 import ErrorMessage from '../components/ErrorMessage';
@@ -23,6 +23,8 @@ export default function Doctors() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [entityFilter, setEntityFilter] = useState('all'); // all, doctor, clinic, medical_center, hospital
+  const [sortBy, setSortBy] = useState('relevance'); // relevance, distance
 
   // Keep specialization in sync if URL query parameter changes
   useEffect(() => {
@@ -33,46 +35,65 @@ export default function Doctors() {
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
-  const executeSearch = useCallback(async (targetPage = 1) => {
-    setError('');
+  const executeSearch = useCallback(
+    async (targetPage = 1, overrideSpecialty = null) => {
+      setError('');
 
-    if (!form.state.trim() || !form.district.trim()) {
-      setError('State and District are required for manual provider search.');
-      return;
+      const activeSpecialty = overrideSpecialty != null ? overrideSpecialty : form.specialization;
+
+      // In manual search mode (no assessmentId), require at least state and district
+      if (!assessmentId && (!form.state.trim() || !form.district.trim())) {
+        setError('State and District are required for manual provider search.');
+        return;
+      }
+
+      setLoading(true);
+      try {
+        const params = {
+          page: targetPage,
+          page_size: 10,
+        };
+
+        if (activeSpecialty && activeSpecialty.trim()) {
+          params.specialization = activeSpecialty.trim();
+        }
+
+        if (form.state.trim()) {
+          params.state = form.state.trim();
+        }
+        if (form.district.trim()) {
+          params.district = form.district.trim();
+        }
+        if (form.city.trim()) {
+          params.city = form.city.trim();
+        }
+        if (form.pin.trim()) {
+          params.pin = form.pin.trim();
+        }
+        if (assessmentId) {
+          params.assessment_id = assessmentId;
+        }
+
+        const data = await searchDoctors(params);
+        setResult(data);
+        setPage(targetPage);
+      } catch (err) {
+        setError(err.message || 'Unable to retrieve healthcare providers.');
+        setResult(null);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [form, assessmentId]
+  );
+
+  // Auto-search on mount when navigated from Assessment with assessment_id
+  useEffect(() => {
+    if (assessmentId) {
+      executeSearch(1, urlSpecialization);
     }
-
-    setLoading(true);
-    try {
-      const params = {
-        page: targetPage,
-        page_size: 10,
-        state: form.state.trim(),
-        district: form.district.trim(),
-      };
-
-      if (form.specialization.trim()) {
-        params.specialization = form.specialization.trim();
-      }
-      if (form.city.trim()) {
-        params.city = form.city.trim();
-      }
-      if (form.pin.trim()) {
-        params.pin = form.pin.trim();
-      }
-      if (assessmentId) {
-        params.assessment_id = assessmentId;
-      }
-
-      const data = await searchDoctors(params);
-      setResult(data);
-      setPage(targetPage);
-    } catch (err) {
-      setError(err.message || 'Unable to retrieve healthcare providers.');
-      setResult(null);
-    } finally {
-      setLoading(false);
-    }
-  }, [form, assessmentId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assessmentId]);
 
   const onSearchSubmit = (e) => {
     e.preventDefault();
@@ -84,11 +105,33 @@ export default function Doctors() {
     executeSearch(newPage);
   };
 
+  // Filter and sort providers client-side if needed (Requirement 20)
+  const filteredDoctors = useMemo(() => {
+    if (!result?.doctors) return [];
+    let list = [...result.doctors];
+
+    if (entityFilter !== 'all') {
+      list = list.filter((d) => (d.entity_type || 'doctor').toLowerCase() === entityFilter.toLowerCase());
+    }
+
+    if (sortBy === 'distance') {
+      list.sort((a, b) => {
+        if (a.distance_km == null && b.distance_km == null) return 0;
+        if (a.distance_km == null) return 1;
+        if (b.distance_km == null) return -1;
+        return a.distance_km - b.distance_km;
+      });
+    }
+
+    return list;
+  }, [result?.doctors, entityFilter, sortBy]);
+
   return (
     <div className="page">
-      <h1>Doctors</h1>
+      <h1>Healthcare Provider Discovery</h1>
       <p className="muted">
-        Provider data comes only from legitimate/authorized sources or verified registries. Nothing is fabricated.
+        Provider discovery powered by real geographic listings via Google Places API (New) or verified registries.
+        Zero synthetic or fabricated data.
       </p>
 
       {urlSpecialization ? (
@@ -97,17 +140,20 @@ export default function Doctors() {
             backgroundColor: '#eff6ff',
             border: '1px solid #bfdbfe',
             color: '#1e40af',
-            padding: '10px 14px',
+            padding: '12px 16px',
             borderRadius: '8px',
             marginBottom: '16px',
             fontSize: '14px',
           }}
         >
-          Suggested Specialty from Assessment: <strong>{urlSpecialization}</strong>
-          {assessmentId ? ` (Assessment ID: ${assessmentId})` : ''}
-          <div style={{ fontSize: '12px', marginTop: '2px', color: '#3b82f6' }}>
-            You can modify the specialty filter below if needed.
+          <div style={{ fontWeight: 600, fontSize: '15px' }}>
+            Suggested Specialty from Assessment: <span>{urlSpecialization}</span>
           </div>
+          {assessmentId ? (
+            <div style={{ fontSize: '12px', marginTop: '4px', color: '#2563eb' }}>
+              ✓ Assessment location context automatically applied. You can refine filters below if needed.
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -115,40 +161,102 @@ export default function Doctors() {
 
       {/* Search Form */}
       <form className="stack-form search-form" onSubmit={onSearchSubmit}>
-        <label>
-          Specialization (optional)
-          <input
-            value={form.specialization}
-            onChange={set('specialization')}
-            placeholder="e.g. Cardiology, Dermatology, General Physician"
-          />
-        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '12px' }}>
+          <label>
+            Specialization
+            <input
+              value={form.specialization}
+              onChange={set('specialization')}
+              placeholder="e.g. General Physician, Cardiologist, Dermatologist"
+            />
+          </label>
 
-        <label>
-          State
-          <input value={form.state} onChange={set('state')} required placeholder="e.g. Maharashtra" />
-        </label>
-        <label>
-          District
-          <input value={form.district} onChange={set('district')} required placeholder="e.g. Mumbai" />
-        </label>
-        <label>
-          City/Town (optional)
-          <input value={form.city} onChange={set('city')} placeholder="e.g. Andheri" />
-        </label>
-        <label>
-          PIN (optional)
-          <input value={form.pin} onChange={set('pin')} placeholder="e.g. 400053" />
-        </label>
+          <label>
+            State {assessmentId ? '(optional if from assessment)' : '(required)'}
+            <input
+              value={form.state}
+              onChange={set('state')}
+              required={!assessmentId}
+              placeholder="e.g. West Bengal, Maharashtra"
+            />
+          </label>
 
-        <button type="submit" className="btn btn-primary" disabled={loading}>
-          {loading ? 'Searching healthcare providers...' : 'Search'}
-        </button>
+          <label>
+            District {assessmentId ? '(optional if from assessment)' : '(required)'}
+            <input
+              value={form.district}
+              onChange={set('district')}
+              required={!assessmentId}
+              placeholder="e.g. North 24 Parganas, Mumbai"
+            />
+          </label>
+
+          <label>
+            City/Town (optional)
+            <input value={form.city} onChange={set('city')} placeholder="e.g. Barasat, Andheri" />
+          </label>
+
+          <label>
+            PIN Code (optional)
+            <input value={form.pin} onChange={set('pin')} placeholder="e.g. 700124" />
+          </label>
+        </div>
+
+        <div style={{ marginTop: '8px' }}>
+          <button type="submit" className="btn btn-primary" disabled={loading}>
+            {loading ? 'Searching healthcare providers...' : 'Search Providers'}
+          </button>
+        </div>
       </form>
+
+      {/* Filter and Sort controls */}
+      {result?.doctors?.length ? (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '12px',
+            marginTop: '20px',
+            padding: '10px 14px',
+            backgroundColor: '#f8fafc',
+            borderRadius: '8px',
+            border: '1px solid #e2e8f0',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>Filter Entity:</span>
+            <select
+              value={entityFilter}
+              onChange={(e) => setEntityFilter(e.target.value)}
+              style={{ fontSize: '13px', padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+            >
+              <option value="all">All Types</option>
+              <option value="doctor">Doctors Only</option>
+              <option value="clinic">Clinics</option>
+              <option value="medical_center">Medical Centers</option>
+              <option value="hospital">Hospitals</option>
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ fontSize: '13px', fontWeight: 600, color: '#475569' }}>Sort By:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              style={{ fontSize: '13px', padding: '4px 8px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+            >
+              <option value="relevance">Source Relevance</option>
+              <option value="distance">Distance (Nearest)</option>
+            </select>
+          </div>
+        </div>
+      ) : null}
 
       {/* Search Results */}
       {result ? (
-        <section className="section" style={{ marginTop: '24px' }}>
+        <section className="section" style={{ marginTop: '20px' }}>
           {result.expanded && result.expansion_message ? (
             <div
               style={{
@@ -176,7 +284,7 @@ export default function Doctors() {
 
           <p style={{ margin: '0 0 16px 0', color: '#475569' }}>{result.message}</p>
 
-          {!result.doctors?.length ? (
+          {!filteredDoctors.length ? (
             <div
               className="empty-state"
               style={{
@@ -189,13 +297,13 @@ export default function Doctors() {
               }}
             >
               <p style={{ margin: 0, fontSize: '15px' }}>
-                {result.message || 'Healthcare provider information is currently unavailable because no authorized provider data source is configured.'}
+                {result.message || 'No matching healthcare providers found for this search.'}
               </p>
             </div>
           ) : (
             <>
               <div className="card-grid">
-                {result.doctors.map((d, idx) => {
+                {filteredDoctors.map((d, idx) => {
                   const docKey = d.doctor_id || d.external_id || idx;
                   const detailId = d.doctor_id || d.external_id;
                   return (
@@ -204,8 +312,8 @@ export default function Doctors() {
                       onClick={() => {
                         if (detailId) {
                           const target = assessmentId
-                            ? `/doctors/${detailId}?assessment_id=${encodeURIComponent(assessmentId)}`
-                            : `/doctors/${detailId}`;
+                            ? `/doctors/${encodeURIComponent(detailId)}?assessment_id=${encodeURIComponent(assessmentId)}`
+                            : `/doctors/${encodeURIComponent(detailId)}`;
                           navigate(target);
                         }
                       }}
@@ -219,7 +327,7 @@ export default function Doctors() {
                 })}
               </div>
 
-              {/* Pagination UI: [ Previous ] [ Page N ] [ Next ] */}
+              {/* Pagination UI */}
               <div
                 style={{
                   display: 'flex',

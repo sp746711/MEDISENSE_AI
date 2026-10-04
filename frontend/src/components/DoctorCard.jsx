@@ -3,10 +3,40 @@ import React from 'react';
 export default function DoctorCard({ doctor }) {
   if (!doctor) return null;
 
+  const entityType = doctor.entity_type || 'doctor';
+  const entityLabels = {
+    doctor: 'Doctor',
+    clinic: 'Clinic',
+    medical_center: 'Medical Center',
+    hospital: 'Hospital',
+  };
+  const entityLabel = entityLabels[entityType.toLowerCase()] || 'Healthcare Provider';
+
+  const isVerified = doctor.verification_status === 'verified' && doctor.last_verified;
+
   return (
-    <article className="entity-card" style={{ padding: '16px', borderRadius: '12px' }}>
+    <article className="entity-card" style={{ padding: '18px', borderRadius: '12px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-        <h3 style={{ margin: '0 0 6px 0', fontSize: '18px', fontWeight: 600 }}>{doctor.name}</h3>
+        <div>
+          <h3 style={{ margin: '0 0 4px 0', fontSize: '18px', fontWeight: 600 }}>{doctor.name}</h3>
+          <span
+            style={{
+              display: 'inline-block',
+              fontSize: '11px',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+              padding: '2px 8px',
+              borderRadius: '4px',
+              backgroundColor: entityType === 'doctor' ? '#e0f2fe' : entityType === 'clinic' ? '#f0fdf4' : '#fef3c7',
+              color: entityType === 'doctor' ? '#0369a1' : entityType === 'clinic' ? '#15803d' : '#b45309',
+              marginBottom: '6px',
+            }}
+          >
+            {entityLabel}
+          </span>
+        </div>
+
         {doctor.distance_km != null ? (
           <span
             style={{
@@ -24,9 +54,11 @@ export default function DoctorCard({ doctor }) {
         ) : null}
       </div>
 
-      <p style={{ margin: '0 0 6px 0', fontWeight: 500, color: '#2563eb' }}>
-        {doctor.specialization}
-      </p>
+      {doctor.specialization ? (
+        <p style={{ margin: '0 0 6px 0', fontWeight: 500, color: '#2563eb', fontSize: '14px' }}>
+          {doctor.specialization}
+        </p>
+      ) : null}
 
       {doctor.qualification ? (
         <p className="muted" style={{ margin: '0 0 6px 0', fontSize: '13px' }}>
@@ -35,12 +67,12 @@ export default function DoctorCard({ doctor }) {
       ) : null}
 
       {doctor.facility ? (
-        <p style={{ margin: '0 0 6px 0', fontSize: '14px' }}>
+        <p style={{ margin: '0 0 6px 0', fontSize: '13px' }}>
           <strong>Facility:</strong> {doctor.facility}
         </p>
       ) : null}
 
-      <p className="muted" style={{ margin: '0 0 8px 0', fontSize: '13px' }}>
+      <p className="muted" style={{ margin: '0 0 8px 0', fontSize: '13px', lineHeight: 1.4 }}>
         {[doctor.address, doctor.city, doctor.district, doctor.state].filter(Boolean).join(', ')}
       </p>
 
@@ -51,31 +83,68 @@ export default function DoctorCard({ doctor }) {
         </p>
       ) : null}
 
-      {doctor.contact ? (
-        <p style={{ margin: '0 0 8px 0', fontSize: '13px', color: '#0f766e' }}>
-          <strong>Contact:</strong> {doctor.contact}
-        </p>
-      ) : null}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '14px', margin: '8px 0', fontSize: '13px' }}>
+        {doctor.contact ? (
+          <span style={{ color: '#0f766e', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <strong>Phone:</strong>{' '}
+            <a href={`tel:${doctor.contact}`} onClick={(e) => e.stopPropagation()} style={{ color: '#0f766e' }}>
+              {doctor.contact}
+            </a>
+          </span>
+        ) : null}
+
+        {doctor.website ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <a
+              href={doctor.website}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{ color: '#2563eb', textDecoration: 'underline' }}
+            >
+              Visit Website ↗
+            </a>
+          </span>
+        ) : null}
+      </div>
 
       <div
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          gap: '8px',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginTop: '10px',
-          paddingTop: '8px',
+          marginTop: '12px',
+          paddingTop: '10px',
           borderTop: '1px solid #f1f5f9',
-          fontSize: '12px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '4px',
+          fontSize: '11px',
+          color: '#64748b',
         }}
       >
-        <span className="source-tag" style={{ margin: 0 }}>
-          Source: {doctor.source || 'Unavailable'}
-        </span>
-        {doctor.last_verified ? (
-          <span style={{ color: '#059669', fontSize: '11px' }}>
-            Verified: {new Date(doctor.last_verified).toLocaleDateString()}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+          <span>
+            Provider listing source: <strong>{doctor.source || 'Google Places'}</strong>
+          </span>
+          {isVerified ? (
+            <span style={{ color: '#059669', fontWeight: 600 }}>
+              ✓ Verified: {new Date(doctor.last_verified).toLocaleDateString()}
+            </span>
+          ) : (
+            <span
+              style={{
+                color: '#64748b',
+                backgroundColor: '#f1f5f9',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                fontWeight: 500,
+              }}
+            >
+              Registration Not Verified
+            </span>
+          )}
+        </div>
+        {!isVerified ? (
+          <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>
+            Professional registration verification is not available through this system.
           </span>
         ) : null}
       </div>

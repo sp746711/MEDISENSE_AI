@@ -25,6 +25,7 @@ def search_doctors(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=1, le=100),
     assessment_id: Optional[str] = Query(default=None),
+    page_token: Optional[str] = Query(default=None),
 ) -> dict:
     repo = ProviderRepository()
     return repo.search_doctors(
@@ -39,11 +40,12 @@ def search_doctors(
         page=page,
         page_size=page_size,
         assessment_id=assessment_id,
+        page_token=page_token,
     )
 
 
 @router.get("/{doctor_id}")
-def get_doctor(doctor_id: UUID, current_user: CurrentUser) -> dict:
+def get_doctor(doctor_id: str, current_user: CurrentUser) -> dict:
     repo = ProviderRepository()
     result = repo.get_doctor(doctor_id)
     if result is None:

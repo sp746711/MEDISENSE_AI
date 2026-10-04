@@ -1,13 +1,26 @@
 import React from 'react';
 
+export function formatMedicalShopDistance(distanceKm) {
+  if (distanceKm == null || isNaN(distanceKm)) return null;
+  const dist = Number(distanceKm);
+  if (dist < 1.0) {
+    const rawMeters = Math.round(dist * 1000);
+    const meters = Math.round(rawMeters / 10) * 10;
+    return `${meters} m away`;
+  }
+  return `${dist.toFixed(1)} km away`;
+}
+
 export default function MedicalShopCard({ shop }) {
   if (!shop) return null;
+
+  const distanceText = formatMedicalShopDistance(shop.distance_km);
 
   return (
     <article className="entity-card" style={{ padding: '16px', borderRadius: '12px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
         <h3 style={{ margin: '0 0 6px 0', fontSize: '18px', fontWeight: 600 }}>{shop.name}</h3>
-        {shop.distance_km != null ? (
+        {distanceText ? (
           <span
             style={{
               fontSize: '12px',
@@ -19,7 +32,7 @@ export default function MedicalShopCard({ shop }) {
               whiteSpace: 'nowrap',
             }}
           >
-            {shop.distance_km} km away
+            {distanceText}
           </span>
         ) : null}
       </div>

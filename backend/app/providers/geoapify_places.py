@@ -50,12 +50,17 @@ class GeoapifyPlacesClient:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout_seconds: Optional[int] = None,
+        medical_shop_category: Optional[str] = None,
     ) -> None:
         settings = get_settings()
         self.api_key = api_key if api_key is not None else settings.geoapify_api_key
         self.base_url = (base_url or settings.geoapify_base_url).rstrip("/")
         self.facility_category = settings.geoapify_facility_category
-        self.medical_shop_category = settings.geoapify_medical_shop_category
+        self.medical_shop_category = (
+            medical_shop_category
+            if medical_shop_category is not None
+            else settings.geoapify_medical_shop_category
+        )
         self.default_radius_km = settings.geoapify_default_radius_km
         self.expanded_radius_km = settings.geoapify_expanded_radius_km
         self.page_size = settings.geoapify_page_size
@@ -275,6 +280,102 @@ class GeoapifyPlacesClient:
             "last_verified": None,
             "distance_km": dist_km,
         }
+
+    @staticmethod
+    def deduplicate_features(features: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Deduplicate Geoapify place features preserving first occurrence.
+
+        Deduplication priority:
+        1. primary: place_id
+        2. fallback: external ID (id)
+        3. fallback if necessary: normalized coordinates + normalized name
+        """
+        seen_ids: set[str] = set()
+        seen_coords_name: set[tuple[str, float, float]] = set()
+        unique_features: list[dict[str, Any]] = []
+
+        for feat in features:
+            props = feat.get("properties") or {}
+            place_id = str(props.get("place_id") or "").strip()
+            external_id = str(props.get("id") or "").strip()
+            target_id = place_id or external_id
+            name = str(props.get("name") or props.get("formatted") or "").strip().lower()
+
+            lat = props.get("lat")
+            lon = props.get("lon")
+            if lat is None or lon is None:
+                geom = feat.get("geometry") or {}
+                coords = geom.get("coordinates") or []
+                if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+                    lon, lat = coords[0], coords[1]
+
+            if target_id and target_id in seen_ids:
+                continue
+
+            coord_key = None
+            if lat is not None and lon is not None and name:
+                try:
+                    f_lat = float(lat)
+                    f_lon = float(lon)
+                    if -90.0 <= f_lat <= 90.0 and -180.0 <= f_lon <= 180.0:
+                        coord_key = (name, round(f_lat, 4), round(f_lon, 4))
+                        if coord_key in seen_coords_name:
+                            continue
+                except (ValueError, TypeError):
+                    coord_key = None
+
+            if target_id:
+                seen_ids.add(target_id)
+            if coord_key:
+                seen_coords_name.add(coord_key)
+
+            unique_features.append(feat)
+
+        return unique_features
+
+    @staticmethod
+    def deduplicate_medical_shop_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Deduplicate normalized medical shop dictionaries preserving first occurrence.
+
+        Deduplication priority:
+        1. primary: place_id (shop_id)
+        2. fallback: external ID (external_id)
+        3. fallback if necessary: normalized coordinates + normalized name
+        """
+        seen_ids: set[str] = set()
+        seen_coords_name: set[tuple[str, float, float]] = set()
+        unique_items: list[dict[str, Any]] = []
+
+        for item in items:
+            shop_id = str(item.get("shop_id") or "").strip()
+            external_id = str(item.get("external_id") or "").strip()
+            target_id = shop_id or external_id
+            name = str(item.get("name") or "").strip().lower()
+            lat = item.get("latitude")
+            lon = item.get("longitude")
+
+            if target_id and target_id in seen_ids:
+                continue
+
+            coord_key = None
+            if lat is not None and lon is not None and name:
+                try:
+                    f_lat = float(lat)
+                    f_lon = float(lon)
+                    coord_key = (name, round(f_lat, 4), round(f_lon, 4))
+                    if coord_key in seen_coords_name:
+                        continue
+                except (ValueError, TypeError):
+                    coord_key = None
+
+            if target_id:
+                seen_ids.add(target_id)
+            if coord_key:
+                seen_coords_name.add(coord_key)
+
+            unique_items.append(item)
+
+        return unique_items
 
     def _query_places(
         self,
@@ -715,8 +816,9 @@ class GeoapifyPlacesClient:
         default_radius = radius_km or self.default_radius_km
         expanded_radius = self.expanded_radius_km
 
-        # Fetch candidate set covering the application's maximum 20 visible results
-        candidate_limit = max(page_size * 2, 20)
+        # Fetch candidate set up to 50 covering the application's maximum 20 visible results
+        # even after deduplication across combined pharmacy categories and missing-coordinate filtering
+        candidate_limit = 50
 
         res = self._query_places(
             category=self.medical_shop_category,
@@ -744,16 +846,26 @@ class GeoapifyPlacesClient:
             }
 
         features = res["features"]
+        # Step 1: Candidate collection -> deduplicate raw features
+        deduped_features = self.deduplicate_features(features)
+
+        # Step 2: Normalize features and calculate actual Haversine distance
         raw_items = [
             self.normalize_feature_to_medical_shop(feat, latitude, longitude)
-            for feat in features
+            for feat in deduped_features
         ]
         valid_items = [item for item in raw_items if item is not None]
+
+        # Step 3: Deduplicate normalized items
+        valid_items = self.deduplicate_medical_shop_items(valid_items)
+
+        # Step 4: Sort nearest -> farthest (ASC distance)
         valid_items.sort(key=lambda x: x["distance_km"] if x.get("distance_km") is not None else float("inf"))
 
         expanded = False
         expansion_message = None
         tried_expansion = False
+        exp_features_count = 0
 
         if not valid_items and (radius_km is None or radius_km == default_radius):
             tried_expansion = True
@@ -766,11 +878,14 @@ class GeoapifyPlacesClient:
                 offset=0,
             )
             if exp_res["status"] == "success" and exp_res["features"]:
+                exp_features_count = len(exp_res["features"])
+                exp_deduped = self.deduplicate_features(exp_res["features"])
                 exp_items = [
                     self.normalize_feature_to_medical_shop(feat, latitude, longitude)
-                    for feat in exp_res["features"]
+                    for feat in exp_deduped
                 ]
                 valid_exp_items = [item for item in exp_items if item is not None]
+                valid_exp_items = self.deduplicate_medical_shop_items(valid_exp_items)
                 if valid_exp_items:
                     valid_exp_items.sort(
                         key=lambda x: x["distance_km"] if x.get("distance_km") is not None else float("inf")
@@ -782,6 +897,9 @@ class GeoapifyPlacesClient:
                         f"Search expanded to approximately {int(expanded_radius)} km."
                     )
 
+        # Cap candidates to maximum 20 visible results across 2 pages (10 per page)
+        valid_items = valid_items[:20]
+
         # Safe debug logging (Section 17: coordinates, radius, candidate count, nearest/farthest distance)
         nearest_dist = valid_items[0]["distance_km"] if valid_items else None
         farthest_dist = valid_items[-1]["distance_km"] if valid_items else None
@@ -790,7 +908,7 @@ class GeoapifyPlacesClient:
             latitude,
             longitude,
             default_radius if not expanded else expanded_radius,
-            len(features) if not expanded else len(exp_res.get("features", [])),
+            len(features) if not expanded else exp_features_count,
             len([i for i in valid_items if i.get("distance_km") is not None]),
             f"{nearest_dist}km" if nearest_dist is not None else "None",
             f"{farthest_dist}km" if farthest_dist is not None else "None",

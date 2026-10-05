@@ -23,7 +23,7 @@ Verifies the 19 required criteria:
 """
 
 import json
-from typing import Any
+from typing import Any, Optional
 import pytest
 from unittest.mock import MagicMock, patch
 import httpx
@@ -55,6 +55,7 @@ def make_mock_feature(
     phone: str = "+91-80-2630-4050",
     emergency: str = "",
     website: str = "https://www.apollohospitals.com",
+    categories: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     raw: dict[str, Any] = {}
     if phone:
@@ -64,22 +65,26 @@ def make_mock_feature(
     if website:
         raw["website"] = website
 
+    props: dict[str, Any] = {
+        "place_id": place_id,
+        "name": name,
+        "formatted": formatted,
+        "city": city,
+        "state": state,
+        "district": "Bengaluru Urban",
+        "lat": lat,
+        "lon": lon,
+        "datasource": {
+            "sourcename": "openstreetmap",
+            "raw": raw,
+        },
+    }
+    if categories is not None:
+        props["categories"] = categories
+
     return {
         "type": "Feature",
-        "properties": {
-            "place_id": place_id,
-            "name": name,
-            "formatted": formatted,
-            "city": city,
-            "state": state,
-            "district": "Bengaluru Urban",
-            "lat": lat,
-            "lon": lon,
-            "datasource": {
-                "sourcename": "openstreetmap",
-                "raw": raw,
-            },
-        },
+        "properties": props,
         "geometry": {
             "type": "Point",
             "coordinates": [lon, lat],
@@ -753,5 +758,278 @@ def test_medical_shops_twenty_candidate_pool_pagination_continuity():
 
     # Page 1 nearest 10 are all closer than or equal to Page 2
     assert page1_max_dist <= page2_min_dist
+
+
+# 28. Root-cause test (Prompt Section 17 & 6):
+# Demonstrates that combining healthcare.pharmacy and commercial.health_and_beauty.pharmacy
+# in ONE request finds closest pharmacies (0.7km, 1.3km) instead of only distant ones (5.7km).
+def test_medical_shops_combined_categories_root_cause():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    # Verify client uses the combined category
+    expected_combined_category = "healthcare.pharmacy,commercial.health_and_beauty.pharmacy"
+    assert client.medical_shop_category == expected_combined_category
+
+    # Feature A: healthcare.pharmacy at 5.7 km
+    feat_a = make_mock_feature(
+        place_id="feat_a_5_7",
+        name="Ms Bose Medical",
+        lat=user_lat + (5.7 / 111.0),
+        lon=user_lon,
+        categories=["healthcare.pharmacy"],
+    )
+    # Feature B: commercial.health_and_beauty.pharmacy at 0.7 km
+    feat_b = make_mock_feature(
+        place_id="feat_b_0_7",
+        name="Apollo Pharmacy Nearby",
+        lat=user_lat + (0.7 / 111.0),
+        lon=user_lon,
+        categories=["commercial.health_and_beauty.pharmacy"],
+    )
+    # Feature C: commercial.health_and_beauty.pharmacy at 1.3 km
+    feat_c = make_mock_feature(
+        place_id="feat_c_1_3",
+        name="Wellness Pharmacy Local",
+        lat=user_lat + (1.3 / 111.0),
+        lon=user_lon,
+        categories=["commercial.health_and_beauty.pharmacy"],
+    )
+
+    calls = []
+    mock_resp = MagicMock(status_code=200)
+    # Return features in arbitrary order (A, B, C)
+    mock_resp.json.return_value = {"features": [feat_a, feat_b, feat_c]}
+
+    with patch("httpx.Client.get", side_effect=lambda *a, **k: calls.append(k.get("params", {})) or mock_resp):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon)
+
+    # Exactly ONE single Places request sent for both categories
+    assert len(calls) == 1
+    assert calls[0]["categories"] == expected_combined_category
+    assert "25000" in calls[0]["filter"]
+
+    # Results returned and sorted nearest first: 0.7 km, 1.3 km, 5.7 km
+    assert res["status"] == "success"
+    shops = res["medical_shops"]
+    assert len(shops) == 3
+    assert shops[0]["name"] == "Apollo Pharmacy Nearby"
+    assert round(shops[0]["distance_km"], 1) == 0.7
+    assert shops[1]["name"] == "Wellness Pharmacy Local"
+    assert round(shops[1]["distance_km"], 1) == 1.3
+    assert shops[2]["name"] == "Ms Bose Medical"
+    assert round(shops[2]["distance_km"], 1) == 5.7
+
+
+# 29. Duplicate removal test (Prompt Section 7 & 18):
+# When the same pharmacy is returned in both categories, it must appear only ONCE.
+def test_medical_shops_deduplication():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    # Duplicate 1: identical place_id "ABC123", one healthcare.pharmacy, one commercial.health_and_beauty.pharmacy
+    feat_dup1 = make_mock_feature(
+        place_id="ABC123",
+        name="Apollo Pharmacy Central",
+        lat=user_lat + (1.0 / 111.0),
+        lon=user_lon,
+        categories=["healthcare.pharmacy"],
+    )
+    feat_dup2 = make_mock_feature(
+        place_id="ABC123",
+        name="Apollo Pharmacy Central",
+        lat=user_lat + (1.0 / 111.0),
+        lon=user_lon,
+        categories=["commercial.health_and_beauty.pharmacy"],
+    )
+    # Duplicate 2 (fallback): no place_id, but identical normalized name and coordinates
+    feat_dup_fallback1 = {
+        "type": "Feature",
+        "properties": {
+            "name": "MedPlus Local",
+            "formatted": "123 Main St",
+            "lat": user_lat + (2.0 / 111.0),
+            "lon": user_lon,
+            "categories": ["healthcare.pharmacy"],
+        },
+        "geometry": {"type": "Point", "coordinates": [user_lon, user_lat + (2.0 / 111.0)]},
+    }
+    feat_dup_fallback2 = {
+        "type": "Feature",
+        "properties": {
+            "name": "medplus local",
+            "formatted": "123 Main St",
+            "lat": user_lat + (2.0 / 111.0),
+            "lon": user_lon,
+            "categories": ["commercial.health_and_beauty.pharmacy"],
+        },
+        "geometry": {"type": "Point", "coordinates": [user_lon, user_lat + (2.0 / 111.0)]},
+    }
+    # Unique place
+    feat_unique = make_mock_feature(
+        place_id="XYZ789",
+        name="Unique Pharma",
+        lat=user_lat + (3.0 / 111.0),
+        lon=user_lon,
+        categories=["commercial.health_and_beauty.pharmacy"],
+    )
+
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {
+        "features": [feat_dup1, feat_dup2, feat_dup_fallback1, feat_dup_fallback2, feat_unique]
+    }
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon)
+
+    assert res["status"] == "success"
+    shops = res["medical_shops"]
+    # 5 features deduplicated down to 3 unique pharmacies
+    assert len(shops) == 3
+
+    # Primary place_id deduplication: Apollo Pharmacy appears only once
+    apollo_shops = [s for s in shops if "Apollo Pharmacy Central" in s["name"]]
+    assert len(apollo_shops) == 1
+
+    # Fallback coordinate + name deduplication: MedPlus appears only once
+    medplus_shops = [s for s in shops if "medplus" in s["name"].lower()]
+    assert len(medplus_shops) == 1
+
+    # Unique pharmacy appears once
+    unique_shops = [s for s in shops if "Unique Pharma" in s["name"]]
+    assert len(unique_shops) == 1
+
+
+# 30. 25 km rule test (Prompt Section 5 & 19):
+# When combined categories return results within 25 km, do NOT search 50 km.
+def test_medical_shops_25km_combined_no_50km_expansion():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    distances = [0.7, 1.2, 2.1, 5.7]
+    features = [
+        make_mock_feature(
+            place_id=f"shop_{d}",
+            name=f"Shop {d}km",
+            lat=user_lat + (d / 111.0),
+            lon=user_lon,
+            categories=["commercial.health_and_beauty.pharmacy" if d < 2.0 else "healthcare.pharmacy"],
+        )
+        for d in distances
+    ]
+
+    calls = []
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"features": features}
+
+    with patch("httpx.Client.get", side_effect=lambda *a, **k: calls.append(k.get("params", {})) or mock_resp):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon)
+
+    # Exactly 1 query made at 25km (25000m)
+    assert len(calls) == 1
+    assert "25000" in calls[0]["filter"]
+    assert res["expanded"] is False
+    assert res["expansion_message"] is None
+
+    # Results strictly in order: 0.7 km, 1.2 km, 2.1 km, 5.7 km
+    shops = res["medical_shops"]
+    assert len(shops) == 4
+    result_distances = [round(s["distance_km"], 1) for s in shops]
+    assert result_distances == [0.7, 1.2, 2.1, 5.7]
+
+
+# 31. Zero-result fallback test (Prompt Section 5 & 20):
+# When 25 km returns zero results, make exactly ONE 50 km fallback request with the SAME combined categories.
+def test_medical_shops_zero_results_fallback_uses_same_combined_category():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+    expected_categories = "healthcare.pharmacy,commercial.health_and_beauty.pharmacy"
+
+    calls = []
+    def mock_get(url, params=None, headers=None):
+        calls.append(dict(params or {}))
+        resp = MagicMock(status_code=200)
+        if "25000" in params.get("filter", ""):
+            resp.json.return_value = {"features": []}
+        else:
+            # 50km request returns features from both categories
+            f1 = make_mock_feature("f_50_1", "Far Pharmacy 1", lat=user_lat + (35.0 / 111.0), lon=user_lon, categories=["healthcare.pharmacy"])
+            f2 = make_mock_feature("f_50_2", "Far Pharmacy 2", lat=user_lat + (28.0 / 111.0), lon=user_lon, categories=["commercial.health_and_beauty.pharmacy"])
+            resp.json.return_value = {"features": [f1, f2]}
+        return resp
+
+    with patch("httpx.Client.get", side_effect=mock_get):
+        res = client.search_pharmacies(latitude=user_lat, longitude=user_lon)
+
+    # Exactly TWO calls: 25 km followed by 50 km
+    assert len(calls) == 2
+    assert "25000" in calls[0]["filter"]
+    assert calls[0]["categories"] == expected_categories
+    assert "50000" in calls[1]["filter"]
+    assert calls[1]["categories"] == expected_categories
+
+    assert res["status"] == "success"
+    assert res["expanded"] is True
+    assert "expanded to approximately 50 km" in res["expansion_message"]
+
+    # Results deduplicated and sorted nearest-first
+    shops = res["medical_shops"]
+    assert len(shops) == 2
+    assert shops[0]["name"] == "Far Pharmacy 2"  # ~28 km
+    assert shops[1]["name"] == "Far Pharmacy 1"  # ~35 km
+    assert shops[0]["distance_km"] < shops[1]["distance_km"]
+
+
+# 32. Pagination and candidate pool capping test (Prompt Section 10, 12, 21):
+# 20 unique valid pharmacies -> Page 1 (nearest 10), Page 2 (next 10), Page 3 (blocked).
+# Over 20 candidates in Geoapify -> capped to maximum 20 visible results across 2 pages.
+def test_medical_shops_pagination_and_candidate_limit_capping():
+    client = GeoapifyPlacesClient(api_key="mock_key")
+    user_lat, user_lon = 12.9716, 77.5946
+
+    # Generate 35 candidate features with distances from 0.5 km to 17.5 km
+    features_35 = [
+        make_mock_feature(
+            place_id=f"shop_p_{i}",
+            name=f"Shop P {i}",
+            lat=user_lat + (((i + 1) * 0.5) / 111.0),
+            lon=user_lon,
+            categories=["commercial.health_and_beauty.pharmacy" if i % 2 == 0 else "healthcare.pharmacy"],
+        )
+        for i in range(35)
+    ]
+
+    mock_resp = MagicMock(status_code=200)
+    mock_resp.json.return_value = {"features": features_35}
+
+    with patch("httpx.Client.get", return_value=mock_resp):
+        page1 = client.search_pharmacies(latitude=user_lat, longitude=user_lon, page=1)
+        page2 = client.search_pharmacies(latitude=user_lat, longitude=user_lon, page=2)
+        page3 = client.search_pharmacies(latitude=user_lat, longitude=user_lon, page=3)
+
+    # Page 1: exactly nearest 10
+    assert page1["status"] == "success"
+    assert len(page1["medical_shops"]) == 10
+    assert page1["has_next"] is True
+    assert page1["has_previous"] is False
+    assert page1["total_count"] == 20  # Capped at maximum 20 visible results
+
+    # Page 2: next 10
+    assert page2["status"] == "success"
+    assert len(page2["medical_shops"]) == 10
+    assert page2["has_next"] is False  # Max 2 pages reached
+    assert page2["has_previous"] is True
+    assert page2["total_count"] == 20
+
+    # Nearest-first order continuity between Page 1 and Page 2
+    assert page1["medical_shops"][-1]["distance_km"] <= page2["medical_shops"][0]["distance_km"]
+
+    # Page 3: blocked
+    assert page3["status"] == "success"
+    assert page3["medical_shops"] == []
+    assert page3["has_next"] is False
+    assert page3["has_previous"] is True
+    assert "Maximum of 2 pages reached" in page3["message"]
+
 
 

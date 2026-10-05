@@ -117,7 +117,7 @@ class Settings(BaseSettings):
         alias="GEOAPIFY_FACILITY_CATEGORY",
     )
     geoapify_medical_shop_category: str = Field(
-        default="healthcare.pharmacy",
+        default="healthcare.pharmacy,commercial.health_and_beauty.pharmacy",
         alias="GEOAPIFY_MEDICAL_SHOP_CATEGORY",
     )
     geoapify_default_radius_km: int = Field(default=25, alias="GEOAPIFY_DEFAULT_RADIUS_KM")

@@ -38,11 +38,22 @@ import re
 
 
 
+from contextlib import nullcontext
 from typing import Any, Optional
-
-
+import socket
+import uuid
 
 import httpx
+
+# Prioritize IPv4 (AF_INET) over IPv6 (AF_INET6) to eliminate 21s TCP SYN timeout on Windows
+_orig_getaddrinfo = socket.getaddrinfo
+
+def _ipv4_preferred_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    res = _orig_getaddrinfo(host, port, family, type, proto, flags)
+    return sorted(res, key=lambda x: 0 if x[0] == socket.AF_INET else 1)
+
+if socket.getaddrinfo is not _ipv4_preferred_getaddrinfo:
+    socket.getaddrinfo = _ipv4_preferred_getaddrinfo
 
 
 
@@ -265,10 +276,8 @@ class GeoapifyPlacesClient:
 
         self.timeout_seconds = timeout_seconds or settings.geoapify_timeout_seconds
 
-        # Overpass is a separate public service from Geoapify and may need
-        # a longer read timeout than the Geoapify request.
         self.osm_pharmacy = OSMPharmacyProvider(
-            timeout_seconds=max(self.timeout_seconds, 30)
+            timeout_seconds=self.timeout_seconds
         )
 
 
@@ -894,10 +903,18 @@ class GeoapifyPlacesClient:
 
 
         place_id = str(properties.get("place_id") or properties.get("id") or "")
-
-
-
-        name = properties.get("name") or properties.get("formatted") or "Medical Shop / Pharmacy"
+        raw_name = properties.get("name")
+        raw_dict = (properties.get("datasource") or {}).get("raw", {}) if isinstance(properties.get("datasource"), dict) else {}
+        name = (
+            raw_name
+            or (raw_dict.get("name") if isinstance(raw_dict, dict) else None)
+            or properties.get("brand")
+            or (raw_dict.get("brand") if isinstance(raw_dict, dict) else None)
+            or properties.get("operator")
+            or (raw_dict.get("operator") if isinstance(raw_dict, dict) else None)
+            or properties.get("formatted")
+            or "Medical Shop"
+        )
 
 
 
@@ -1339,16 +1356,132 @@ class GeoapifyPlacesClient:
 
         return unique_features
 
+    @staticmethod
+    def _is_pharmacy_candidate(feature: dict[str, Any]) -> tuple[bool, str]:
+        """Validate whether a discovered place feature is legitimately a medical shop, chemist, or pharmacy.
 
+        Returns (is_valid, reason).
+        """
+        props = feature.get("properties") or {}
 
+        # 1. Coordinates check
+        lat = props.get("lat")
+        lon = props.get("lon")
+        if lat is None or lon is None:
+            geom = feature.get("geometry") or {}
+            coords = geom.get("coordinates") or []
+            if isinstance(coords, (list, tuple)) and len(coords) >= 2:
+                lon, lat = coords[0], coords[1]
 
+        if lat is None or lon is None:
+            return False, "missing_coordinates"
+        try:
+            f_lat = float(lat)
+            f_lon = float(lon)
+            if not (-90.0 <= f_lat <= 90.0 and -180.0 <= f_lon <= 180.0):
+                return False, "coordinates_out_of_range"
+        except (ValueError, TypeError):
+            return False, "invalid_coordinate_types"
 
+        name = str(props.get("name") or "").strip().lower()
+        formatted = str(props.get("formatted") or "").strip().lower()
+        cats = [str(c).lower() for c in (props.get("categories") or [])]
 
+        datasource = props.get("datasource") or {}
+        raw = datasource.get("raw") if isinstance(datasource, dict) else {}
+        if not isinstance(raw, dict):
+            raw = {}
+
+        raw_amenity = str(raw.get("amenity") or "").strip().lower()
+        raw_shop = str(raw.get("shop") or "").strip().lower()
+        raw_healthcare = str(raw.get("healthcare") or "").strip().lower()
+        raw_dispensing = str(raw.get("dispensing") or "").strip().lower()
+
+        # 1. Direct pharmacy classification from provider categories or OSM raw tags
+        for c in cats:
+            if any(term in c for term in ["pharmacy", "chemist", "drugstore", "druggist"]):
+                return True, "matched_provider_category"
+
+        if raw_amenity == "pharmacy" or raw_healthcare == "pharmacy":
+            return True, "matched_osm_tag_pharmacy"
+        if raw_shop in {"chemist", "pharmacy", "drugstore", "medical_supply"}:
+            return True, "matched_osm_tag_shop"
+        if raw_dispensing == "yes":
+            return True, "matched_osm_dispensing"
+
+        # 2. Text evidence in name, brand, operator, or formatted string
+        brand = str(raw.get("brand") or "").strip().lower()
+        operator = str(raw.get("operator") or "").strip().lower()
+        text_corpus = f"{name} {brand} {operator} {formatted}"
+
+        facility_exclusions = (
+            "nursing home",
+            "hospital",
+            "medical college",
+            "medical university",
+            "centre for sight",
+            "eye hospital",
+            "diagnostic center",
+            "pathology",
+            "dental",
+            "optical",
+            "clinic",
+        )
+        has_exclusion = any(ex in text_corpus for ex in facility_exclusions)
+
+        explicit_medicine_terms = (
+            "pharmacy",
+            "chemist",
+            "medical store",
+            "medical shop",
+            "medicine shop",
+            "medicine store",
+            "drug store",
+            "drugstore",
+            "medical hall",
+            "dispensary",
+            "homeo hall",
+        )
+        if has_exclusion and not any(term in text_corpus for term in explicit_medicine_terms):
+            return False, "non_pharmacy_healthcare_facility"
+
+        pharmacy_keywords = (
+            "pharmacy",
+            "chemist",
+            "medical store",
+            "medical shop",
+            "medical hall",
+            "medicine shop",
+            "medicine store",
+            "medicines",
+            "medicine",
+            "medicals",
+            "medical",
+            "drug store",
+            "drugstore",
+            "druggist",
+            "apothecary",
+            "dispensary",
+            "pharma",
+            "homeo",
+            "homeopathy",
+            "homeopathic",
+            "homeo hall",
+            "ayurvedic",
+            "ayurveda",
+            "dawa",
+            "dawakhana",
+            "health store",
+            "healthcare shop",
+        )
+
+        has_pharmacy_keyword = any(kw in text_corpus for kw in pharmacy_keywords)
+        if not has_pharmacy_keyword:
+            return False, "no_pharmacy_or_medicine_evidence"
+
+        return True, "matched_medicine_keyword"
 
     @staticmethod
-
-
-
     def deduplicate_medical_shop_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
@@ -1558,9 +1691,8 @@ class GeoapifyPlacesClient:
 
 
         offset: Optional[int] = None,
-
-
-
+        name: Optional[str] = None,
+        client: Optional[httpx.Client] = None,
     ) -> dict[str, Any]:
 
 
@@ -1714,10 +1846,9 @@ class GeoapifyPlacesClient:
 
 
             "apiKey": self.api_key,
-
-
-
         }
+        if name and name.strip():
+            params["name"] = name.strip()
 
 
 
@@ -1745,11 +1876,9 @@ class GeoapifyPlacesClient:
 
 
 
-            with httpx.Client(timeout=float(self.timeout_seconds)) as client:
-
-
-
-                response = client.get(self.base_url, params=params, headers=headers)
+            cm = nullcontext(client) if client is not None else httpx.Client(timeout=httpx.Timeout(connect=2.5, read=float(self.timeout_seconds), write=2.5, pool=2.5))
+            with cm as active_client:
+                response = active_client.get(self.base_url, params=params, headers=headers)
 
 
 
@@ -3152,27 +3281,25 @@ class GeoapifyPlacesClient:
         radius_km: Optional[float] = None,
         page: int = 1,
         page_size: int = 10,
+        request_id: Optional[str] = None,
     ) -> dict[str, Any]:
+        """Search real nearby pharmacies/medical shops using progressive radius expansion.
+
+        Sequence: 1 km -> 3 km -> 5 km -> 10 km -> 25 km -> 50 km maximum.
+        Strictly sequential: 1 km completes BEFORE 3 km starts, 3 km completes BEFORE 5 km starts.
+        Expands to the next radius ONLY if the current radius returns zero valid records.
+        Never expands merely because results are fewer than 10 or 20.
+        All candidate distances are calculated using Haversine from confirmed user coordinates.
+        Never fabricates pharmacies, coordinates, or distances.
         """
-        Search nearby medical shops/pharmacies from:
+        page = max(int(page), 1)
+        page_size = min(max(int(page_size), 1), 10)
+        req_id = request_id.strip() if request_id and request_id.strip() else f"req_{uuid.uuid4().hex[:8]}"
 
-        1. Geoapify Places API
-        2. Direct OpenStreetMap / Overpass
-
-        Rules:
-        - Uses the user's confirmed current latitude/longitude.
-        - Searches within 25 km first.
-        - Expands to 50 km ONLY when the combined 25 km result
-          contains zero valid records.
-        - Maximum 2 application pages.
-        - Maximum 20 visible results.
-        - Sorts final merged results by Haversine distance.
-        - Never fabricates coordinates, names, addresses, phones, or distances.
-        """
-
-        # ------------------------------------------------------------
-        # 1. HARD BLOCK: maximum 2 pages
-        # ------------------------------------------------------------
+        disclaimer = (
+            "Medical shop listings are location-discovery results only. "
+            "They do not provide medication prescribing, dosage, or treatment advice."
+        )
 
         if page > 2:
             return {
@@ -3180,406 +3307,416 @@ class GeoapifyPlacesClient:
                 "message": "Maximum of 2 pages reached.",
                 "data": [],
                 "medical_shops": [],
+                "total_count": 0,
                 "page": page,
                 "page_size": page_size,
                 "has_next": False,
                 "has_previous": True,
                 "expanded": False,
                 "expansion_message": None,
-                "disclaimer": (
-                    "Medical shop listings do not include medication "
-                    "prescribing or dosage advice."
-                ),
-                "source_metadata": {
-                    "source": "Geoapify + OpenStreetMap / Overpass",
-                    "configured": True,
-                    "source_urls": [
-                        "https://api.geoapify.com/v2/places",
-                        "https://overpass-api.de/api/interpreter",
-                    ],
-                },
+                "disclaimer": disclaimer,
+                "request_id": req_id,
             }
 
-        # ------------------------------------------------------------
-        # 2. SEARCH RADIUS
-        # ------------------------------------------------------------
+        try:
+            user_lat = float(latitude)
+            user_lon = float(longitude)
+        except (TypeError, ValueError):
+            return {
+                "status": "error",
+                "message": "Valid latitude and longitude are required.",
+                "data": [],
+                "medical_shops": [],
+                "page": page,
+                "page_size": page_size,
+                "has_next": False,
+                "has_previous": page > 1,
+                "request_id": req_id,
+            }
 
-        default_radius = radius_km or self.default_radius_km
-        expanded_radius = self.expanded_radius_km
+        if not (-90.0 <= user_lat <= 90.0 and -180.0 <= user_lon <= 180.0):
+            return {
+                "status": "error",
+                "message": "Latitude or longitude is outside the valid range.",
+                "data": [],
+                "medical_shops": [],
+                "page": page,
+                "page_size": page_size,
+                "has_next": False,
+                "has_previous": page > 1,
+                "request_id": req_id,
+            }
 
-        # Maximum visible results = 20.
-        # Keep 50 Geoapify candidates before validation/deduplication.
-        candidate_limit = 50
+        # Progressive search radii levels: strictly 1 -> 2 -> 3 -> 5 -> 10 -> 25 -> 50 km
+        search_radii: list[float] = [1.0, 2.0, 3.0, 5.0, 10.0, 25.0, 50.0]
 
-        # ------------------------------------------------------------
-        # 3. GEOAPIFY SEARCH
-        # ------------------------------------------------------------
-
-        geo_items: list[dict[str, Any]] = []
-        geo_features_count = 0
-        geo_error: Optional[str] = None
-
-        geo_res = self._query_places(
-            category=self.medical_shop_category,
-            latitude=latitude,
-            longitude=longitude,
-            radius_km=default_radius,
-            limit=candidate_limit,
-            offset=0,
-        )
-
-        if geo_res["status"] == "success":
-            features = geo_res.get("features", [])
-            geo_features_count = len(features)
-
-            logger.info(
-                "Medical Shop Geoapify response: "
-                "user_lat=%s, user_lon=%s, "
-                "radius=%skm, raw_features=%d",
-                latitude,
-                longitude,
-                default_radius,
-                len(features),
-            )
-
-            deduped_features = self.deduplicate_features(features)
-
-            normalized_geo = [
-                self.normalize_feature_to_medical_shop(
-                    feature,
-                    latitude,
-                    longitude,
-                )
-                for feature in deduped_features
-            ]
-
-            geo_items = [
-                item
-                for item in normalized_geo
-                if item is not None
-            ]
-
-            geo_items = self.deduplicate_medical_shop_items(
-                geo_items
-            )
-
-        else:
-            geo_error = str(
-                geo_res.get("message") or "Geoapify search failed."
-            )
-
-            logger.warning(
-                "Geoapify medical shop search failed: %s",
-                geo_error,
-            )
-
-        # ------------------------------------------------------------
-        # 4. OPENSTREETMAP / OVERPASS SEARCH
-        # ------------------------------------------------------------
-
-        osm_items: list[dict[str, Any]] = []
-        osm_error: Optional[str] = None
-        osm_raw_count = 0
-
-        osm_res = self.osm_pharmacy.search_pharmacies(
-            latitude=latitude,
-            longitude=longitude,
-            radius_km=default_radius,
-        )
-
-        if osm_res["status"] == "success":
-            osm_items = [
-                item
-                for item in (osm_res.get("data") or [])
-                if isinstance(item, dict)
-            ]
-            osm_raw_count = int(osm_res.get("raw_count") or len(osm_items))
-
-            logger.info(
-                "Medical Shop OSM response: radius=%skm, raw_elements=%d, valid_items=%d",
-                default_radius,
-                osm_raw_count,
-                len(osm_items),
-            )
-
-        else:
-            osm_error = str(
-                osm_res.get("message") or "OpenStreetMap search failed."
-            )
-
-            logger.warning(
-                "OpenStreetMap medical shop search failed: %s",
-                osm_error,
-            )
-
-        # ------------------------------------------------------------
-        # 5. MERGE GEOAPIFY + OSM
-        # ------------------------------------------------------------
-
-        merged_items = [
-            *geo_items,
-            *osm_items,
+        # Approved pharmacy categories
+        configured = [
+            value.strip()
+            for value in re.split(r"[,;|]", str(self.medical_shop_category or ""))
+            if value.strip()
         ]
+        approved = [
+            "healthcare.pharmacy",
+            "commercial.health_and_beauty.pharmacy",
+            "commercial.chemist",
+            "healthcare.clinic_or_praxis",
+            "commercial.health_and_beauty",
+        ]
+        categories: list[str] = []
+        for category in [*configured, *approved]:
+            if category not in categories:
+                categories.append(category)
 
-        merged_items = self.deduplicate_medical_shop_items(
-            merged_items
-        )
-
-        merged_items.sort(
-            key=lambda item: (
-                item["distance_km"]
-                if item.get("distance_km") is not None
-                else float("inf")
-            )
-        )
-
-        valid_items = merged_items
-
-        for index, item in enumerate(valid_items[:20], start=1):
-            logger.info(
-                "Medical Shop merged sorted #%d: "
-                "name=%s distance=%s source=%s",
-                index,
-                item.get("name"),
-                (
-                    f"{item['distance_km']:.3f}km"
-                    if item.get("distance_km") is not None
-                    else "None"
-                ),
-                item.get("source"),
-            )
-
-        # ------------------------------------------------------------
-        # 6. 25 KM -> 50 KM EXPANSION
-        # ------------------------------------------------------------
-
-        expanded = False
-        expansion_message: Optional[str] = None
-        tried_expansion = False
-
-        if (
-            not valid_items
-            and page == 1
-            and (
-                radius_km is None
-                or radius_km == default_radius
-            )
-        ):
-            tried_expansion = True
-
-            logger.info(
-                "No valid medical shops within %skm. "
-                "Starting one-time %skm expansion.",
-                default_radius,
-                expanded_radius,
-            )
-
-            # ------------------------
-            # Geoapify 50 km
-            # ------------------------
-
-            exp_geo_items: list[dict[str, Any]] = []
-
-            exp_geo_res = self._query_places(
-                category=self.medical_shop_category,
-                latitude=latitude,
-                longitude=longitude,
-                radius_km=expanded_radius,
-                limit=candidate_limit,
-                offset=0,
-            )
-
-            if exp_geo_res["status"] == "success":
-                exp_features = exp_geo_res.get("features") or []
-
-                exp_deduped = self.deduplicate_features(
-                    exp_features
-                )
-
-                exp_normalized = [
-                    self.normalize_feature_to_medical_shop(
-                        feature,
-                        latitude,
-                        longitude,
-                    )
-                    for feature in exp_deduped
-                ]
-
-                exp_geo_items = [
-                    item
-                    for item in exp_normalized
-                    if item is not None
-                ]
-
-                exp_geo_items = self.deduplicate_medical_shop_items(
-                    exp_geo_items
-                )
-
-            # ------------------------
-            # OpenStreetMap 50 km
-            # ------------------------
-
-            exp_osm_items: list[dict[str, Any]] = []
-
-            exp_osm_res = self.osm_pharmacy.search_pharmacies(
-                latitude=latitude,
-                longitude=longitude,
-                radius_km=expanded_radius,
-            )
-
-            if exp_osm_res["status"] == "success":
-                exp_osm_items = [
-                    item
-                    for item in (exp_osm_res.get("data") or [])
-                    if isinstance(item, dict)
-                ]
-
-            # ------------------------
-            # Merge expanded results
-            # ------------------------
-
-            expanded_items = [
-                *exp_geo_items,
-                *exp_osm_items,
-            ]
-
-            expanded_items = self.deduplicate_medical_shop_items(
-                expanded_items
-            )
-
-            expanded_items.sort(
-                key=lambda item: (
-                    item["distance_km"]
-                    if item.get("distance_km") is not None
-                    else float("inf")
-                )
-            )
-
-            if expanded_items:
-                valid_items = expanded_items
-                expanded = True
-
-                expansion_message = (
-                    f"No matching pharmacies/medical shops were found "
-                    f"within {int(default_radius)} km. Search expanded "
-                    f"to approximately {int(expanded_radius)} km."
-                )
-
-        # ------------------------------------------------------------
-        # 7. MAXIMUM 20 RESULT RECORDS
-        # ------------------------------------------------------------
-
-        valid_items = valid_items[:20]
-
-        # ------------------------------------------------------------
-        # 8. DISTANCE SUMMARY
-        # ------------------------------------------------------------
-
-        nearest_dist = (
-            valid_items[0]["distance_km"]
-            if valid_items
-            else None
-        )
-
-        farthest_dist = (
-            valid_items[-1]["distance_km"]
-            if valid_items
-            else None
-        )
-
-        valid_coord_count = sum(
-            1
-            for item in valid_items
-            if item.get("distance_km") is not None
-        )
+        candidate_limit = 100
+        successful_radius: Optional[float] = None
+        accumulated_candidates: list[dict[str, Any]] = []
+        geo_stats: list[dict[str, Any]] = []
+        geo_errors: list[str] = []
+        osm_error: Optional[str] = None
+        expansion_reason: Optional[str] = None
 
         logger.info(
-            "Medical Shops merged search: "
-            "user_lat=%s, user_lon=%s, radius=%skm, "
-            "geo_candidates=%d, osm_candidates=%d, "
-            "final_valid=%d, nearest=%s, farthest=%s, page=%d",
-            latitude,
-            longitude,
-            expanded_radius if expanded else default_radius,
-            geo_features_count,
-            len(osm_items),
-            valid_coord_count,
-            (
-                f"{nearest_dist:.3f}km"
-                if nearest_dist is not None
-                else "None"
-            ),
-            (
-                f"{farthest_dist:.3f}km"
-                if farthest_dist is not None
-                else "None"
-            ),
-            page,
+            "MEDICAL_SHOP_REQUEST_START: request_id=%s lat=%s lon=%s initial_radius=%skm candidate_radii=%s",
+            req_id,
+            user_lat,
+            user_lon,
+            search_radii[0],
+            search_radii,
         )
 
-        # ------------------------------------------------------------
-        # 9. MESSAGE
-        # ------------------------------------------------------------
+        # Pooled HTTP client session across all categories and radii for connection keep-alive
+        timeout_cfg = httpx.Timeout(connect=2.5, read=float(self.timeout_seconds), write=2.5, pool=2.5)
+        with httpx.Client(timeout=timeout_cfg) as session_client:
+            for current_radius in search_radii:
+                radius_label = int(current_radius) if current_radius.is_integer() else current_radius
+                logger.info(
+                    "MEDICAL_SHOP_RADIUS_START: request_id=%s radius=%s",
+                    req_id,
+                    radius_label,
+                )
 
-        if valid_items:
-            msg = (
-                f"Found {len(valid_items)} matching medical shop(s)."
+                # 1. Geoapify Primary Category Search
+                cat_query_string = ",".join(categories)
+                cat_result = self._query_places(
+                    category=cat_query_string,
+                    latitude=user_lat,
+                    longitude=user_lon,
+                    radius_km=current_radius,
+                    limit=candidate_limit,
+                    offset=0,
+                    client=session_client,
+                )
+
+                geo_cat_raw = 0
+                geo_cat_items: list[dict[str, Any]] = []
+
+                if cat_result.get("status") != "success":
+                    msg = str(cat_result.get("message") or "Geoapify category query failed.")
+                    geo_errors.append(f"category@{current_radius}km: {msg}")
+                else:
+                    cat_feats = cat_result.get("features") or []
+                    geo_cat_raw = len(cat_feats)
+                    for feat in self.deduplicate_features(cat_feats):
+                        is_cand, reason = self._is_pharmacy_candidate(feat)
+                        p = feat.get("properties") or {}
+                        p_name = p.get("name") or p.get("formatted") or "(unnamed)"
+                        p_lat = p.get("lat")
+                        p_lon = p.get("lon")
+                        p_cats = p.get("categories")
+                        if not is_cand:
+                            logger.info(
+                                "MEDICAL_SHOP_REJECT: reason=%s provider=Geoapify name=%s coordinates=(%s,%s) category=%s",
+                                reason,
+                                p_name,
+                                p_lat,
+                                p_lon,
+                                p_cats,
+                            )
+                            continue
+                        item = self.normalize_feature_to_medical_shop(feat, user_lat, user_lon)
+                        if item is not None:
+                            i_lat = item.get("latitude")
+                            i_lon = item.get("longitude")
+                            if i_lat is not None and i_lon is not None and -90.0 <= i_lat <= 90.0 and -180.0 <= i_lon <= 180.0:
+                                dist = calculate_distance_km(user_lat, user_lon, i_lat, i_lon)
+                                if dist is not None and 0.0 <= float(dist) <= current_radius + 0.05:
+                                    item["distance_km"] = round(float(dist), 3)
+                                    geo_cat_items.append(item)
+
+                geo_cat_items = self.deduplicate_medical_shop_items(geo_cat_items)
+                geo_cat_items.sort(key=lambda x: float(x["distance_km"]))
+                geo_cat_accepted = len(geo_cat_items)
+                geo_cat_rejected = max(0, geo_cat_raw - geo_cat_accepted)
+                nearest_cat_str = f"{geo_cat_items[0]['distance_km']:.3f}" if geo_cat_items else "None"
+
+                logger.info(
+                    "MEDICAL_SHOP_GEOAPIFY_CATEGORY: request_id=%s radius=%s source=geoapify query=%s raw_count=%d accepted_count=%d rejected_count=%d nearest_distance=%s",
+                    req_id,
+                    radius_label,
+                    cat_query_string,
+                    geo_cat_raw,
+                    geo_cat_accepted,
+                    geo_cat_rejected,
+                    nearest_cat_str,
+                )
+
+                # 2. Geoapify Secondary Discovery (text / name search under healthcare & commercial)
+                geo_sec_raw = 0
+                geo_sec_items: list[dict[str, Any]] = []
+                secondary_terms = ["pharmacy", "medical", "medicine", "chemist", "drug"]
+
+                for term in secondary_terms:
+                    sec_res = self._query_places(
+                        category="healthcare,commercial",
+                        name=term,
+                        latitude=user_lat,
+                        longitude=user_lon,
+                        radius_km=current_radius,
+                        limit=candidate_limit,
+                        offset=0,
+                        client=session_client,
+                    )
+                    if sec_res.get("status") == "success":
+                        feats = sec_res.get("features") or []
+                        geo_sec_raw += len(feats)
+                        for feat in feats:
+                            is_cand, reason = self._is_pharmacy_candidate(feat)
+                            p = feat.get("properties") or {}
+                            p_name = p.get("name") or p.get("formatted") or "(unnamed)"
+                            p_lat = p.get("lat")
+                            p_lon = p.get("lon")
+                            p_cats = p.get("categories")
+                            if not is_cand:
+                                logger.info(
+                                    "MEDICAL_SHOP_REJECT: reason=%s provider=Geoapify name=%s coordinates=(%s,%s) category=%s",
+                                    reason,
+                                    p_name,
+                                    p_lat,
+                                    p_lon,
+                                    p_cats,
+                                )
+                                continue
+                            item = self.normalize_feature_to_medical_shop(feat, user_lat, user_lon)
+                            if item is not None:
+                                i_lat = item.get("latitude")
+                                i_lon = item.get("longitude")
+                                if i_lat is not None and i_lon is not None and -90.0 <= i_lat <= 90.0 and -180.0 <= i_lon <= 180.0:
+                                    dist = calculate_distance_km(user_lat, user_lon, i_lat, i_lon)
+                                    if dist is not None and 0.0 <= float(dist) <= current_radius + 0.05:
+                                        item["distance_km"] = round(float(dist), 3)
+                                        geo_sec_items.append(item)
+
+                geo_sec_items = self.deduplicate_medical_shop_items(geo_sec_items)
+                geo_sec_items.sort(key=lambda x: float(x["distance_km"]))
+                geo_sec_accepted = len(geo_sec_items)
+                geo_sec_rejected = max(0, geo_sec_raw - geo_sec_accepted)
+                nearest_sec_str = f"{geo_sec_items[0]['distance_km']:.3f}" if geo_sec_items else "None"
+
+                logger.info(
+                    "MEDICAL_SHOP_GEOAPIFY_TEXT: request_id=%s radius=%s source=geoapify query=%s raw_count=%d accepted_count=%d rejected_count=%d nearest_distance=%s",
+                    req_id,
+                    radius_label,
+                    ",".join(secondary_terms),
+                    geo_sec_raw,
+                    geo_sec_accepted,
+                    geo_sec_rejected,
+                    nearest_sec_str,
+                )
+
+                # 3. OSM search for current progressive radius sequentially
+                osm_res = self.osm_pharmacy.search_pharmacies(
+                    latitude=user_lat,
+                    longitude=user_lon,
+                    radius_km=current_radius,
+                    request_id=req_id,
+                )
+                osm_items = [
+                    item for item in (osm_res.get("data") or [])
+                    if isinstance(item, dict)
+                ] if osm_res.get("status") == "success" else []
+                if osm_res.get("status") != "success":
+                    osm_error = str(osm_res.get("message") or osm_res.get("error") or "OpenStreetMap search failed.")
+                else:
+                    osm_error = None
+
+                # 4. Merge candidates across Geoapify categories, Geoapify secondary, and OSM
+                all_radius_candidates = [*geo_cat_items, *geo_sec_items, *osm_items]
+
+                logger.info(
+                    "MEDICAL_SHOP_MERGED: request_id=%s radius=%s count=%d",
+                    req_id,
+                    radius_label,
+                    len(all_radius_candidates),
+                )
+
+                # 5. Distance Filter & Validation
+                valid_radius_items: list[dict[str, Any]] = []
+                for item in all_radius_candidates:
+                    try:
+                        c_lat = float(item.get("latitude"))
+                        c_lon = float(item.get("longitude"))
+                    except (TypeError, ValueError):
+                        continue
+                    if not (-90.0 <= c_lat <= 90.0 and -180.0 <= c_lon <= 180.0):
+                        continue
+                    dist = calculate_distance_km(user_lat, user_lon, c_lat, c_lon)
+                    if dist is not None and 0.0 <= float(dist) <= current_radius + 0.05:
+                        item["distance_km"] = round(float(dist), 3)
+                        valid_radius_items.append(item)
+
+                nearest_filter_str = (
+                    f"{min(float(i['distance_km']) for i in valid_radius_items):.3f}"
+                    if valid_radius_items
+                    else "None"
+                )
+
+                logger.info(
+                    "MEDICAL_SHOP_DISTANCE_FILTER: request_id=%s radius=%s valid=%d nearest=%s",
+                    req_id,
+                    radius_label,
+                    len(valid_radius_items),
+                    nearest_filter_str,
+                )
+
+                # 6. Deduplication within radius
+                dedup_radius_items = self.deduplicate_medical_shop_items(valid_radius_items)
+                dedup_radius_items.sort(key=lambda item: float(item["distance_km"]))
+                nearest_dedup_str = (
+                    f"{dedup_radius_items[0]['distance_km']:.3f}"
+                    if dedup_radius_items
+                    else "None"
+                )
+
+                logger.info(
+                    "MEDICAL_SHOP_DEDUP: request_id=%s radius=%s count=%d nearest=%s",
+                    req_id,
+                    radius_label,
+                    len(dedup_radius_items),
+                    nearest_dedup_str,
+                )
+
+                # 7. Accumulate into running candidates pool without discarding closer results
+                accumulated_candidates = self.deduplicate_medical_shop_items(
+                    [*accumulated_candidates, *dedup_radius_items]
+                )
+                accumulated_candidates.sort(key=lambda item: float(item["distance_km"]))
+                nearest_accum_str = (
+                    f"{accumulated_candidates[0]['distance_km']:.3f}"
+                    if accumulated_candidates
+                    else "None"
+                )
+
+                logger.info(
+                    "MEDICAL_SHOP_RADIUS_COMPLETE: request_id=%s radius=%s radius_count=%d accumulated_total=%d nearest=%s",
+                    req_id,
+                    radius_label,
+                    len(dedup_radius_items),
+                    len(accumulated_candidates),
+                    nearest_accum_str,
+                )
+
+                # 8. Check stopping criteria: Coverage Confirmed vs Insufficient Coverage
+                coverage_confirmed = False
+                if current_radius <= 1.0 and len(accumulated_candidates) >= 1:
+                    coverage_confirmed = True
+                    expansion_reason = "CONFIRMED_LOCAL_COVERAGE_AT_1KM"
+                elif current_radius <= 2.0 and len(accumulated_candidates) >= 2:
+                    coverage_confirmed = True
+                    expansion_reason = "CONFIRMED_LOCAL_COVERAGE_AT_2KM"
+                elif current_radius <= 3.0 and len(accumulated_candidates) >= 3:
+                    coverage_confirmed = True
+                    expansion_reason = "CONFIRMED_LOCAL_COVERAGE_AT_3KM"
+                elif len(accumulated_candidates) >= page_size:
+                    coverage_confirmed = True
+                    expansion_reason = "CONFIRMED_SUFFICIENT_POOL_REACHED"
+                elif current_radius >= search_radii[-1]:
+                    coverage_confirmed = True
+                    expansion_reason = "MAX_RADIUS_REACHED"
+
+                if coverage_confirmed:
+                    successful_radius = current_radius
+                    logger.info(
+                        "STOP_REASON=%s: request_id=%s radius=%s accumulated=%d nearest=%s",
+                        expansion_reason,
+                        req_id,
+                        radius_label,
+                        len(accumulated_candidates),
+                        nearest_accum_str,
+                    )
+                    break
+                else:
+                    logger.info(
+                        "MEDICAL_SHOP_EXPANDING: request_id=%s current_radius=%s accumulated_count=%d target_pool=%d reason=INSUFFICIENT_COVERAGE",
+                        req_id,
+                        radius_label,
+                        len(accumulated_candidates),
+                        page_size,
+                    )
+
+        if not accumulated_candidates:
+            logger.info(
+                "STOP_REASON=NO_VALID_RESULTS_AT_MAX_RADIUS: request_id=%s max_radius=%skm",
+                req_id,
+                search_radii[-1],
             )
-        else:
-            if tried_expansion:
-                msg = (
-                    f"No matching medical shops were found within "
-                    f"approximately {int(expanded_radius)} km "
-                    f"of your confirmed location."
-                )
-            elif radius_km is not None and radius_km >= expanded_radius:
-                msg = (
-                    f"No matching medical shops were found within "
-                    f"{int(expanded_radius)} km of your confirmed location."
-                )
-            else:
-                msg = (
-                    f"No matching medical shops were found within "
-                    f"{int(default_radius)} km of your confirmed location."
-                )
 
-        # ------------------------------------------------------------
-        # 10. PAGINATION
-        # ------------------------------------------------------------
-
+        # 9. Result formatting, capping at 20 (max 2 pages), and pagination
+        all_items = accumulated_candidates[:20]
+        total_count = len(all_items)
         start_idx = (page - 1) * page_size
         end_idx = start_idx + page_size
+        paged_items = all_items[start_idx:end_idx]
+        has_next = page == 1 and total_count > end_idx
 
-        paged_items = valid_items[start_idx:end_idx]
-
-        has_next = (
-            page == 1
-            and len(valid_items) > end_idx
+        nearest_val = f"{all_items[0]['distance_km']:.3f}" if all_items else "None"
+        final_radius_label = (
+            int(successful_radius)
+            if (successful_radius and successful_radius.is_integer())
+            else (successful_radius or search_radii[-1])
         )
 
-        has_previous = page > 1
+        if not all_items:
+            expanded = True
+            expansion_message = (
+                f"No matching medical shops were found within approximately {int(search_radii[-1])} km."
+            )
+            message = f"No matching medical shops were found within approximately {int(search_radii[-1])} km."
+        elif all_items[0]["distance_km"] <= search_radii[0]:
+            expanded = False
+            expansion_message = None
+            message = f"Found {total_count} matching medical shop(s)."
+        else:
+            expanded = True
+            expansion_message = (
+                f"No matching pharmacies/medical shops were found within {int(search_radii[0])} km. "
+                f"Search expanded to approximately {final_radius_label} km."
+            )
+            message = f"Found {total_count} matching medical shop(s)."
 
-        # ------------------------------------------------------------
-        # 11. RETURN
-        # ------------------------------------------------------------
+        logger.info(
+            "MEDICAL_SHOP_FINAL: request_id=%s nearest_candidate_distance=%s candidate_count=%d search_radius_used=%s expansion_reason=%s",
+            req_id,
+            nearest_val,
+            total_count,
+            final_radius_label,
+            expansion_reason or "COVERAGE_COMPLETE",
+        )
 
         return {
             "status": "success",
             "data": paged_items,
             "medical_shops": paged_items,
-            "total_count": len(valid_items),
+            "total_count": total_count,
             "page": page,
             "page_size": page_size,
             "has_next": has_next,
-            "has_previous": has_previous,
+            "has_previous": page > 1,
             "expanded": expanded,
             "expansion_message": expansion_message,
-            "message": msg,
-            "disclaimer": (
-                "Medical shop listings are location-discovery results only. "
-                "They do not provide medication prescribing, dosage, or "
-                "treatment advice."
-            ),
+            "message": message,
+            "disclaimer": disclaimer,
+            "request_id": req_id,
             "source_metadata": {
                 "source": "Geoapify + OpenStreetMap / Overpass",
                 "configured": True,
@@ -3587,9 +3724,11 @@ class GeoapifyPlacesClient:
                     "https://api.geoapify.com/v2/places",
                     "https://overpass-api.de/api/interpreter",
                 ],
-                "geoapify_error": geo_error,
+                "search_radius_km": successful_radius or search_radii[-1],
+                "geoapify_categories": geo_stats,
+                "geoapify_errors": geo_errors,
                 "osm_error": osm_error,
-                "geoapify_candidate_count": geo_features_count,
-                "osm_candidate_count": osm_raw_count,
             },
         }
+
+

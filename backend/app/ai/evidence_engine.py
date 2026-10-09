@@ -2,10 +2,12 @@
 
 Combines multimodal evidence (symptoms, medical report findings, X-ray analysis)
 into a unified clinical evidence representation:
-- Preserves PRESENT / ABSENT / UNKNOWN states
-- Identifies supporting findings (e.g. cough + report respiratory findings)
-- Identifies contradictory findings (e.g. symptom claims fever but report/temperature denies)
-- Identifies missing critical information
+- Preserves PRESENT / ABSENT / UNKNOWN states without losing qualifiers
+- Preserves laterality, quality, duration, severity, triggers, and onset
+- Identifies supporting findings (e.g. cough + report respiratory findings, normal lab confirmations)
+- Identifies contradictory findings (e.g. fever denied vs high objective temp)
+- Identifies missing critical information accurately without re-asking answered questions
+- Truthful X-ray representation (received vs interpreted vs unavailable vs not provided)
 - Establishes evidence_state: EVIDENCE_PRESENT, INSUFFICIENT_EVIDENCE, CONFLICTING_EVIDENCE
 """
 
@@ -14,6 +16,20 @@ from __future__ import annotations
 from typing import Any, Optional
 
 CRITICAL_NEGATIVES = ["chest pain", "shortness of breath", "high fever", "severe bleeding"]
+
+
+def _lookup_symptom_domain(symptom_name: str | None) -> str:
+    if not symptom_name:
+        return "general"
+    from app.ai.symptom_nlp import SYMPTOM_LEXICON
+
+    key = str(symptom_name).strip().lower()
+    if key in SYMPTOM_LEXICON:
+        return SYMPTOM_LEXICON[key].get("domain", "general")
+    for k, v in SYMPTOM_LEXICON.items():
+        if k in key or key in k:
+            return v.get("domain", "general")
+    return "general"
 
 
 def combine_evidence(
@@ -35,87 +51,214 @@ def combine_evidence(
     report_normal = [
         f for f in report_findings if f.get("interpretation") == "NORMAL"
     ]
+    report_unknown_range = [
+        f for f in report_findings if f.get("interpretation") in {"UNKNOWN", "RECORDED"}
+    ]
 
     supporting: list[str] = []
     contradictory: list[str] = []
     missing: list[str] = []
 
-    # Check for supporting correlations
     present_names = {s.get("symptom", "").lower() for s in symptoms_present}
     absent_names = {s.get("symptom", "").lower() for s in symptoms_absent}
+    all_known_names = present_names.union(absent_names)
 
-    # If cough/fever is present and report or X-ray has lung/respiratory finding
-    has_respiratory_symptom = bool(present_names.intersection({"cough", "shortness of breath", "dyspnea", "wheezing"}))
-    has_fever = "fever" in present_names
+    # 1. Contradiction Detection
+    # E.g. Fever explicitly denied but objective temperature >= 100.4°F
+    has_fever_absent = "fever" in absent_names
+    for s in symptoms_present:
+        if s.get("symptom") == "temperature":
+            val_str = str(s.get("context") or "")
+            temp_num_m = None
+            import re
+            m = re.search(r"(\d{2,3}(?:\.\d+)?)", val_str)
+            if m:
+                try:
+                    t_val = float(m.group(1))
+                    if t_val >= 100.4 and has_fever_absent:
+                        contradictory.append(
+                            f"Contradiction: Patient reported absence of fever, but objective temperature is {t_val}°F (febrile range)."
+                        )
+                except ValueError:
+                    pass
+
+    # 2. Supporting Clinical Correlations
+    has_respiratory_symptom = bool(
+        present_names.intersection({"cough", "dry cough", "productive cough", "shortness of breath", "dyspnea", "wheezing", "chest discomfort"})
+    )
+    has_fever = "fever" in present_names or "temperature" in present_names
 
     if has_respiratory_symptom and (has_fever or any(f.get("domain") == "respiratory" for f in report_abnormal)):
         supporting.append("Respiratory symptoms correlate with systemic/inflammatory indicators.")
 
-    # Check for contradictions between modalities
-    # Example: symptom states chest pain = ABSENT, but user entered contradictory complaint elsewhere
-    for item in report_findings:
-        fname = item.get("test_name", "").lower()
-        if "glucose" in fname and item.get("interpretation") == "HIGH":
-            supporting.append(f"Elevated blood glucose ({item.get('value')} {item.get('unit', '')}) recorded.")
+    if "headache" in present_names:
+        headache_sym = next((s for s in symptoms_present if s.get("symptom") == "headache"), None)
+        features = []
+        if headache_sym and headache_sym.get("laterality"):
+            features.append(f"{headache_sym.get('laterality').lower()}-sided")
+        if headache_sym and headache_sym.get("quality"):
+            features.append(f"{headache_sym.get('quality').lower()}")
+        if "photophobia" in present_names:
+            features.append("photophobia")
+        if "phonophobia" in present_names:
+            features.append("phonophobia")
+        if "nausea" in present_names:
+            features.append("nausea")
+        if features:
+            supporting.append(f"Headache presentation characterized by {', '.join(features)}.")
 
-    # Check X-ray contribution
+    for item in report_abnormal:
+        fname = item.get("test_name", "")
+        val = item.get("value")
+        unit = item.get("unit") or ""
+        interp = item.get("interpretation") or "ABNORMAL"
+        supporting.append(f"Laboratory parameter {fname} recorded outside reference range ({val} {unit}, {interp}).")
+
+    if report_normal and not report_abnormal:
+        supporting.append(f"All {len(report_normal)} evaluated laboratory parameter(s) are within standard reference ranges.")
+
+    # 3. Truthful X-ray Status and Interpretation
     xray_finding_str = None
-    xray_status = (xray_result or {}).get("status", "none")
-    if xray_result and xray_status == "completed" and xray_result.get("prediction"):
-        xray_finding_str = xray_result.get("prediction")
-        supporting.append(f"X-ray deep learning model identified finding: {xray_finding_str}.")
+    xray_status_raw = (xray_result or {}).get("status", "none")
+    xray_status_normalized = (xray_status_raw or "none").lower()
 
-    # Identify missing critical information
-    known_symptom_names = present_names.union(absent_names)
+    if xray_result and xray_status_normalized == "completed" and xray_result.get("prediction"):
+        xray_finding_str = xray_result.get("prediction")
+        xray_received = True
+        xray_interpretation = "AVAILABLE"
+        xray_evidence_status = "SUPPORTING"
+        xray_status_display = "COMPLETED"
+        supporting.append(f"Chest X-ray deep learning model identified radiographic pattern: {xray_finding_str}.")
+    elif xray_result and xray_status_normalized == "unavailable":
+        xray_received = True
+        xray_interpretation = "UNAVAILABLE"
+        xray_evidence_status = "UNKNOWN"
+        xray_status_display = "UNAVAILABLE"
+        supporting.append("Chest X-ray uploaded; automated interpretation unavailable (no trained model checkpoint configured). No disease finding fabricated.")
+    elif xray_result and xray_status_normalized not in {"none", "not_provided"}:
+        xray_received = True
+        xray_interpretation = "UNAVAILABLE"
+        xray_evidence_status = "UNKNOWN"
+        xray_status_display = xray_status_normalized.upper()
+    else:
+        xray_received = False
+        xray_interpretation = "NOT_PROVIDED"
+        xray_evidence_status = "NOT_ASSESSED"
+        xray_status_display = "NOT_PROVIDED"
+
+    # 4. Missing critical information and unassessed modalities
     for crit in CRITICAL_NEGATIVES:
-        if crit not in known_symptom_names:
+        addressed = False
+        if crit in all_known_names:
+            addressed = True
+        elif crit == "chest pain" and any("chest" in n for n in all_known_names):
+            addressed = True
+        elif crit == "shortness of breath" and any("breath" in n or "dyspnea" in n for n in all_known_names):
+            addressed = True
+        elif crit == "high fever" and ("fever" in all_known_names or "temperature" in all_known_names):
+            addressed = True
+
+        if not addressed:
             missing.append(f"Status of '{crit}' (neither confirmed nor denied)")
 
-    # Check duration
     durations = [s.get("duration") for s in symptoms_present if s.get("duration")]
     if symptoms_present and not durations:
         missing.append("Symptom duration (onset timeframe unspecified)")
 
-    # Determine overall evidence state
+    if not report_findings:
+        missing.append("Medical laboratory report (biochemical parameters unassessed)")
+
+    if not xray_received:
+        missing.append("Chest X-ray imaging (radiographic status unassessed)")
+
+    # 5. Determine overall evidence state
     total_active_signals = len(symptoms_present) + len(report_abnormal) + (1 if xray_finding_str else 0)
 
     if contradictory:
         evidence_state = "CONFLICTING_EVIDENCE"
-    elif total_active_signals > 0 or len(report_normal) > 0 or len(symptoms_absent) > 0:
+    elif total_active_signals > 0 or len(report_normal) > 0 or len(symptoms_absent) > 0 or (xray_received and xray_interpretation == "UNAVAILABLE"):
         evidence_state = "EVIDENCE_PRESENT"
     else:
         evidence_state = "INSUFFICIENT_EVIDENCE"
+
+    report_evidence_status = "SUPPORTING" if (report_abnormal or report_normal) else "NOT_ASSESSED"
 
     return {
         "evidence_state": evidence_state,
         "symptoms": {
             "present": [
                 {
+                    "finding": s.get("symptom"),
                     "symptom": s.get("symptom"),
+                    "status": "PRESENT",
                     "duration": s.get("duration"),
-                    "severity": s.get("severity"),
+                    "severity": (s.get("severity") or "UNKNOWN").upper(),
                     "body_area": s.get("body_area"),
-                    "domain": s.get("domain"),
+                    "laterality": s.get("laterality"),
+                    "quality": s.get("quality"),
+                    "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
+                    "context": s.get("context"),
+                    "trigger": s.get("trigger"),
+                    "type": s.get("type"),
+                    "onset": s.get("onset"),
+                    "source": "user_input",
+                    "provenance": "symptom_nlp",
                 }
                 for s in symptoms_present
             ],
             "absent": [
-                {"symptom": s.get("symptom"), "body_area": s.get("body_area")}
+                {
+                    "finding": s.get("symptom"),
+                    "symptom": s.get("symptom"),
+                    "status": "ABSENT",
+                    "body_area": s.get("body_area"),
+                    "context": s.get("context"),
+                    "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
+                    "source": "user_input",
+                    "provenance": "symptom_nlp",
+                }
                 for s in symptoms_absent
             ],
             "unknown": [s.get("symptom") for s in symptoms_unknown],
         },
         "report": {
-            "abnormal_findings": report_abnormal,
-            "normal_findings": report_normal,
+            "provided": bool(report_findings),
+            "evidence_status": report_evidence_status,
+            "abnormal_findings": [
+                {
+                    **f,
+                    "status": f.get("status") or f.get("interpretation") or "ABNORMAL",
+                    "interpretation": f.get("interpretation") or "ABNORMAL",
+                    "source": "uploaded_report",
+                    "provenance": "report_ocr_nlp",
+                }
+                for f in report_abnormal
+            ],
+            "normal_findings": [
+                {
+                    **f,
+                    "status": f.get("status") or "NORMAL",
+                    "interpretation": "NORMAL",
+                    "source": "uploaded_report",
+                    "provenance": "report_ocr_nlp",
+                }
+                for f in report_normal
+            ],
+            "unknown_range_findings": report_unknown_range,
             "total_extracted": len(report_findings),
         },
         "xray": {
-            "status": xray_status,
-            "region": (xray_result or {}).get("region"),
+            "received": xray_received,
+            "interpretation": xray_interpretation,
+            "evidence_status": xray_evidence_status,
+            "status": xray_status_display,
+            "region": (xray_result or {}).get("region") or "chest",
             "prediction": xray_finding_str,
+            "model_version": (xray_result or {}).get("model_version") or "N/A",
             "uncertainty": (xray_result or {}).get("uncertainty"),
             "explainability_artifact": (xray_result or {}).get("explainability_artifact"),
+            "message": (xray_result or {}).get("message"),
+            "provenance": "xray_deep_learning" if xray_received else "none",
         },
         "supporting": supporting,
         "contradictory": contradictory,

@@ -1,12 +1,12 @@
 """Medical report NLP extraction service for MediSense AI.
 
-Extracts structured clinical test parameters, reference ranges, and findings from report text:
-- Test name (e.g. Hemoglobin, WBC, Platelets, Fasting Blood Glucose, Serum Creatinine)
-- Value (extracted from document text)
-- Unit (e.g. g/dL, mg/dL, /mcL, %, U/L)
-- Reference range (only if present in report text; NEVER invented)
-- Normal / Abnormal / High / Low relative to the report's reference range
-- Negation and clinical uncertainty preserved
+Extracts structured clinical test parameters, reference ranges, and findings from report text and tables:
+- Test name (e.g. Hemoglobin, WBC, Platelets, Fasting Blood Glucose, Serum Creatinine, etc.)
+- Value (extracted directly from document text/tables; NEVER invented)
+- Unit (e.g. g/dL, mg/dL, /µL, U/L, %)
+- Reference range (only if present in report; NEVER invented)
+- Normal / Abnormal / High / Low relative to the report's reference range or explicit flag
+- Qualitative radiology keywords and clinical findings preserved
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-REPORT_NLP_VERSION = "report-nlp-v1.0"
+REPORT_NLP_VERSION = "report-nlp-v2.0"
 
 # Target clinical tests with synonyms and typical units for pattern matching
 TARGET_TESTS: list[dict[str, Any]] = [
@@ -25,12 +25,12 @@ TARGET_TESTS: list[dict[str, Any]] = [
     },
     {
         "canonical": "White Blood Cell Count (WBC)",
-        "synonyms": [r"white blood cell(?: count)?", r"total leukocyte count", r"\btlc\b", r"\bwbc\b"],
+        "synonyms": [r"white blood cell(?: count)?", r"total leukocyte count", r"\btlc\b", r"\bwbc(?: count)?\b"],
         "domain": "hematology",
     },
     {
         "canonical": "Platelet Count",
-        "synonyms": [r"platelet(?: count)?", r"thrombocyte(?: count)?", r"\bplt\b"],
+        "synonyms": [r"platelet(?:s)?(?: count)?", r"thrombocyte(?: count)?", r"\bplt\b"],
         "domain": "hematology",
     },
     {
@@ -40,7 +40,14 @@ TARGET_TESTS: list[dict[str, Any]] = [
     },
     {
         "canonical": "Fasting Blood Glucose",
-        "synonyms": [r"fasting blood sugar", r"fasting blood glucose", r"glucose,?\s*fasting", r"\bfbs\b"],
+        "synonyms": [
+            r"fasting blood sugar",
+            r"fasting blood glucose",
+            r"fasting glucose",
+            r"glucose,?\s*fasting",
+            r"glucose\s*\(fasting\)",
+            r"\bfbs\b",
+        ],
         "domain": "endocrine",
     },
     {
@@ -75,12 +82,12 @@ TARGET_TESTS: list[dict[str, Any]] = [
     },
     {
         "canonical": "SGOT / AST",
-        "synonyms": [r"sgot", r"aspartate aminotransferase", r"\bast\b"],
+        "synonyms": [r"ast\s*\(sgot\)", r"ast\/sgot", r"sgot", r"aspartate aminotransferase", r"\bast\b"],
         "domain": "liver",
     },
     {
         "canonical": "SGPT / ALT",
-        "synonyms": [r"sgpt", r"alanine aminotransferase", r"\balt\b"],
+        "synonyms": [r"alt\s*\(sgpt\)", r"alt\/sgpt", r"sgpt", r"alanine aminotransferase", r"\balt\b"],
         "domain": "liver",
     },
     {
@@ -98,18 +105,33 @@ TARGET_TESTS: list[dict[str, Any]] = [
         "synonyms": [r"thyroid stimulating hormone", r"tsh,?\s*serum", r"\btsh\b"],
         "domain": "thyroid",
     },
+    {
+        "canonical": "C-Reactive Protein (CRP)",
+        "synonyms": [r"c-reactive protein", r"\bcrp\b"],
+        "domain": "inflammation",
+    },
+    {
+        "canonical": "Neutrophils",
+        "synonyms": [r"neutrophil(?:s)?\b"],
+        "domain": "hematology",
+    },
+    {
+        "canonical": "Lymphocytes",
+        "synonyms": [r"lymphocyte(?:s)?\b"],
+        "domain": "hematology",
+    },
 ]
 
 # Common unit patterns
-UNIT_REGEX = r"(g\/dL|mg\/dL|mcL|\/uL|\/cumm|U\/L|uIU\/mL|%|fl|pg|mmol\/L|mEq\/L|10\^[0-9]\/uL)"
+UNIT_REGEX = r"(g\/dL|mg\/dL|mcL|\/uL|\/cumm|U\/L|uIU\/mL|%|fl|pg|mmol\/L|mEq\/L|mg\/L|lakh\/[u\u00b5\u03bc]L|\/[u\u00b5\u03bc]L)"
 
-# Common reference range patterns in reports, e.g. "12.0 - 16.0", "13 - 17", "< 200", "> 50"
+# Reference range patterns supporting hyphens, en-dashes, em-dashes, and unicode dashes
 RANGE_REGEX = re.compile(
-    r"(?:ref(?:erence)?\s*(?:range|interval)?\s*[:\s]*)?([<>]?\s*\d+(?:\.\d+)?)\s*(?:-|to)\s*(\d+(?:\.\d+)?)",
+    r"(?:ref(?:erence)?\s*(?:range|interval)?\s*[:\s]*)?([<>]?\s*[\d,]+(?:\.\d+)?)\s*(?:-|to|[–—−\x96\u2013\u2014])\s*([\d,]+(?:\.\d+)?)",
     re.IGNORECASE,
 )
-LESS_THAN_RANGE_REGEX = re.compile(r"<\s*(\d+(?:\.\d+)?)")
-GREATER_THAN_RANGE_REGEX = re.compile(r">\s*(\d+(?:\.\d+)?)")
+LESS_THAN_RANGE_REGEX = re.compile(r"<\s*([\d,]+(?:\.\d+)?)")
+GREATER_THAN_RANGE_REGEX = re.compile(r">\s*([\d,]+(?:\.\d+)?)")
 
 
 def _evaluate_range(val: float, low: Optional[float], high: Optional[float]) -> str:
@@ -119,141 +141,303 @@ def _evaluate_range(val: float, low: Optional[float], high: Optional[float]) -> 
         return "HIGH"
     if low is not None or high is not None:
         return "NORMAL"
-    return "RECORDED"
+    return "UNKNOWN"
 
 
-def structure_report_text(text: str | None) -> dict[str, Any]:
-    """Parse medical report text into structured lab findings and reference ranges."""
-    if not text or not text.strip():
+def structure_report_text(
+    text: str | None,
+    tables: list[list[list[str]]] | None = None,
+) -> dict[str, Any]:
+    """Parse medical report text and tabular data into structured lab findings and reference ranges."""
+    if (not text or not text.strip()) and not tables:
         return {
             "status": "unavailable",
             "findings": [],
             "reference_ranges": [],
-            "message": "No report text available for NLP structuring.",
+            "qualitative_findings": [],
+            "message": "No report text or tables available for NLP structuring.",
             "source": "uploaded_report",
             "report_nlp_version": REPORT_NLP_VERSION,
         }
 
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
     findings: list[dict[str, Any]] = []
     seen_tests: set[str] = set()
 
-    for line in lines:
-        for test_def in TARGET_TESTS:
-            canonical = test_def["canonical"]
-            if canonical in seen_tests:
+    # 1. First, process structured tables if provided by OCR/PDF parser
+    if tables:
+        for table in tables:
+            if not table or len(table) < 2:
                 continue
 
-            matched = False
-            for syn in test_def["synonyms"]:
-                if re.search(r"\b" + syn + r"\b", line, re.IGNORECASE):
-                    matched = True
+            # Detect column headers
+            header = [str(cell or "").strip().lower() for cell in table[0]]
+            col_test = 0
+            col_val = 1
+            col_ref = 2 if len(header) > 2 else None
+            col_flag = 3 if len(header) > 3 else None
+
+            for i, h in enumerate(header):
+                if any(k in h for k in ["test", "parameter", "investigation"]):
+                    col_test = i
+                elif any(k in h for k in ["result", "value", "observed"]):
+                    col_val = i
+                elif any(k in h for k in ["reference", "range", "interval", "normal"]):
+                    col_ref = i
+                elif any(k in h for k in ["flag", "status", "remark", "interpretation"]):
+                    col_flag = i
+
+            for row in table[1:]:
+                if len(row) <= max(col_test, col_val):
+                    continue
+
+                test_raw = str(row[col_test] or "").strip()
+                val_raw = str(row[col_val] or "").strip()
+                ref_raw = str(row[col_ref] or "").strip() if (col_ref is not None and len(row) > col_ref) else ""
+                flag_raw = str(row[col_flag] or "").strip() if (col_flag is not None and len(row) > col_flag) else ""
+
+                for test_def in TARGET_TESTS:
+                    canonical = test_def["canonical"]
+                    if canonical in seen_tests:
+                        continue
+
+                    matched = False
+                    for syn in test_def["synonyms"]:
+                        if re.search(r"\b" + syn + r"\b", test_raw, re.IGNORECASE):
+                            matched = True
+                            break
+
+                    if not matched:
+                        continue
+
+                    # Extract numeric value
+                    num_match = re.search(r"([\d,]+(?:\.\d+)?)", val_raw)
+                    if not num_match:
+                        continue
+                    try:
+                        val_float = float(num_match.group(1).replace(",", ""))
+                    except ValueError:
+                        continue
+
+                    # Extract unit
+                    unit_m = re.search(UNIT_REGEX, val_raw, re.IGNORECASE)
+                    unit_str = unit_m.group(1) if unit_m else None
+
+                    # Extract reference range
+                    ref_low = None
+                    ref_high = None
+                    ref_str = ref_raw if ref_raw else None
+
+                    if ref_raw:
+                        rm = RANGE_REGEX.search(ref_raw)
+                        if rm:
+                            try:
+                                ref_low = float(rm.group(1).replace(",", "").replace("<", "").replace(">", "").strip())
+                                ref_high = float(rm.group(2).replace(",", "").strip())
+                                ref_str = f"{ref_low} - {ref_high}"
+                            except ValueError:
+                                pass
+                        else:
+                            lt_m = LESS_THAN_RANGE_REGEX.search(ref_raw)
+                            if lt_m:
+                                try:
+                                    ref_high = float(lt_m.group(1).replace(",", ""))
+                                    ref_str = f"< {ref_high}"
+                                except ValueError:
+                                    pass
+                            else:
+                                gt_m = GREATER_THAN_RANGE_REGEX.search(ref_raw)
+                                if gt_m:
+                                    try:
+                                        ref_low = float(gt_m.group(1).replace(",", ""))
+                                        ref_str = f"> {ref_low}"
+                                    except ValueError:
+                                        pass
+
+                    # Determine interpretation
+                    interp = None
+                    flag_lower = flag_raw.lower()
+                    if "high" in flag_lower:
+                        interp = "HIGH"
+                    elif "low" in flag_lower:
+                        interp = "LOW"
+                    elif "normal" in flag_lower:
+                        interp = "NORMAL"
+                    else:
+                        interp = _evaluate_range(val_float, ref_low, ref_high)
+
+                    seen_tests.add(canonical)
+                    findings.append({
+                        "test_name": canonical,
+                        "value": val_float,
+                        "unit": unit_str,
+                        "reference_range": ref_str,
+                        "status": interp,
+                        "interpretation": interp,
+                        "domain": test_def["domain"],
+                        "source_report": "uploaded_report",
+                        "raw_line": f"{test_raw} | {val_raw} | {ref_raw} | {flag_raw}".strip(),
+                    })
                     break
 
-            if not matched:
-                continue
+    # 2. Text line-by-line fallback with multi-line sliding window for any unextracted tests
+    if text and text.strip():
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        for idx, line in enumerate(lines):
+            for test_def in TARGET_TESTS:
+                canonical = test_def["canonical"]
+                if canonical in seen_tests:
+                    continue
 
-            # Look for numeric value after test name
-            # Pattern: test name ... [:] <number> [unit] [ref range]
-            num_matches = list(re.finditer(r"\b(\d+(?:\.\d+)?)\b", line))
-            if not num_matches:
-                continue
+                matched = False
+                for syn in test_def["synonyms"]:
+                    if re.search(r"\b" + syn + r"\b", line, re.IGNORECASE):
+                        matched = True
+                        break
 
-            # First number in the line is typically the measured value
-            first_num_match = num_matches[0]
-            try:
-                val_float = float(first_num_match.group(1))
-            except ValueError:
-                continue
+                if not matched:
+                    continue
 
-            # Check unit in the vicinity
-            unit_match = re.search(UNIT_REGEX, line, re.IGNORECASE)
-            unit_str = unit_match.group(1) if unit_match else None
+                # Build candidate text block (current line + up to 4 following lines, stopping at next test)
+                block = [line]
+                for forward in range(idx + 1, min(idx + 5, len(lines))):
+                    fline = lines[forward]
+                    if any(
+                        re.search(r"\b" + s + r"\b", fline, re.IGNORECASE)
+                        for td in TARGET_TESTS
+                        for s in td["synonyms"]
+                    ):
+                        break
+                    block.append(fline)
+                combined = " ".join(block)
 
-            # Check reference range in the same line or remainder
-            ref_low = None
-            ref_high = None
-            ref_str = None
+                # Look for numeric value
+                val_float = None
+                # Check if a line in block is value + unit
+                for b_line in block:
+                    m = re.search(r"^([\d,]+(?:\.\d+)?)\s*" + UNIT_REGEX, b_line, re.IGNORECASE)
+                    if m:
+                        try:
+                            val_float = float(m.group(1).replace(",", ""))
+                            break
+                        except ValueError:
+                            pass
+                if val_float is None:
+                    # Look for first number in combined text that is not in the test name
+                    num_matches = list(re.finditer(r"\b([\d,]+(?:\.\d+)?)\b", combined))
+                    for nm in num_matches:
+                        num_str = nm.group(1).replace(",", "")
+                        try:
+                            vf = float(num_str)
+                            # Avoid matching year like 2026
+                            if vf < 1900 or vf > 2100:
+                                val_float = vf
+                                break
+                        except ValueError:
+                            continue
 
-            range_m = RANGE_REGEX.search(line)
-            if range_m:
-                try:
-                    ref_low = float(range_m.group(1).replace("<", "").replace(">", "").strip())
-                    ref_high = float(range_m.group(2).strip())
-                    ref_str = f"{ref_low} - {ref_high}"
-                except ValueError:
-                    pass
-            else:
-                lt_m = LESS_THAN_RANGE_REGEX.search(line)
-                if lt_m:
+                if val_float is None:
+                    continue
+
+                # Unit
+                unit_match = re.search(UNIT_REGEX, combined, re.IGNORECASE)
+                unit_str = unit_match.group(1) if unit_match else None
+
+                # Reference range
+                ref_low = None
+                ref_high = None
+                ref_str = None
+
+                range_m = RANGE_REGEX.search(combined)
+                if range_m:
                     try:
-                        ref_high = float(lt_m.group(1))
-                        ref_str = f"< {ref_high}"
+                        ref_low = float(range_m.group(1).replace(",", "").replace("<", "").replace(">", "").strip())
+                        ref_high = float(range_m.group(2).replace(",", "").strip())
+                        ref_str = f"{ref_low} - {ref_high}"
                     except ValueError:
                         pass
                 else:
-                    gt_m = GREATER_THAN_RANGE_REGEX.search(line)
-                    if gt_m:
+                    lt_m = LESS_THAN_RANGE_REGEX.search(combined)
+                    if lt_m:
                         try:
-                            ref_low = float(gt_m.group(1))
-                            ref_str = f"> {ref_low}"
+                            ref_high = float(lt_m.group(1).replace(",", ""))
+                            ref_str = f"< {ref_high}"
                         except ValueError:
                             pass
+                    else:
+                        gt_m = GREATER_THAN_RANGE_REGEX.search(combined)
+                        if gt_m:
+                            try:
+                                ref_low = float(gt_m.group(1).replace(",", ""))
+                                ref_str = f"> {ref_low}"
+                            except ValueError:
+                                pass
 
-            interpretation = _evaluate_range(val_float, ref_low, ref_high)
-            seen_tests.add(canonical)
+                # Interpretation / flag
+                interp = None
+                comb_lower = combined.lower()
+                if re.search(r"\bhigh\*?\b", comb_lower):
+                    interp = "HIGH"
+                elif re.search(r"\blow\*?\b", comb_lower):
+                    interp = "LOW"
+                elif re.search(r"\bnormal\b", comb_lower):
+                    interp = "NORMAL"
+                else:
+                    interp = _evaluate_range(val_float, ref_low, ref_high)
 
-            findings.append(
-                {
+                seen_tests.add(canonical)
+                findings.append({
                     "test_name": canonical,
                     "value": val_float,
                     "unit": unit_str,
                     "reference_range": ref_str,
-                    "interpretation": interpretation,
+                    "status": interp,
+                    "interpretation": interp,
                     "domain": test_def["domain"],
+                    "source_report": "uploaded_report",
                     "raw_line": line if len(line) < 140 else line[:137] + "...",
-                }
-            )
+                })
+                break
 
-    # Check for general qualitative radiology keywords if present
-    radiology_findings = []
-    qualitative_terms = [
-        ("pneumonia", "radiology", "respiratory"),
-        ("consolidation", "radiology", "respiratory"),
-        ("pleural effusion", "radiology", "respiratory"),
-        ("cardiomegaly", "radiology", "cardiovascular"),
-        ("infiltrate", "radiology", "respiratory"),
-        ("clear lungs", "radiology", "respiratory"),
-        ("no fracture", "radiology", "bones"),
-        ("fracture", "radiology", "bones"),
-    ]
-    lower_text = text.lower()
-    for term, category, domain in qualitative_terms:
-        if term in lower_text:
-            # Check negation
-            negated = any(
-                re.search(rf"\b(?:no|denies|negative for|free of|without)\s+(?:\w+\s+){{0,3}}{term}\b", lower_text)
-                for _ in [1]
-            )
-            radiology_findings.append(
-                {
+    # 3. Qualitative radiology findings if present in text
+    radiology_findings: list[dict[str, Any]] = []
+    if text and text.strip():
+        qualitative_terms = [
+            ("pneumonia", "radiology", "respiratory"),
+            ("consolidation", "radiology", "respiratory"),
+            ("pleural effusion", "radiology", "respiratory"),
+            ("cardiomegaly", "radiology", "cardiovascular"),
+            ("infiltrate", "radiology", "respiratory"),
+            ("clear lungs", "radiology", "respiratory"),
+            ("no fracture", "radiology", "bones"),
+            ("fracture", "radiology", "bones"),
+        ]
+        lower_text = text.lower()
+        for term, category, domain in qualitative_terms:
+            if term in lower_text:
+                negated = any(
+                    re.search(rf"\b(?:no|denies|negative for|free of|without)\s+(?:\w+\s+){{0,3}}{term}\b", lower_text)
+                    for _ in [1]
+                )
+                radiology_findings.append({
                     "finding": term,
                     "category": category,
                     "domain": domain,
                     "state": "ABSENT" if negated else "PRESENT",
-                }
-            )
+                })
 
+    status_str = "structured" if (findings or radiology_findings) else "unstructured"
     return {
-        "status": "structured" if (findings or radiology_findings) else "unstructured",
+        "status": status_str,
         "findings": findings,
         "qualitative_findings": radiology_findings,
-        "total_extracted": len(findings) + len(radiology_findings),
-        "message": (
-            f"Successfully structured {len(findings)} lab parameter(s) and {len(radiology_findings)} clinical note(s)."
-            if (findings or radiology_findings)
-            else "Report text received, but no known standard lab parameters were matched in the text."
-        ),
+        "reference_ranges": [
+            {"test_name": f["test_name"], "range": f["reference_range"]}
+            for f in findings
+            if f.get("reference_range")
+        ],
+        "message": f"Successfully extracted {len(findings)} structured lab parameter(s)."
+        if findings
+        else "No structured quantitative values detected in the uploaded document.",
         "source": "uploaded_report",
         "report_nlp_version": REPORT_NLP_VERSION,
     }

@@ -69,7 +69,17 @@ def suggest_followups(
             if symptoms_present and not has_duration:
                 questions.append(item)
         else:
-            if target not in known_names:
+            addressed = False
+            if target in known_names:
+                addressed = True
+            elif target == "chest pain" and any("chest" in n for n in known_names):
+                addressed = True
+            elif target == "shortness of breath" and any("breath" in n or "dyspnea" in n for n in known_names):
+                addressed = True
+            elif target == "fever" and any("fever" in n or "temperature" in n for n in known_names):
+                addressed = True
+
+            if not addressed:
                 questions.append(item)
 
     # Limit to maximum 3 controlled questions per step to avoid overwhelming user

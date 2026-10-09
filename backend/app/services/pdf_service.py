@@ -1,8 +1,8 @@
 """PDF Assessment Report Generation Service for MediSense AI.
 
 Generates a structured, professional clinical assessment report PDF
-using ReportLab, populated strictly from real database records.
-Never invents data.
+using ReportLab, populated strictly from validated assessment results.
+The PDF and UI represent the exact same assessment outcome (no secondary interpretation).
 """
 
 from __future__ import annotations
@@ -21,14 +21,14 @@ from app.core.config import get_settings
 from app.database.models import Assessment, MedicalReport, Symptom, User, XrayResult
 
 DISCLAIMER_TEXT = (
-    "MEDICAL DISCLAIMER: MediSense AI is an academic decision-support and health navigation system. "
-    "This document does NOT constitute a clinical diagnosis, medical prescription, or definitive treatment plan. "
-    "Automated findings must be reviewed and verified by a licensed healthcare professional."
+    "MEDICAL DISCLAIMER: MediSense AI is an academic clinical decision-support and health navigation system. "
+    "This document does NOT constitute a medical diagnosis, prescription, or definitive treatment plan. "
+    "All automated suggestions must be evaluated and verified by a licensed healthcare professional."
 )
 
 
 def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str, Any]:
-    """Generate a PDF summary of the assessment and return the file path."""
+    """Generate a PDF summary of the assessment grounded in validated structured results."""
     if isinstance(assessment_id, str):
         try:
             assessment_id = UUID(assessment_id)
@@ -49,22 +49,11 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     pdf_filename = f"medisense_assessment_{assessment_id}.pdf"
     pdf_path = reports_dir / pdf_filename
 
-    # Query associated records
-    symptoms = (
-        db.query(Symptom)
-        .filter(Symptom.assessment_id == assessment_id)
-        .all()
-    )
-    reports = (
-        db.query(MedicalReport)
-        .filter(MedicalReport.assessment_id == assessment_id)
-        .all()
-    )
-    xrays = (
-        db.query(XrayResult)
-        .filter(XrayResult.assessment_id == assessment_id)
-        .all()
-    )
+    # Extract feedback payload if available to guarantee exact parity with UI/API
+    res_payload = assessment.result_payload or {}
+    feedback = res_payload.get("feedback", {})
+    triage_info = res_payload.get("triage", {})
+    evidence_info = res_payload.get("evidence", {})
 
     doc = SimpleDocTemplate(
         str(pdf_path),
@@ -77,61 +66,61 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
 
     styles = getSampleStyleSheet()
 
-    # Custom styles
+    # Custom typography
     title_style = ParagraphStyle(
         "DocTitle",
         parent=styles["Heading1"],
         fontName="Helvetica-Bold",
-        fontSize=20,
-        leading=24,
+        fontSize=18,
+        leading=22,
         textColor=colors.HexColor("#1e3a8a"),
     )
     subtitle_style = ParagraphStyle(
         "DocSubtitle",
         parent=styles["Normal"],
         fontName="Helvetica-Oblique",
-        fontSize=10,
-        leading=14,
+        fontSize=9,
+        leading=13,
         textColor=colors.HexColor("#4b5563"),
     )
     section_heading = ParagraphStyle(
         "SectionHeading",
         parent=styles["Heading2"],
         fontName="Helvetica-Bold",
-        fontSize=12,
-        leading=16,
+        fontSize=11,
+        leading=15,
         textColor=colors.HexColor("#1e40af"),
-        spaceBefore=8,
-        spaceAfter=4,
+        spaceBefore=7,
+        spaceAfter=3,
     )
     body_style = ParagraphStyle(
         "Body",
         parent=styles["Normal"],
         fontName="Helvetica",
-        fontSize=9,
-        leading=13,
+        fontSize=8.5,
+        leading=12,
         textColor=colors.HexColor("#1f2937"),
     )
     disclaimer_style = ParagraphStyle(
         "Disclaimer",
         parent=styles["Normal"],
         fontName="Helvetica-Oblique",
-        fontSize=8,
-        leading=11,
+        fontSize=7.5,
+        leading=10,
         textColor=colors.HexColor("#6b7280"),
     )
 
     story: list[Any] = []
 
     # Header
-    story.append(Paragraph("MEDISENSE AI — HEALTH ASSESSMENT REPORT", title_style))
+    story.append(Paragraph("MEDISENSE AI — CLINICAL ASSESSMENT SUMMARY", title_style))
     story.append(
-        Paragraph("Multimodal Health Assessment and Healthcare Navigation Summary", subtitle_style)
+        Paragraph("Deterministic Health Decision-Support & Clinical Navigation Report", subtitle_style)
     )
-    story.append(Spacer(1, 10))
-    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1e3a8a"), spaceAfter=12))
+    story.append(Spacer(1, 8))
+    story.append(HRFlowable(width="100%", thickness=1.5, color=colors.HexColor("#1e3a8a"), spaceAfter=10))
 
-    # Assessment & Patient Details
+    # Meta strip
     pathway_color = {
         "EMERGENCY": "#dc2626",
         "CONSULTATION": "#d97706",
@@ -151,7 +140,7 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
          Paragraph(f"<font color='{pathway_color}'><b>{assessment.pathway or 'PENDING'}</b></font>", body_style)],
         [Paragraph("<b>Suggested Specialty:</b>", body_style),
          Paragraph(assessment.specialty or "General Physician", body_style),
-         Paragraph("<b>Status:</b>", body_style), Paragraph(assessment.status.upper(), body_style)],
+         Paragraph("<b>Rules Version:</b>", body_style), Paragraph(assessment.rules_version or "v2.1", body_style)],
     ]
     meta_table = Table(meta_data, colWidths=[110, 150, 110, 150])
     meta_table.setStyle(
@@ -160,29 +149,60 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
                 ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
                 ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
             ]
         )
     )
     story.append(meta_table)
-    story.append(Spacer(1, 14))
+    story.append(Spacer(1, 10))
 
-    # Section 1: Symptoms
-    story.append(Paragraph("1. Symptoms Evidence", section_heading))
-    if symptoms:
-        symp_data = [["Symptom", "State", "Duration", "Severity", "Body Area"]]
-        for s in symptoms:
+    # 1. Assessment Summary
+    story.append(Paragraph("1. Assessment Summary", section_heading))
+    summary_text = feedback.get("assessment_summary") or (
+        f"Multimodal assessment based on patient inputs. Assigned triage pathway: {assessment.pathway or 'PENDING'}."
+    )
+    story.append(Paragraph(summary_text, body_style))
+    story.append(Spacer(1, 8))
+
+    # 2. Symptoms Identified & Negative Red Flags
+    story.append(Paragraph("2. Symptoms Evidence", section_heading))
+    symptoms_present = feedback.get("symptoms_identified", [])
+    if not symptoms_present and evidence_info:
+        symptoms_present = evidence_info.get("symptoms", {}).get("present", [])
+    if not symptoms_present:
+        symptom_rows = db.query(Symptom).filter(Symptom.assessment_id == assessment_id).all()
+        symptoms_present = [{"symptom": s.symptom, "status": s.state, "severity": s.severity, "duration": s.duration, "context": s.context} for s in symptom_rows if s.state == "PRESENT"]
+
+    negative_flags = feedback.get("negative_red_flags", [])
+    if not negative_flags and evidence_info:
+        negative_flags = evidence_info.get("symptoms", {}).get("absent", [])
+
+    if symptoms_present:
+        symp_data = [["Symptom", "Status", "Duration", "Severity", "Qualifiers / Context"]]
+        for s in symptoms_present:
+            name_disp = s.get("symptom", "").title()
+            qualifiers = []
+            if s.get("laterality"):
+                qualifiers.append(f"{s['laterality']}-sided")
+            if s.get("quality"):
+                qualifiers.append(s["quality"])
+            if s.get("trigger"):
+                qualifiers.append(f"Trigger: {s['trigger']}")
+            if s.get("context") and s.get("context") != s.get("trigger"):
+                qualifiers.append(s["context"])
+            qual_str = ", ".join(qualifiers) if qualifiers else "—"
+
             symp_data.append(
                 [
-                    s.symptom.title(),
-                    s.state,
-                    s.duration or "Unspecified",
-                    (s.severity or "Unspecified").title(),
-                    (s.body_area or "General").title(),
+                    Paragraph(f"<b>{name_disp}</b>", body_style),
+                    Paragraph(s.get("status", "PRESENT"), body_style),
+                    Paragraph(s.get("duration") or "Unspecified", body_style),
+                    Paragraph((s.get("severity") or "UNKNOWN").upper(), body_style),
+                    Paragraph(qual_str, body_style),
                 ]
             )
-        symp_table = Table(symp_data, colWidths=[130, 80, 110, 90, 110])
+        symp_table = Table(symp_data, colWidths=[120, 60, 80, 80, 180])
         symp_table.setStyle(
             TableStyle(
                 [
@@ -198,80 +218,104 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         )
         story.append(symp_table)
     else:
-        story.append(Paragraph("<i>No symptoms were provided for this assessment.</i>", body_style))
-    story.append(Spacer(1, 10))
+        story.append(Paragraph("<i>No physical symptoms provided for this assessment.</i>", body_style))
 
-    # Section 2: Medical Report Analysis
-    story.append(Paragraph("2. Medical Report Findings", section_heading))
-    if reports:
-        has_findings = False
-        rep_data = [["Test / Parameter", "Measured Value", "Reference Range", "Interpretation"]]
-        for r in reports:
-            struct = r.structured_findings or {}
-            params = struct.get("lab_parameters", [])
-            for p in params:
-                has_findings = True
-                unit = p.get("unit") or ""
-                val_display = f"{p.get('value')} {unit}".strip()
-                interp = p.get("interpretation") or "RECORDED"
-                interp_color = "#dc2626" if interp in {"HIGH", "LOW"} else "#059669"
-                rep_data.append(
-                    [
-                        p.get("test_name", "Test"),
-                        val_display,
-                        p.get("reference_range") or "Not provided",
-                        f"<font color='{interp_color}'><b>{interp}</b></font>",
-                    ]
-                )
-        if has_findings:
-            rep_table = Table([[Paragraph(c, body_style) for c in row] for row in rep_data], colWidths=[160, 120, 140, 100])
-            rep_table.setStyle(
-                TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
-                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                        ("FONTSIZE", (0, 0), (-1, -1), 8),
-                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-                        ("TOPPADDING", (0, 0), (-1, -1), 3),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                    ]
-                )
+    if negative_flags:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("<b>Negative Findings / Red Flags Explicitly Denied:</b>", body_style))
+        abs_items = [f"• <b>{s.get('finding') or s.get('symptom', '')}:</b> ABSENT" for s in negative_flags]
+        story.append(Paragraph("<br/>".join(abs_items), body_style))
+    story.append(Spacer(1, 8))
+
+    # 3. Medical Report Findings
+    story.append(Paragraph("3. Medical Report Findings", section_heading))
+    report_findings = feedback.get("medical_report_findings", [])
+    report_status = feedback.get("medical_report_status", "NOT_PROVIDED")
+
+    if report_findings:
+        rep_data = [["Test / Parameter", "Measured Value", "Reference Range", "Status"]]
+        for p in report_findings:
+            interp = p.get("status") or p.get("interpretation") or "RECORDED"
+            interp_color = "#dc2626" if interp in {"HIGH", "LOW"} else ("#059669" if interp == "NORMAL" else "#4b5563")
+            rep_data.append(
+                [
+                    p.get("test_name", "Test"),
+                    p.get("value", ""),
+                    p.get("reference_range") or "Not provided",
+                    f"<font color='{interp_color}'><b>{interp}</b></font>",
+                ]
             )
-            story.append(rep_table)
+        rep_table = Table([[Paragraph(c, body_style) for c in row] for row in rep_data], colWidths=[160, 120, 140, 100])
+        rep_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+                    ("TOPPADDING", (0, 0), (-1, -1), 3),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                ]
+            )
+        )
+        story.append(rep_table)
+    else:
+        if report_status == "NOT_PROVIDED" or "medical_report" not in (assessment.input_types or []):
+            story.append(Paragraph("<i>Medical Report: Not provided.</i>", body_style))
         else:
             story.append(Paragraph("<i>Medical report uploaded; no structured quantitative values detected.</i>", body_style))
-    else:
-        story.append(Paragraph("<i>No medical report uploaded for this assessment.</i>", body_style))
-    story.append(Spacer(1, 10))
+    story.append(Spacer(1, 8))
 
-    # Section 3: X-Ray Analysis
-    story.append(Paragraph("3. X-Ray Imaging Analysis", section_heading))
-    if xrays:
-        for x in xrays:
-            xray_info = (
-                f"<b>Region:</b> {(x.region or 'General').title()} &nbsp;|&nbsp; "
-                f"<b>Status:</b> {x.status.upper()} &nbsp;|&nbsp; "
-                f"<b>Model:</b> {x.model_version or 'N/A'}<br/>"
-                f"<b>Finding:</b> {x.prediction or 'No automated prediction generated'} &nbsp;|&nbsp; "
-                f"<b>Uncertainty:</b> {x.uncertainty or 'Clinical correlation needed'}<br/>"
-                f"<i>{x.message or ''}</i>"
-            )
-            story.append(Paragraph(xray_info, body_style))
+    # 4. X-Ray Imaging Analysis
+    story.append(Paragraph("4. X-Ray Imaging Analysis", section_heading))
+    xray_info = feedback.get("xray_findings", {})
+    if xray_info.get("received") or "xray" in (assessment.input_types or []):
+        x_status = xray_info.get("status", "UNAVAILABLE")
+        x_desc = xray_info.get("description") or "Automated interpretation unavailable."
+        x_reg = xray_info.get("region", "Chest")
+        x_pred = xray_info.get("prediction") or "None"
+        x_block = (
+            f"<b>Region:</b> {x_reg} &nbsp;|&nbsp; <b>Status:</b> {x_status} &nbsp;|&nbsp; "
+            f"<b>Model Prediction:</b> {x_pred}<br/>"
+            f"<i>{x_desc}</i>"
+        )
+        story.append(Paragraph(x_block, body_style))
     else:
-        story.append(Paragraph("<i>No X-ray image uploaded for this assessment.</i>", body_style))
-    story.append(Spacer(1, 10))
+        story.append(Paragraph("<i>X-Ray: Not provided.</i>", body_style))
+    story.append(Spacer(1, 8))
 
-    # Section 4: Safety Pathway & Next Steps
-    story.append(Paragraph("4. Safety Pathway & Clinical Navigation", section_heading))
-    res_payload = assessment.result_payload or {}
-    triage_info = res_payload.get("triage", {})
-    why_path = triage_info.get("why_this_pathway") or "Rule-based assessment."
-    guidance = triage_info.get("guidance") or "Consult a licensed healthcare professional for evaluation."
-    next_steps = triage_info.get("next_steps") or "Schedule an in-person doctor consultation."
+    # 5. Supporting & Contradictory Evidence
+    story.append(Paragraph("5. Clinical Rationale & Evidence", section_heading))
+    support_items = feedback.get("supporting_evidence", [])
+    if support_items:
+        story.append(Paragraph("<b>Supporting Indicators:</b>", body_style))
+        story.append(Paragraph("<br/>".join([f"• {item}" for item in support_items]), body_style))
+
+    contra_items = feedback.get("contradictory_evidence", [])
+    if contra_items:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("<b>Contradictory Findings:</b>", body_style))
+        story.append(Paragraph("<br/>".join([f"• <font color='#dc2626'>{item}</font>" for item in contra_items]), body_style))
+
+    missing_items = feedback.get("uncertain_missing_info", [])
+    if missing_items:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("<b>Unknown / Unassessed Factors:</b>", body_style))
+        story.append(Paragraph("<br/>".join([f"• {item}" for item in missing_items]), body_style))
+    story.append(Spacer(1, 8))
+
+    # 6. Safety Pathway & Clinical Navigation
+    story.append(Paragraph("6. Safety Pathway & Recommended Next Steps", section_heading))
+    why_path = feedback.get("why_this_triage_selected") or triage_info.get("why_this_pathway") or "Rule-based assessment."
+    next_step_data = feedback.get("recommended_next_step", {})
+    guidance = next_step_data.get("guidance") or triage_info.get("guidance") or "Consult a licensed healthcare professional."
+    next_steps = next_step_data.get("next_steps") or triage_info.get("next_steps") or "Schedule an in-person medical evaluation."
+    suggested_specialty = next_step_data.get("suggested_specialty") or assessment.specialty or "General Physician"
 
     guidance_block = [
         [Paragraph("<b>Pathway Rationale:</b>", body_style), Paragraph(why_path, body_style)],
         [Paragraph("<b>Health Guidance:</b>", body_style), Paragraph(guidance, body_style)],
+        [Paragraph("<b>Suggested Specialty:</b>", body_style), Paragraph(suggested_specialty, body_style)],
         [Paragraph("<b>Recommended Next Steps:</b>", body_style), Paragraph(next_steps, body_style)],
     ]
     guidance_table = Table(guidance_block, colWidths=[140, 380])
@@ -281,19 +325,19 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f1f5f9")),
                 ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
                 ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
             ]
         )
     )
     story.append(guidance_table)
-    story.append(Spacer(1, 14))
+    story.append(Spacer(1, 10))
 
     # Disclaimer Footer
-    story.append(HRFlowable(width="100%", thickness=0.8, color=colors.HexColor("#cbd5e1"), spaceAfter=6))
+    story.append(HRFlowable(width="100%", thickness=0.8, color=colors.HexColor("#cbd5e1"), spaceAfter=5))
     story.append(Paragraph(DISCLAIMER_TEXT, disclaimer_style))
 
-    # Build document
+    # Build PDF
     doc.build(story)
 
     return {

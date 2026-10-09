@@ -46,7 +46,7 @@ async def upload_report(
     ocr_result = extract_text_from_file(str(dest))
     extracted_text = ocr_result.get("extracted_text")
 
-    nlp_result = structure_report_text(extracted_text)
+    nlp_result = structure_report_text(extracted_text, tables=ocr_result.get("tables", []))
     structured_findings = nlp_result.get("findings", [])
     qualitative_findings = nlp_result.get("qualitative_findings", [])
     combined_findings = {

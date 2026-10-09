@@ -96,6 +96,14 @@ export default function AssessmentResult() {
         </p>
       ) : null}
 
+      {/* DYNAMIC ASSESSMENT SUMMARY */}
+      {payload.feedback?.assessment_summary ? (
+        <div className="card" style={{ marginBottom: '1.5rem', borderLeft: '4px solid #2563eb', background: '#f8fafc' }}>
+          <h3 style={{ marginTop: 0, color: '#1e40af', fontSize: '1.1rem' }}>Clinical Assessment Summary</h3>
+          <p style={{ lineHeight: '1.6', margin: 0, color: '#1e293b' }}>{payload.feedback.assessment_summary}</p>
+        </div>
+      ) : null}
+
       <div className="evidence-grid">
         {/* 1. SYMPTOMS */}
         <EvidenceCard title="SYMPTOMS EVIDENCE">
@@ -109,6 +117,9 @@ export default function AssessmentResult() {
                   <strong>{s.symptom}</strong>
                   {s.duration ? <span className="pill-detail">({s.duration})</span> : null}
                   {s.severity ? <span className="pill-detail severity">[{s.severity}]</span> : null}
+                  {s.laterality ? <span className="pill-detail">[{s.laterality}-sided]</span> : null}
+                  {s.quality ? <span className="pill-detail">[{s.quality}]</span> : null}
+                  {s.trigger ? <span className="pill-detail">Trigger: {s.trigger}</span> : null}
                 </div>
               ))}
               {symptomsAbsent.map((s, idx) => (
@@ -124,7 +135,7 @@ export default function AssessmentResult() {
         {/* 2. MEDICAL REPORT */}
         <EvidenceCard title="MEDICAL REPORT FINDINGS">
           {reportFindings.length === 0 ? (
-            <p className="muted">No structured lab parameters found in uploaded report.</p>
+            <p className="muted">{payload.feedback?.medical_report_message || 'Medical Report: Not provided.'}</p>
           ) : (
             <table className="mini-table">
               <thead>
@@ -142,8 +153,8 @@ export default function AssessmentResult() {
                     <td>{f.value} {f.unit || ''}</td>
                     <td>{f.reference_range || '—'}</td>
                     <td>
-                      <span className={`badge badge-${(f.interpretation || '').toLowerCase()}`}>
-                        {f.interpretation || 'RECORDED'}
+                      <span className={`badge badge-${(f.interpretation || f.status || '').toLowerCase()}`}>
+                        {f.interpretation || f.status || 'RECORDED'}
                       </span>
                     </td>
                   </tr>
@@ -155,27 +166,27 @@ export default function AssessmentResult() {
 
         {/* 3. X-RAY ANALYSIS */}
         <EvidenceCard title="X-RAY ANALYSIS">
-          {xrayData && xrayData.status !== 'none' ? (
+          {xrayData && xrayData.received ? (
             <div>
               <p><strong>Region:</strong> {(xrayData.region || 'Chest').toUpperCase()}</p>
-              <p><strong>Status:</strong> {xrayData.status.toUpperCase()}</p>
+              <p><strong>Status:</strong> {(xrayData.status || '').toUpperCase()}</p>
               {xrayData.prediction ? (
                 <p><strong>Finding:</strong> <span className="highlight">{xrayData.prediction}</span></p>
               ) : (
-                <p className="muted">{xrayData.message || 'Automated interpretation for this X-ray type is currently unavailable.'}</p>
+                <p className="muted">{xrayData.description || xrayData.message || 'Automated interpretation for this X-ray type is currently unavailable.'}</p>
               )}
               {xrayData.uncertainty ? (
                 <p className="small muted"><strong>Uncertainty:</strong> {xrayData.uncertainty}</p>
               ) : null}
             </div>
           ) : (
-            <p className="muted">No X-ray image provided for this assessment.</p>
+            <p className="muted">X-Ray: Not provided.</p>
           )}
         </EvidenceCard>
 
         {/* 4. WHY THIS PATHWAY */}
         <EvidenceCard title="WHY THIS PATHWAY?">
-          <p>{triage.why_this_pathway || 'Selected by backend safety rules based on clinical indicators.'}</p>
+          <p>{payload.feedback?.why_this_triage_selected || triage.why_this_pathway || 'Selected by backend safety rules based on clinical indicators.'}</p>
           {triage.rules_triggered?.length ? (
             <p className="small muted">Rules triggered: {triage.rules_triggered.join(', ')}</p>
           ) : null}
@@ -194,6 +205,17 @@ export default function AssessmentResult() {
           <p><strong>Guidance:</strong> {triage.guidance || 'Consult a qualified physician.'}</p>
           <p><strong>Next Action:</strong> {triage.next_steps || 'Schedule in-person medical evaluation.'}</p>
         </EvidenceCard>
+
+        {/* 7. SUPPORTING EVIDENCE */}
+        {payload.feedback?.supporting_evidence?.length ? (
+          <EvidenceCard title="SUPPORTING EVIDENCE">
+            <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
+              {payload.feedback.supporting_evidence.map((item, idx) => (
+                <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem' }}>{item}</li>
+              ))}
+            </ul>
+          </EvidenceCard>
+        ) : null}
       </div>
 
       <div className="action-row">

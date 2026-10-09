@@ -35,14 +35,29 @@ def submit_symptoms(
 
     created_rows = []
     for item in extracted_symptoms:
+        ctx = item.get("context") or ""
+        qual_parts = []
+        if item.get("laterality"):
+            qual_parts.append(f"laterality={item['laterality']}")
+        if item.get("quality"):
+            qual_parts.append(f"quality={item['quality']}")
+        if item.get("trigger"):
+            qual_parts.append(f"trigger={item['trigger']}")
+        if item.get("type"):
+            qual_parts.append(f"type={item['type']}")
+        if item.get("onset"):
+            qual_parts.append(f"onset={item['onset']}")
+
+        stored_ctx = f"[qualifiers: {', '.join(qual_parts)}] {ctx}" if qual_parts else ctx
+
         row = Symptom(
             assessment_id=assessment.assessment_id,
             symptom=item["symptom"],
             state=item["state"],
             duration=item.get("duration"),
-            severity=item.get("severity"),
+            severity=str(item.get("severity")) if item.get("severity") else None,
             body_area=item.get("body_area"),
-            context=item.get("context"),
+            context=stored_ctx,
             source="user_input",
         )
         db.add(row)

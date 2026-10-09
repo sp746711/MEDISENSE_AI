@@ -168,7 +168,7 @@ export default function AssessmentResult() {
         <EvidenceCard title="X-RAY ANALYSIS">
           {xrayData && xrayData.received ? (
             <div>
-              <p><strong>Region:</strong> {(xrayData.region || 'Chest').toUpperCase()}</p>
+              <p><strong>Region:</strong> {(xrayData.region || 'Not declared').toUpperCase()}</p>
               <p><strong>Status:</strong> {(xrayData.status || '').toUpperCase()}</p>
               {xrayData.prediction ? (
                 <p><strong>Finding:</strong> <span className="highlight">{xrayData.prediction}</span></p>

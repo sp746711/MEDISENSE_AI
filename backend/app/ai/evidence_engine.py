@@ -36,10 +36,21 @@ def combine_evidence(
     symptoms: list[dict[str, Any]] | None = None,
     report_findings: list[dict[str, Any]] | None = None,
     xray_result: dict[str, Any] | None = None,
+    report_provided: bool | None = None,
+    qualitative_report_findings: list[dict[str, Any]] | None = None,
+    narrative_report_findings: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Combine multimodal inputs into structured clinical evidence."""
     symptoms = symptoms or []
     report_findings = report_findings or []
+    qualitative_report_findings = qualitative_report_findings or []
+    narrative_report_findings = narrative_report_findings or []
+
+    is_report_provided = (
+        report_provided
+        if report_provided is not None
+        else bool(report_findings or qualitative_report_findings or narrative_report_findings)
+    )
 
     symptoms_present = [s for s in symptoms if s.get("state") == "PRESENT"]
     symptoms_absent = [s for s in symptoms if s.get("state") == "ABSENT"]
@@ -64,12 +75,10 @@ def combine_evidence(
     all_known_names = present_names.union(absent_names)
 
     # 1. Contradiction Detection
-    # E.g. Fever explicitly denied but objective temperature >= 100.4°F
     has_fever_absent = "fever" in absent_names
     for s in symptoms_present:
         if s.get("symptom") == "temperature":
             val_str = str(s.get("context") or "")
-            temp_num_m = None
             import re
             m = re.search(r"(\d{2,3}(?:\.\d+)?)", val_str)
             if m:
@@ -107,6 +116,16 @@ def combine_evidence(
         if features:
             supporting.append(f"Headache presentation characterized by {', '.join(features)}.")
 
+    # Musculoskeletal correlations
+    if any(n in present_names for n in {"wrist pain", "wrist injury", "fall/trauma", "swelling", "tenderness"}):
+        msk_features = []
+        for s in symptoms_present:
+            if s.get("body_area") == "wrist" or s.get("symptom") in {"wrist pain", "wrist injury", "fall/trauma"}:
+                lat = f"{s.get('laterality').lower()} " if s.get("laterality") else ""
+                msk_features.append(f"{lat}{s.get('symptom')}")
+        if msk_features:
+            supporting.append(f"Musculoskeletal trauma indicators: {', '.join(list(dict.fromkeys(msk_features)))}.")
+
     for item in report_abnormal:
         fname = item.get("test_name", "")
         val = item.get("value")
@@ -117,10 +136,29 @@ def combine_evidence(
     if report_normal and not report_abnormal:
         supporting.append(f"All {len(report_normal)} evaluated laboratory parameter(s) are within standard reference ranges.")
 
+    for qf in qualitative_report_findings:
+        f_name = qf.get("finding", "")
+        f_state = qf.get("state", "PRESENT")
+        if f_state == "PRESENT":
+            supporting.append(f"Medical report qualitative finding confirmed: {f_name}.")
+        elif f_state == "ABSENT":
+            supporting.append(f"Medical report explicitly confirms absence of: {f_name}.")
+
+    for nf in narrative_report_findings:
+        sec = nf.get("section", "")
+        cnt = nf.get("content", "")
+        if cnt:
+            short_cnt = cnt[:100] + "..." if len(cnt) > 100 else cnt
+            supporting.append(f"Report narrative ({sec}): {short_cnt}")
+
     # 3. Truthful X-ray Status and Interpretation
     xray_finding_str = None
     xray_status_raw = (xray_result or {}).get("status", "none")
     xray_status_normalized = (xray_status_raw or "none").lower()
+
+    raw_reg = ((xray_result or {}).get("region") or "").strip().lower()
+    xray_region = raw_reg if raw_reg else "not declared"
+    region_label = f"{xray_region.capitalize()} X-ray" if xray_region not in {"not declared", "unknown"} else "X-ray"
 
     if xray_result and xray_status_normalized == "completed" and xray_result.get("prediction"):
         xray_finding_str = xray_result.get("prediction")
@@ -128,13 +166,13 @@ def combine_evidence(
         xray_interpretation = "AVAILABLE"
         xray_evidence_status = "SUPPORTING"
         xray_status_display = "COMPLETED"
-        supporting.append(f"Chest X-ray deep learning model identified radiographic pattern: {xray_finding_str}.")
+        supporting.append(f"{region_label} deep learning model identified radiographic pattern: {xray_finding_str}.")
     elif xray_result and xray_status_normalized == "unavailable":
         xray_received = True
         xray_interpretation = "UNAVAILABLE"
         xray_evidence_status = "UNKNOWN"
         xray_status_display = "UNAVAILABLE"
-        supporting.append("Chest X-ray uploaded; automated interpretation unavailable (no trained model checkpoint configured). No disease finding fabricated.")
+        supporting.append(f"{region_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
     elif xray_result and xray_status_normalized not in {"none", "not_provided"}:
         xray_received = True
         xray_interpretation = "UNAVAILABLE"
@@ -165,23 +203,38 @@ def combine_evidence(
     if symptoms_present and not durations:
         missing.append("Symptom duration (onset timeframe unspecified)")
 
-    if not report_findings:
+    if not is_report_provided:
         missing.append("Medical laboratory report (biochemical parameters unassessed)")
 
     if not xray_received:
-        missing.append("Chest X-ray imaging (radiographic status unassessed)")
+        missing.append("Radiographic imaging (radiographic status unassessed)")
 
     # 5. Determine overall evidence state
-    total_active_signals = len(symptoms_present) + len(report_abnormal) + (1 if xray_finding_str else 0)
+    total_active_signals = (
+        len(symptoms_present)
+        + len(report_abnormal)
+        + len(qualitative_report_findings)
+        + (1 if xray_finding_str else 0)
+    )
 
     if contradictory:
         evidence_state = "CONFLICTING_EVIDENCE"
-    elif total_active_signals > 0 or len(report_normal) > 0 or len(symptoms_absent) > 0 or (xray_received and xray_interpretation == "UNAVAILABLE"):
+    elif (
+        total_active_signals > 0
+        or len(report_normal) > 0
+        or len(symptoms_absent) > 0
+        or is_report_provided
+        or (xray_received and xray_interpretation == "UNAVAILABLE")
+    ):
         evidence_state = "EVIDENCE_PRESENT"
     else:
         evidence_state = "INSUFFICIENT_EVIDENCE"
 
-    report_evidence_status = "SUPPORTING" if (report_abnormal or report_normal) else "NOT_ASSESSED"
+    report_evidence_status = (
+        "SUPPORTING"
+        if (report_abnormal or report_normal or qualitative_report_findings or narrative_report_findings)
+        else ("NOT_ASSESSED" if not is_report_provided else "RECORDED")
+    )
 
     return {
         "evidence_state": evidence_state,
@@ -222,7 +275,7 @@ def combine_evidence(
             "unknown": [s.get("symptom") for s in symptoms_unknown],
         },
         "report": {
-            "provided": bool(report_findings),
+            "provided": is_report_provided,
             "evidence_status": report_evidence_status,
             "abnormal_findings": [
                 {
@@ -244,15 +297,17 @@ def combine_evidence(
                 }
                 for f in report_normal
             ],
+            "qualitative_findings": qualitative_report_findings,
+            "narrative_findings": narrative_report_findings,
             "unknown_range_findings": report_unknown_range,
-            "total_extracted": len(report_findings),
+            "total_extracted": len(report_findings) + len(qualitative_report_findings) + len(narrative_report_findings),
         },
         "xray": {
             "received": xray_received,
             "interpretation": xray_interpretation,
             "evidence_status": xray_evidence_status,
             "status": xray_status_display,
-            "region": (xray_result or {}).get("region") or "chest",
+            "region": xray_region,
             "prediction": xray_finding_str,
             "model_version": (xray_result or {}).get("model_version") or "N/A",
             "uncertainty": (xray_result or {}).get("uncertainty"),

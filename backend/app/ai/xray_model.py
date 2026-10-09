@@ -133,8 +133,14 @@ class XRayModelService:
 
     def analyze(self, image_path: str, region: Optional[str] = None) -> dict[str, Any]:
         """Run deep learning inference or return exact standard unavailable status."""
-        reg = (region or "chest").lower()
+        raw_reg = (region or "").strip().lower()
+        reg = raw_reg if raw_reg else "unknown"
         if reg != "chest" or not self.is_available():
+            msg = (
+                f"X-ray received. Automated interpretation for the selected X-ray type is currently unavailable."
+                if reg != "chest"
+                else DEFAULT_UNAVAILABLE_MESSAGE
+            )
             return {
                 "status": "unavailable",
                 "region": reg,
@@ -143,7 +149,7 @@ class XRayModelService:
                 "confidence_if_valid": None,
                 "uncertainty": "Model not configured or region currently unsupported",
                 "explainability_artifact": None,
-                "message": DEFAULT_UNAVAILABLE_MESSAGE,
+                "message": msg,
             }
 
         # If checkpoint is loaded, execute PyTorch forward pass

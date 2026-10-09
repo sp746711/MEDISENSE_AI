@@ -231,6 +231,9 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     story.append(Paragraph("3. Medical Report Findings", section_heading))
     report_findings = feedback.get("medical_report_findings", [])
     report_status = feedback.get("medical_report_status", "NOT_PROVIDED")
+    qualitative_rep = feedback.get("qualitative_findings", []) or evidence_info.get("report", {}).get("qualitative_findings", [])
+    narrative_rep = feedback.get("narrative_findings", []) or evidence_info.get("report", {}).get("narrative_findings", [])
+    is_report_provided = report_status == "PROVIDED" or evidence_info.get("report", {}).get("provided", False)
 
     if report_findings:
         rep_data = [["Test / Parameter", "Measured Value", "Reference Range", "Status"]]
@@ -259,20 +262,36 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             )
         )
         story.append(rep_table)
-    else:
-        if report_status == "NOT_PROVIDED" or "medical_report" not in (assessment.input_types or []):
+
+    if qualitative_rep:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("<b>Qualitative Clinical Findings:</b>", body_style))
+        q_lines = [f"• <b>{q.get('finding')}:</b> {q.get('state', 'PRESENT')}" for q in qualitative_rep]
+        story.append(Paragraph("<br/>".join(q_lines), body_style))
+
+    if narrative_rep:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("<b>Clinical History & Narrative:</b>", body_style))
+        n_lines = [f"• <b>{n.get('section')}:</b> {n.get('content')}" for n in narrative_rep]
+        story.append(Paragraph("<br/>".join(n_lines), body_style))
+
+    if not report_findings and not qualitative_rep and not narrative_rep:
+        if not is_report_provided:
             story.append(Paragraph("<i>Medical Report: Not provided.</i>", body_style))
         else:
-            story.append(Paragraph("<i>Medical report uploaded; no structured quantitative values detected.</i>", body_style))
+            story.append(Paragraph("<i>Medical report provided.</i>", body_style))
     story.append(Spacer(1, 8))
 
     # 4. X-Ray Imaging Analysis
     story.append(Paragraph("4. X-Ray Imaging Analysis", section_heading))
     xray_info = feedback.get("xray_findings", {})
+    if not xray_info and evidence_info:
+        xray_info = evidence_info.get("xray", {})
     if xray_info.get("received") or "xray" in (assessment.input_types or []):
         x_status = xray_info.get("status", "UNAVAILABLE")
-        x_desc = xray_info.get("description") or "Automated interpretation unavailable."
-        x_reg = xray_info.get("region", "Chest")
+        x_desc = xray_info.get("description") or xray_info.get("message") or "Automated interpretation unavailable."
+        raw_reg = (xray_info.get("region") or "").strip().lower()
+        x_reg = raw_reg.title() if raw_reg not in {"not declared", "unknown", ""} else "Not declared"
         x_pred = xray_info.get("prediction") or "None"
         x_block = (
             f"<b>Region:</b> {x_reg} &nbsp;|&nbsp; <b>Status:</b> {x_status} &nbsp;|&nbsp; "

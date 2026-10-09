@@ -46,11 +46,20 @@ def generate_assessment_feedback(
     report_provided = report_meta.get("provided", False)
     abnormal_rep = report_meta.get("abnormal_findings", [])
     normal_rep = report_meta.get("normal_findings", [])
+    qualitative_rep = report_meta.get("qualitative_findings", [])
+    narrative_rep = report_meta.get("narrative_findings", [])
 
     xray_meta = evidence.get("xray", {})
     xray_received = xray_meta.get("received", False)
     xray_status = (xray_meta.get("status") or "NOT_PROVIDED").upper()
     xray_pred = xray_meta.get("prediction")
+    raw_xray_region = (xray_meta.get("region") or "").strip().lower()
+    xray_region = raw_xray_region if raw_xray_region else "not declared"
+    xray_region_label = (
+        f"{xray_region.capitalize()} X-ray"
+        if xray_region not in {"not declared", "unknown"}
+        else "X-ray"
+    )
 
     triage_pathway = triage_result.get("pathway") or "MILD"
 
@@ -85,16 +94,25 @@ def generate_assessment_feedback(
         if abnormal_rep:
             abn_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')}, {r.get('interpretation')})" for r in abnormal_rep[:3]]
             summary_sentences.append(f"Laboratory evaluation revealed {len(abnormal_rep)} out-of-range parameter(s): {', '.join(abn_names)}.")
-        if normal_rep and not abnormal_rep:
+        elif normal_rep:
             summary_sentences.append(f"All {len(normal_rep)} evaluated laboratory parameter(s) are within standard reference ranges.")
+        if qualitative_rep:
+            q_names = [f"{q.get('finding')} ({q.get('state')})" for q in qualitative_rep[:3]]
+            summary_sentences.append(f"Medical report provided with qualitative findings: {', '.join(q_names)}.")
+        elif narrative_rep:
+            summary_sentences.append("Medical report provided with clinical history and examination details.")
+        elif not abnormal_rep and not normal_rep:
+            summary_sentences.append("Medical report provided (clinical documentation).")
     else:
         summary_sentences.append("Medical laboratory report was not provided.")
 
     if xray_received:
         if xray_status == "COMPLETED" and xray_pred:
-            summary_sentences.append(f"Chest X-ray deep learning model identified radiographic pattern: {xray_pred}.")
+            summary_sentences.append(f"{xray_region_label} deep learning model identified radiographic pattern: {xray_pred}.")
         elif xray_status == "UNAVAILABLE":
-            summary_sentences.append("Chest X-ray received; automated model interpretation is currently unavailable. No radiographic disease is assumed.")
+            summary_sentences.append(f"{xray_region_label} received; automated model interpretation is currently unavailable. No radiographic disease is assumed.")
+        else:
+            summary_sentences.append(f"{xray_region_label} status: {xray_status}.")
     else:
         summary_sentences.append("Radiographic imaging was not provided.")
 
@@ -140,7 +158,12 @@ def generate_assessment_feedback(
             for f in (abnormal_rep + normal_rep)
         ]
         medical_report_status = "PROVIDED"
-        medical_report_message = f"Structured laboratory analysis extracted {len(medical_report_findings)} parameter(s)."
+        if medical_report_findings:
+            medical_report_message = f"Structured laboratory analysis extracted {len(medical_report_findings)} parameter(s)."
+        elif qualitative_rep or narrative_rep:
+            medical_report_message = f"Medical report provided: extracted {len(qualitative_rep)} qualitative finding(s) and {len(narrative_rep)} narrative section(s)."
+        else:
+            medical_report_message = "Medical report provided (qualitative clinical documentation recorded)."
     else:
         medical_report_findings = []
         medical_report_status = "NOT_PROVIDED"
@@ -152,15 +175,15 @@ def generate_assessment_feedback(
             xray_findings_text = f"Radiographic pattern identified: {xray_pred}. Clinical correlation and verification by a radiologist required."
         elif xray_status == "UNAVAILABLE":
             xray_findings_text = (
-                "Automated interpretation for this X-ray type is currently unavailable (no trained model checkpoint configured). "
+                f"Automated interpretation for this X-ray type ({xray_region}) is currently unavailable (no trained model checkpoint configured). "
                 "No disease finding is generated or assumed. If you have the associated radiology report, upload it for text-based analysis."
             )
         else:
-            xray_findings_text = f"X-ray status: {xray_status}."
+            xray_findings_text = f"{xray_region_label} status: {xray_status}."
         xray_findings_data = {
             "received": True,
             "status": xray_status,
-            "region": (xray_meta.get("region") or "chest").title(),
+            "region": xray_region.title() if xray_region not in {"not declared", "unknown"} else "Not declared",
             "model": xray_meta.get("model_version") or "N/A",
             "prediction": xray_pred,
             "description": xray_findings_text,
@@ -170,7 +193,7 @@ def generate_assessment_feedback(
         xray_findings_data = {
             "received": False,
             "status": "NOT_PROVIDED",
-            "region": "N/A",
+            "region": "Not declared",
             "model": "N/A",
             "prediction": None,
             "description": "X-Ray: Not provided.",
@@ -418,10 +441,14 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         .all()
     )
     report_findings_list: list[dict[str, Any]] = []
+    qualitative_findings_list: list[dict[str, Any]] = []
+    narrative_findings_list: list[dict[str, Any]] = []
     for r in report_rows:
         struct = r.structured_findings or {}
         if isinstance(struct, dict):
             report_findings_list.extend(struct.get("lab_parameters", []))
+            qualitative_findings_list.extend(struct.get("qualitative_findings", []))
+            narrative_findings_list.extend(struct.get("narrative_findings", []))
 
     # 3. Fetch X-ray result isolated strictly by assessment_id
     xray_row = (
@@ -447,6 +474,9 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         symptoms=symptoms_list,
         report_findings=report_findings_list,
         xray_result=xray_dict,
+        report_provided=len(report_rows) > 0,
+        qualitative_report_findings=qualitative_findings_list,
+        narrative_report_findings=narrative_findings_list,
     )
 
     # 5. Apply deterministic rule-based triage

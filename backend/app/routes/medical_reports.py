@@ -49,10 +49,12 @@ async def upload_report(
     nlp_result = structure_report_text(extracted_text, tables=ocr_result.get("tables", []))
     structured_findings = nlp_result.get("findings", [])
     qualitative_findings = nlp_result.get("qualitative_findings", [])
+    narrative_findings = nlp_result.get("narrative_findings", [])
     combined_findings = {
         "lab_parameters": structured_findings,
         "qualitative_findings": qualitative_findings,
-        "total_extracted": len(structured_findings) + len(qualitative_findings),
+        "narrative_findings": narrative_findings,
+        "total_extracted": len(structured_findings) + len(qualitative_findings) + len(narrative_findings),
     }
 
     report = MedicalReport(

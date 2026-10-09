@@ -7,7 +7,8 @@ SUPPORTED_REGIONS = {"chest"}  # Expand only when trained models exist
 
 
 def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[str, Any]:
-    region = (declared_region or "unknown").lower()
+    raw = (declared_region or "").strip().lower()
+    region = raw if raw else "unknown"
     if region in SUPPORTED_REGIONS:
         return {
             "region": region,
@@ -18,8 +19,7 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
         "region": region,
         "supported": False,
         "message": (
-            "X-ray received successfully. Automated interpretation for this X-ray "
-            "type is currently unavailable. If you have the associated radiology "
-            "report, upload it for supported text-based analysis."
+            "X-ray received. Automated interpretation for the selected "
+            "X-ray type is currently unavailable."
         ),
     }

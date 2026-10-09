@@ -398,46 +398,123 @@ def structure_report_text(
                 })
                 break
 
-    # 3. Qualitative radiology findings if present in text
-    radiology_findings: list[dict[str, Any]] = []
+    # 3. Qualitative and narrative clinical findings extraction
+    qualitative_findings: list[dict[str, Any]] = []
+    narrative_findings: list[dict[str, Any]] = []
+
     if text and text.strip():
-        qualitative_terms = [
+        lower_text = text.lower()
+
+        # Section extraction (Clinical History, Examination, Impression, Findings)
+        section_pattern = re.compile(
+            r"(?:^|\n)\s*(Clinical History|History|Clinical Indication|Indication|Chief Complaint|Physical Examination|Clinical Examination|Examination|Impression|Conclusion|Diagnosis|Radiology Findings|Findings)\s*:\s*(.*?)(?=(?:\n\s*(?:Clinical History|History|Clinical Indication|Indication|Chief Complaint|Physical Examination|Clinical Examination|Examination|Impression|Conclusion|Diagnosis|Radiology Findings|Findings)\s*:)|$)",
+            re.IGNORECASE | re.DOTALL,
+        )
+        for smatch in section_pattern.finditer(text):
+            sec_name = smatch.group(1).strip()
+            sec_content = smatch.group(2).strip()
+            if sec_content:
+                narrative_findings.append({
+                    "section": sec_name,
+                    "content": sec_content,
+                    "source": "medical_report_narrative",
+                })
+
+        # Explicit fracture assessment:
+        # "No fracture" -> ABSENT
+        # "Fracture identified" / "Fracture noted" -> PRESENT
+        # neither -> not added (remains UNKNOWN, not inferred from wrist injury)
+        has_no_fracture = bool(
+            re.search(r"\b(?:no|denies|negative for|free of|without)\s+(?:\w+\s+){0,3}fracture\b", lower_text)
+            or "no fracture" in lower_text
+        )
+        has_pos_fracture = bool(
+            re.search(r"\b(?:fracture identified|fracture seen|fracture noted|acute fracture|evidence of fracture)\b", lower_text)
+            or (re.search(r"\bfracture\b", lower_text) and not has_no_fracture)
+        )
+
+        if has_no_fracture:
+            qualitative_findings.append({
+                "finding": "fracture",
+                "category": "radiology/bone",
+                "domain": "musculoskeletal",
+                "state": "ABSENT",
+            })
+        elif has_pos_fracture:
+            qualitative_findings.append({
+                "finding": "fracture",
+                "category": "radiology/bone",
+                "domain": "musculoskeletal",
+                "state": "PRESENT",
+            })
+
+        # Examination findings: tenderness, swelling, reduced range of motion
+        if re.search(r"\b(?:tenderness|tender)\b", lower_text):
+            neg_tender = bool(re.search(r"\b(?:no|without)\s+(?:\w+\s+){0,2}(?:tenderness|tender)\b", lower_text))
+            qualitative_findings.append({
+                "finding": "localized tenderness",
+                "category": "examination",
+                "domain": "musculoskeletal",
+                "state": "ABSENT" if neg_tender else "PRESENT",
+            })
+
+        if re.search(r"\b(?:swelling|swollen|edema)\b", lower_text):
+            neg_swell = bool(re.search(r"\b(?:no|without)\s+(?:\w+\s+){0,2}(?:swelling|swollen|edema)\b", lower_text))
+            qualitative_findings.append({
+                "finding": "swelling",
+                "category": "examination",
+                "domain": "musculoskeletal",
+                "state": "ABSENT" if neg_swell else "PRESENT",
+            })
+
+        if re.search(r"\b(?:reduced|decreased|limited|restricted)\s+(?:range of motion|movement|mobility|rom)\b", lower_text):
+            qualitative_findings.append({
+                "finding": "reduced range of motion",
+                "category": "examination",
+                "domain": "musculoskeletal",
+                "state": "PRESENT",
+            })
+
+        # Respiratory qualitative findings
+        resp_terms = [
             ("pneumonia", "radiology", "respiratory"),
             ("consolidation", "radiology", "respiratory"),
             ("pleural effusion", "radiology", "respiratory"),
             ("cardiomegaly", "radiology", "cardiovascular"),
             ("infiltrate", "radiology", "respiratory"),
             ("clear lungs", "radiology", "respiratory"),
-            ("no fracture", "radiology", "bones"),
-            ("fracture", "radiology", "bones"),
         ]
-        lower_text = text.lower()
-        for term, category, domain in qualitative_terms:
+        for term, cat, dom in resp_terms:
             if term in lower_text:
-                negated = any(
-                    re.search(rf"\b(?:no|denies|negative for|free of|without)\s+(?:\w+\s+){{0,3}}{term}\b", lower_text)
-                    for _ in [1]
-                )
-                radiology_findings.append({
+                neg = bool(re.search(rf"\b(?:no|denies|negative for|free of|without)\s+(?:\w+\s+){{0,3}}{term}\b", lower_text))
+                qualitative_findings.append({
                     "finding": term,
-                    "category": category,
-                    "domain": domain,
-                    "state": "ABSENT" if negated else "PRESENT",
+                    "category": cat,
+                    "domain": dom,
+                    "state": "ABSENT" if neg else "PRESENT",
                 })
 
-    status_str = "structured" if (findings or radiology_findings) else "unstructured"
+    has_content = bool(findings or qualitative_findings or narrative_findings)
+    status_str = "structured" if has_content else "unstructured"
+
+    if findings:
+        msg = f"Successfully extracted {len(findings)} structured lab parameter(s)."
+    elif qualitative_findings or narrative_findings:
+        msg = f"Extracted {len(qualitative_findings)} clinical finding(s) and {len(narrative_findings)} narrative section(s) from document."
+    else:
+        msg = "No structured clinical values or narrative sections detected in the uploaded document."
+
     return {
         "status": status_str,
         "findings": findings,
-        "qualitative_findings": radiology_findings,
+        "qualitative_findings": qualitative_findings,
+        "narrative_findings": narrative_findings,
         "reference_ranges": [
             {"test_name": f["test_name"], "range": f["reference_range"]}
             for f in findings
             if f.get("reference_range")
         ],
-        "message": f"Successfully extracted {len(findings)} structured lab parameter(s)."
-        if findings
-        else "No structured quantitative values detected in the uploaded document.",
+        "message": msg,
         "source": "uploaded_report",
         "report_nlp_version": REPORT_NLP_VERSION,
     }

@@ -2,11 +2,13 @@
 
 import uuid
 from pathlib import Path
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
 from app.ai.xray_model import XRayModelService
+from app.ai.xray_router import route_xray
 from app.core.config import get_settings
 from app.core.dependencies import CurrentUser, DbSession
 from app.database.models import Assessment, XrayResult
@@ -21,6 +23,7 @@ async def upload_xray(
     current_user: CurrentUser,
     db: DbSession,
     file: UploadFile = File(...),
+    region: Optional[str] = Form(None),
 ) -> dict:
     assessment = _owned(db, assessment_id, current_user.user_id)
     if "xray" not in (assessment.input_types or []):
@@ -41,20 +44,24 @@ async def upload_xray(
     dest = xray_dir / stored_name
     dest.write_bytes(content)
 
+    # Route through body-region router
+    routing = route_xray(str(dest), declared_region=region)
+    resolved_region = routing.get("region") or (region.strip().lower() if region else "unknown")
+
     # Adapter: never invent findings if model unavailable
     model_service = XRayModelService()
-    analysis = model_service.analyze(str(dest))
+    analysis = model_service.analyze(str(dest), region=resolved_region)
 
     result = XrayResult(
         assessment_id=assessment.assessment_id,
-        region=analysis.get("region"),
+        region=analysis.get("region") or resolved_region,
         model_version=analysis.get("model_version"),
         prediction=analysis.get("prediction"),
         confidence_if_valid=analysis.get("confidence_if_valid"),
         uncertainty=analysis.get("uncertainty"),
         explainability_artifact=analysis.get("explainability_artifact"),
         status=analysis.get("status", "unavailable"),
-        message=analysis.get("message"),
+        message=analysis.get("message") or routing.get("message"),
         stored_name=stored_name,
     )
     db.add(result)

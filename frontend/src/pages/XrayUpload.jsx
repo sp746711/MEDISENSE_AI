@@ -271,6 +271,26 @@ function FloatingXrayObjects() {
   );
 }
 
+const REGION_OPTIONS = [
+  { value: '', label: '-- Select Body Region / Type --' },
+  { value: 'chest', label: 'Chest' },
+  { value: 'wrist', label: 'Wrist' },
+  { value: 'hand', label: 'Hand' },
+  { value: 'forearm', label: 'Forearm' },
+  { value: 'elbow', label: 'Elbow' },
+  { value: 'shoulder', label: 'Shoulder' },
+  { value: 'humerus', label: 'Humerus' },
+  { value: 'clavicle', label: 'Clavicle' },
+  { value: 'knee', label: 'Knee' },
+  { value: 'lower leg', label: 'Lower Leg' },
+  { value: 'ankle', label: 'Ankle' },
+  { value: 'foot', label: 'Foot' },
+  { value: 'pelvis', label: 'Pelvis' },
+  { value: 'hip', label: 'Hip' },
+  { value: 'femur', label: 'Femur' },
+  { value: 'spine', label: 'Spine' },
+];
+
 /* ============================================================
    MAIN X-RAY UPLOAD COMPONENT
    ============================================================ */
@@ -278,6 +298,7 @@ export default function XrayUpload() {
   const navigate = useNavigate();
   const { assessmentId } = useAssessment();
   const [file, setFile] = useState(null);
+  const [region, setRegion] = useState('');
   const [info, setInfo] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -330,10 +351,11 @@ export default function XrayUpload() {
   const onContinue = async () => {
     setError('');
     if (!assessmentId) return setError('No assessment in progress. Start a new assessment.');
+    if (!region) return setError('Please select the body region for this X-ray.');
     if (!file) return setError('Please select an X-ray image.');
     setSubmitting(true);
     try {
-      const result = await uploadXray(assessmentId, file);
+      const result = await uploadXray(assessmentId, file, region);
       setInfo(result.message || 'X-ray uploaded successfully.');
       navigate('/assessment/processing');
     } catch (err) {
@@ -409,6 +431,36 @@ export default function XrayUpload() {
             {info}
           </div>
         ) : null}
+
+        {/* Required X-Ray Body Region Selector */}
+        <div className="xray-region-selection-box" style={{ width: '100%', marginBottom: '1.25rem' }}>
+          <label htmlFor="xray-region-select" style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: '#e2e8f0', marginBottom: '0.45rem' }}>
+            Select Body Region / X-Ray Type <span style={{ color: '#ef4444' }}>*</span>
+          </label>
+          <select
+            id="xray-region-select"
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            required
+            style={{
+              width: '100%',
+              padding: '0.75rem 1rem',
+              backgroundColor: 'rgba(15, 23, 42, 0.85)',
+              border: '1px solid rgba(56, 189, 248, 0.4)',
+              borderRadius: '10px',
+              color: '#f8fafc',
+              fontSize: '0.95rem',
+              outline: 'none',
+              cursor: 'pointer',
+            }}
+          >
+            {REGION_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value} style={{ backgroundColor: '#0f172a', color: '#f8fafc' }}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
         {/* Drag & Drop Glass Radiology Upload Zone */}
         <div

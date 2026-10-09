@@ -217,8 +217,12 @@ def apply_triage(evidence: dict[str, Any]) -> dict[str, Any]:
         consultation_rules_triggered.append("rule_c4_multi_symptom_or_moderate_severity")
         supporting_evidence_points.append(f"Multiple active clinical findings identified ({len(present_symptoms)} present).")
 
-    # Rule C5: Specific clinical symptoms requiring doctor evaluation (e.g. headache, abdominal pain, wheezing)
-    consult_names = {"headache", "migraine", "photophobia", "phonophobia", "abdominal pain", "wheezing", "arthralgia", "back pain"}
+    # Rule C5: Specific clinical symptoms requiring doctor evaluation (e.g. headache, abdominal pain, wheezing, musculoskeletal injury)
+    consult_names = {
+        "headache", "migraine", "photophobia", "phonophobia", "abdominal pain",
+        "wheezing", "arthralgia", "back pain", "wrist pain", "wrist injury",
+        "fall/trauma", "reduced movement", "swelling", "tenderness"
+    }
     matched_consult_names = present_names.intersection(consult_names)
     if matched_consult_names:
         consultation_rules_triggered.append("rule_c5_specialty_consultation_indicated")

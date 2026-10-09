@@ -691,7 +691,7 @@ export default function Dashboard() {
                 // Title from inputs
                 let title = 'Symptoms Assessment';
                 if (inputList.includes('xray') && !inputList.includes('symptoms')) {
-                  title = 'Chest X-Ray Assessment';
+                  title = 'X-Ray Assessment';
                 } else if (inputList.includes('medical_report') && !inputList.includes('symptoms')) {
                   title = 'Medical Report Assessment';
                 } else if (inputList.length > 1) {

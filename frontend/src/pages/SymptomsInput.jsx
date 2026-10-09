@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ErrorMessage from '../components/ErrorMessage';
-import { submitSymptoms } from '../services/symptomService';
+import { submitSymptoms, analyzeSymptoms } from '../services/symptomService';
 import { useAssessment } from '../hooks/useAssessment';
 import { INPUT_TYPES } from '../utils/constants';
 import './NewAssessment.css';
@@ -327,9 +327,8 @@ export default function SymptomsInput() {
   const { assessmentId, inputTypes } = useAssessment();
   const [text, setText] = useState('');
   const [stage, setStage] = useState('input'); // 'input' | 'followup'
-  const [chestPain, setChestPain] = useState('No');
-  const [breathlessness, setBreathlessness] = useState('No');
-  const [duration, setDuration] = useState('3 to 7 days');
+  const [followupQuestions, setFollowupQuestions] = useState([]);
+  const [followupAnswers, setFollowupAnswers] = useState({});
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -339,21 +338,31 @@ export default function SymptomsInput() {
     return '/assessment/processing';
   };
 
-  const handleInitialSubmit = (e) => {
+  const handleInitialSubmit = async (e) => {
     e.preventDefault();
     setError('');
     if (!assessmentId) return setError('No assessment in progress. Start a new assessment.');
     if (!text.trim()) return setError('Please describe your symptoms.');
 
-    const lower = text.toLowerCase();
-    const hasChestPain = lower.includes('chest pain') || lower.includes('chest tightness');
-    const hasBreath = lower.includes('breath') || lower.includes('shortness of breath');
-    const hasDuration = lower.includes('day') || lower.includes('week') || lower.includes('month');
-
-    if (hasChestPain && hasBreath && hasDuration) {
-      finalizeAndSubmit(text.trim());
-    } else {
-      setStage('followup');
+    setSubmitting(true);
+    try {
+      const res = await analyzeSymptoms(assessmentId, text.trim());
+      if (res?.followups?.needed && Array.isArray(res?.followups?.questions) && res.followups.questions.length > 0) {
+        setFollowupQuestions(res.followups.questions);
+        const initialAnswers = {};
+        res.followups.questions.forEach((q) => {
+          initialAnswers[q.id] = q.options ? q.options[0] : 'No';
+        });
+        setFollowupAnswers(initialAnswers);
+        setStage('followup');
+      } else {
+        await finalizeAndSubmit(text.trim());
+      }
+    } catch {
+      // In case preview check encounters an issue, proceed directly with submission
+      await finalizeAndSubmit(text.trim());
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -372,16 +381,15 @@ export default function SymptomsInput() {
 
   const handleFollowupConfirm = (e) => {
     e.preventDefault();
-    const clarifications = [];
-    if (chestPain === 'No') clarifications.push("I don't have chest pain");
-    else if (chestPain === 'Yes') clarifications.push('I have chest pain');
+    const clarifications = followupQuestions.map((q) => {
+      const ans = followupAnswers[q.id] || (q.options ? q.options[0] : 'Not sure');
+      return `${q.target}: ${ans}`;
+    });
 
-    if (breathlessness === 'No') clarifications.push("I don't have shortness of breath");
-    else if (breathlessness === 'Yes') clarifications.push('I have shortness of breath');
+    const combinedText = clarifications.length > 0
+      ? `${text.trim()}.\n\nFollow-up responses: ${clarifications.join('. ')}.`
+      : text.trim();
 
-    if (duration) clarifications.push(`Symptoms present for ${duration}`);
-
-    const combinedText = `${text.trim()}. ${clarifications.join('. ')}.`;
     finalizeAndSubmit(combinedText);
   };
 
@@ -499,59 +507,30 @@ export default function SymptomsInput() {
             </div>
 
             <div className="followup-card-group">
-              <div className="followup-question-box">
-                <h4 className="followup-q-title">
-                  1. Do you currently experience chest pain, tightness, or pressure?
-                </h4>
-                <div className="choice-row">
-                  {['No', 'Yes', 'Not sure'].map((opt) => (
-                    <button
-                      type="button"
-                      key={opt}
-                      className={`btn-choice ${chestPain === opt ? 'selected' : ''}`}
-                      onClick={() => setChestPain(opt)}
-                    >
-                      {opt}
-                    </button>
-                  ))}
+              {followupQuestions.map((q, idx) => (
+                <div className="followup-question-box" key={q.id}>
+                  <h4 className="followup-q-title">
+                    {idx + 1}. {q.question}
+                  </h4>
+                  <div className="choice-row">
+                    {(q.options || ['No', 'Yes', 'Not sure']).map((opt) => (
+                      <button
+                        type="button"
+                        key={opt}
+                        className={`btn-choice ${(followupAnswers[q.id] || q.options?.[0]) === opt ? 'selected' : ''}`}
+                        onClick={() =>
+                          setFollowupAnswers((prev) => ({
+                            ...prev,
+                            [q.id]: opt,
+                          }))
+                        }
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-
-              <div className="followup-question-box">
-                <h4 className="followup-q-title">
-                  2. Do you have shortness of breath or difficulty breathing?
-                </h4>
-                <div className="choice-row">
-                  {['No', 'Yes', 'Not sure'].map((opt) => (
-                    <button
-                      type="button"
-                      key={opt}
-                      className={`btn-choice ${breathlessness === opt ? 'selected' : ''}`}
-                      onClick={() => setBreathlessness(opt)}
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="followup-question-box">
-                <h4 className="followup-q-title">
-                  3. Approximately how long have you had these symptoms?
-                </h4>
-                <div className="choice-row">
-                  {['Under 3 days', '3 to 7 days', '1 to 2 weeks', 'More than 2 weeks'].map((opt) => (
-                    <button
-                      type="button"
-                      key={opt}
-                      className={`btn-choice ${duration === opt ? 'selected' : ''}`}
-                      onClick={() => setDuration(opt)}
-                    >
-                      {opt}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              ))}
             </div>
 
             <div className="na-panel-footer">

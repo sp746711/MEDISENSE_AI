@@ -74,6 +74,9 @@ def submit_symptoms(
         db.add(fallback_row)
         created_rows.append(fallback_row)
 
+    from app.ai.followup_engine import suggest_followups
+    followup_res = suggest_followups(symptoms=extracted_symptoms)
+
     if assessment.status == "draft":
         assessment.status = "inputs_received"
     db.add(assessment)
@@ -83,6 +86,7 @@ def submit_symptoms(
         "status": "extracted",
         "message": f"Successfully extracted {len(created_rows)} symptom finding(s).",
         "raw_text_stored": True,
+        "followups": followup_res,
         "extracted": [
             {
                 "symptom": r.symptom,
@@ -93,6 +97,27 @@ def submit_symptoms(
             }
             for r in created_rows
         ],
+    }
+
+
+@router.post("/{assessment_id}/symptoms/analyze")
+def analyze_symptoms_preview(
+    assessment_id: UUID,
+    payload: SymptomSubmitRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> dict:
+    _owned(db, assessment_id, current_user.user_id)
+    from app.ai.symptom_nlp import extract_symptoms
+    from app.ai.followup_engine import suggest_followups
+
+    nlp_result = extract_symptoms(payload.raw_text)
+    extracted = nlp_result.get("symptoms", [])
+    followup_res = suggest_followups(symptoms=extracted)
+    return {
+        "status": "analyzed",
+        "extracted": extracted,
+        "followups": followup_res,
     }
 
 

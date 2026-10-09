@@ -397,12 +397,12 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
     # Musculoskeletal & Skin
     "back pain": {
         "canonical": "back pain",
-        "domain": "bones",
+        "domain": "musculoskeletal",
         "body_area": "back/spine",
     },
     "joint pain": {
         "canonical": "arthralgia",
-        "domain": "joints",
+        "domain": "musculoskeletal",
         "body_area": "joints",
     },
     "muscle ache": {
@@ -414,6 +414,315 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "canonical": "body ache",
         "domain": "systemic",
         "body_area": "whole body",
+    },
+    # Wrist & Upper Extremity Musculoskeletal / Injury
+    "right wrist injury": {
+        "canonical": "wrist injury",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "RIGHT",
+    },
+    "left wrist injury": {
+        "canonical": "wrist injury",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "LEFT",
+    },
+    "wrist injury": {
+        "canonical": "wrist injury",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "right wrist pain": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "RIGHT",
+    },
+    "left wrist pain": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "LEFT",
+    },
+    "pain in my right wrist": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "RIGHT",
+    },
+    "pain in right wrist": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "RIGHT",
+    },
+    "pain in my left wrist": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "LEFT",
+    },
+    "pain in left wrist": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "LEFT",
+    },
+    "pain in my wrist": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "pain in wrist": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "wrist pain": {
+        "canonical": "wrist pain",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "right wrist swelling": {
+        "canonical": "wrist swelling",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "RIGHT",
+    },
+    "wrist swelling": {
+        "canonical": "wrist swelling",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "swollen wrist": {
+        "canonical": "wrist swelling",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "swelling in wrist": {
+        "canonical": "wrist swelling",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "swollen": {
+        "canonical": "swelling",
+        "domain": "musculoskeletal",
+        "body_area": "extremity/joints",
+    },
+    "swelling": {
+        "canonical": "swelling",
+        "domain": "musculoskeletal",
+        "body_area": "extremity/joints",
+    },
+    "right wrist tenderness": {
+        "canonical": "wrist tenderness",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+        "laterality": "RIGHT",
+    },
+    "wrist tenderness": {
+        "canonical": "wrist tenderness",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "tender wrist": {
+        "canonical": "wrist tenderness",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "tenderness in wrist": {
+        "canonical": "wrist tenderness",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "tenderness": {
+        "canonical": "tenderness",
+        "domain": "musculoskeletal",
+        "body_area": "extremity/joints",
+    },
+    "tender": {
+        "canonical": "tenderness",
+        "domain": "musculoskeletal",
+        "body_area": "extremity/joints",
+    },
+    "reduced wrist movement": {
+        "canonical": "reduced movement",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "limited wrist movement": {
+        "canonical": "reduced movement",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "difficulty moving wrist": {
+        "canonical": "reduced movement",
+        "domain": "musculoskeletal",
+        "body_area": "wrist",
+    },
+    "reduced range of motion": {
+        "canonical": "reduced movement",
+        "domain": "musculoskeletal",
+        "body_area": "extremity/joints",
+    },
+    "reduced movement": {
+        "canonical": "reduced movement",
+        "domain": "musculoskeletal",
+        "body_area": "extremity/joints",
+    },
+    "limited movement": {
+        "canonical": "reduced movement",
+        "domain": "musculoskeletal",
+        "body_area": "extremity/joints",
+    },
+    "difficulty moving": {
+        "canonical": "reduced movement",
+        "domain": "musculoskeletal",
+        "body_area": "extremity/joints",
+    },
+    # Trauma & Mechanism of Injury
+    "fall onto outstretched hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "upper extremity",
+    },
+    "fall onto outstretched right hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "upper extremity",
+        "laterality": "RIGHT",
+    },
+    "fell onto my right hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "right hand",
+        "laterality": "RIGHT",
+    },
+    "fell onto right hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "right hand",
+        "laterality": "RIGHT",
+    },
+    "fall onto right hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "right hand",
+        "laterality": "RIGHT",
+    },
+    "fell onto my left hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "left hand",
+        "laterality": "LEFT",
+    },
+    "fell onto left hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "left hand",
+        "laterality": "LEFT",
+    },
+    "fall onto hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "hand",
+    },
+    "fell onto hand": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "hand",
+    },
+    "pain after fall": {
+        "canonical": "pain after fall",
+        "domain": "injury/trauma",
+        "body_area": "musculoskeletal",
+    },
+    "trauma/injury": {
+        "canonical": "trauma/injury",
+        "domain": "injury/trauma",
+        "body_area": "unspecified",
+    },
+    "trauma": {
+        "canonical": "trauma/injury",
+        "domain": "injury/trauma",
+        "body_area": "unspecified",
+    },
+    "injury": {
+        "canonical": "trauma/injury",
+        "domain": "injury/trauma",
+        "body_area": "unspecified",
+    },
+    "fell": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "unspecified",
+    },
+    "fall": {
+        "canonical": "fall/trauma",
+        "domain": "injury/trauma",
+        "body_area": "unspecified",
+    },
+    "right hand pain": {
+        "canonical": "hand pain",
+        "domain": "musculoskeletal",
+        "body_area": "hand",
+        "laterality": "RIGHT",
+    },
+    "hand pain": {
+        "canonical": "hand pain",
+        "domain": "musculoskeletal",
+        "body_area": "hand",
+    },
+    "tingling in fingers": {
+        "canonical": "tingling",
+        "domain": "neurological",
+        "body_area": "fingers",
+    },
+    "tingling in hands": {
+        "canonical": "tingling",
+        "domain": "neurological",
+        "body_area": "hand",
+    },
+    "tingling": {
+        "canonical": "tingling",
+        "domain": "neurological",
+        "body_area": "extremities",
+    },
+    "numbness in fingers": {
+        "canonical": "numbness",
+        "domain": "neurological",
+        "body_area": "fingers",
+    },
+    "numbness in hands": {
+        "canonical": "numbness",
+        "domain": "neurological",
+        "body_area": "hand",
+    },
+    "numbness in my fingers": {
+        "canonical": "numbness",
+        "domain": "neurological",
+        "body_area": "fingers",
+    },
+    "knee pain": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "ankle pain": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+    },
+    "shoulder pain": {
+        "canonical": "shoulder pain",
+        "domain": "musculoskeletal",
+        "body_area": "shoulder",
+    },
+    "elbow pain": {
+        "canonical": "elbow pain",
+        "domain": "musculoskeletal",
+        "body_area": "elbow",
     },
     "rash": {
         "canonical": "skin rash",
@@ -457,16 +766,22 @@ CONTRASTIVE_CONJUNCTIONS = re.compile(
     re.IGNORECASE,
 )
 
+# Affirmative indicators that terminate preceding negation scope within a clause
+AFFIRMATIVE_RESETS = re.compile(
+    r"\b(?:and\s+i\s+have|i\s+have|there\s+is|my\s+\w+\s+is|with|developed|experiencing|complaining\s+of|suffering\s+from|can\s+move)\b",
+    re.IGNORECASE,
+)
+
 # Proximity severity regex - only applies when explicitly modifying the symptom in local context
 SEVERITY_PATTERNS = [
     (re.compile(r"\b(severe|intense|acute|excruciating|unbearable|worst)\b", re.IGNORECASE), "severe"),
-    (re.compile(r"\b(moderate|considerable|medium)\b", re.IGNORECASE), "moderate"),
+    (re.compile(r"\b(moderate|considerable|medium|significant)\b", re.IGNORECASE), "moderate"),
     (re.compile(r"\b(mild|slight|minimal|minor|low)\b", re.IGNORECASE), "mild"),
 ]
 
 LATERALITY_PATTERNS = [
-    (re.compile(r"\b(right[- ]sided|right side|on the right side|on the right)\b", re.IGNORECASE), "RIGHT"),
-    (re.compile(r"\b(left[- ]sided|left side|on the left side|on the left)\b", re.IGNORECASE), "LEFT"),
+    (re.compile(r"\b(right[- ]sided|right side|on the right side|on the right|right\s+(?:wrist|hand|arm|leg|ankle|knee|shoulder|foot|side|eye|ear))\b", re.IGNORECASE), "RIGHT"),
+    (re.compile(r"\b(left[- ]sided|left side|on the left side|on the left|left\s+(?:wrist|hand|arm|leg|ankle|knee|shoulder|foot|side|eye|ear))\b", re.IGNORECASE), "LEFT"),
     (re.compile(r"\b(bilateral|both sides|on both sides)\b", re.IGNORECASE), "BILATERAL"),
 ]
 
@@ -586,8 +901,16 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     preceding = clause[:start]
                     is_negated = False
                     for neg_pat in NEGATION_PATTERNS:
-                        if re.search(neg_pat, preceding, re.IGNORECASE):
+                        for neg_m in re.finditer(neg_pat, preceding, re.IGNORECASE):
+                            between = preceding[neg_m.end():]
+                            # Check if an affirmative phrase or subject assertion resets the negation
+                            if AFFIRMATIVE_RESETS.search(between):
+                                continue
+                            if re.search(r",\s*(?:my\b|i\b|the\b|there\b|we\b)", between, re.IGNORECASE):
+                                continue
                             is_negated = True
+                            break
+                        if is_negated:
                             break
 
                     state = "ABSENT" if is_negated else "PRESENT"
@@ -609,7 +932,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                                     break
 
                     # Qualifiers for specific clinical presentation
-                    item_laterality = None
+                    item_laterality = meta.get("laterality")
                     item_quality = None
                     item_trigger = None
                     item_context = None
@@ -625,6 +948,29 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         item_context = "because of the cough"
                     if canonical == "fever" and temp_val:
                         item_context = f"temperature around {temp_val}"
+
+                    item_body_area = meta["body_area"]
+                    # Musculoskeletal & Wrist injury qualifiers
+                    if meta.get("domain") in {"musculoskeletal", "injury/trauma"} and state == "PRESENT":
+                        if "wrist" in clause_lower or "wrist" in full_text_lower:
+                            if meta.get("body_area") in {"extremity/joints", "musculoskeletal", "upper extremity", "unspecified"}:
+                                item_body_area = "wrist"
+                        if not item_laterality:
+                            if "right" in clause_lower:
+                                item_laterality = "RIGHT"
+                            elif "left" in clause_lower:
+                                item_laterality = "LEFT"
+                            elif global_laterality and ("wrist" in clause_lower or item_body_area in {"wrist", "hand", "upper extremity"}):
+                                item_laterality = global_laterality
+
+                        if "moving" in clause_lower or "gripping" in clause_lower:
+                            item_trigger = "moving or gripping objects"
+                            item_context = "especially when moving or gripping objects"
+                        elif "because of the pain" in clause_lower:
+                            item_context = "because of the pain"
+                        elif "after fall" in clause_lower or "after falling" in clause_lower:
+                            item_trigger = "fall"
+                            item_context = "after fall"
 
                     # Headache specific rich qualifiers
                     if canonical in {"headache", "migraine"} and state == "PRESENT":
@@ -653,7 +999,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         "state": state,
                         "duration": clause_duration if state == "PRESENT" else None,
                         "severity": sev if state == "PRESENT" else None,
-                        "body_area": meta["body_area"],
+                        "body_area": item_body_area,
                         "laterality": item_laterality,
                         "quality": item_quality,
                         "trigger": item_trigger,

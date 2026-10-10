@@ -296,6 +296,31 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "neurological",
         "body_area": "head",
     },
+    "feel confused": {
+        "canonical": "confusion",
+        "domain": "neurological",
+        "body_area": "head",
+    },
+    "felt confused": {
+        "canonical": "confusion",
+        "domain": "neurological",
+        "body_area": "head",
+    },
+    "mental confusion": {
+        "canonical": "confusion",
+        "domain": "neurological",
+        "body_area": "head",
+    },
+    "confused": {
+        "canonical": "confusion",
+        "domain": "neurological",
+        "body_area": "head",
+    },
+    "confusion": {
+        "canonical": "confusion",
+        "domain": "neurological",
+        "body_area": "head",
+    },
     "started gradually": {
         "canonical": "gradual onset",
         "domain": "general",
@@ -804,6 +829,16 @@ SEVERITY_PATTERNS = [
     (re.compile(r"\b(mild|slight|minimal|minor|low)\b", re.IGNORECASE), "mild"),
 ]
 
+DISALLOWED_SEVERITY_INTERVENING = re.compile(
+    r"\b(?:and|but|with|also|while|as well as|have|had|having|feel|felt|feeling|am|is|was|my|i|me|we|he|she|they|there)\b|[,;.?!\n]",
+    re.IGNORECASE,
+)
+
+SEVERITY_REGEX = re.compile(
+    r"\b(severe|intense|acute|excruciating|unbearable|worst|moderate|considerable|medium|significant|mild|slight|minimal|minor|low)\b",
+    re.IGNORECASE,
+)
+
 LATERALITY_PATTERNS = [
     (re.compile(r"\b(right[- ]sided|right side|on the right side|on the right|right\s+(?:wrist|hand|arm|leg|ankle|knee|shoulder|foot|side|eye|ear))\b", re.IGNORECASE), "RIGHT"),
     (re.compile(r"\b(left[- ]sided|left side|on the left side|on the left|left\s+(?:wrist|hand|arm|leg|ankle|knee|shoulder|foot|side|eye|ear))\b", re.IGNORECASE), "LEFT"),
@@ -944,20 +979,42 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     state = "ABSENT" if is_negated else "PRESENT"
                     seen_canonicals.add(canonical)
 
-                    # Severity: NEVER globally inferred. Check local proximity window (within 4 words before or 3 words after)
+                    # Severity: NEVER globally inferred. Must directly modify the symptom.
                     sev = ClinicalSeverity("UNKNOWN")
                     if state == "PRESENT":
                         if meta.get("explicit_severity"):
                             sev = ClinicalSeverity(meta["explicit_severity"].upper())
                         else:
-                            window_before = " ".join(preceding.split()[-4:]) if preceding.split() else ""
-                            post_text = clause[end:].split()
-                            window_after = " ".join(post_text[:3]) if post_text else ""
-                            window = window_before + " " + window_after
-                            for sev_re, sev_name in SEVERITY_PATTERNS:
-                                if sev_re.search(window):
-                                    sev = ClinicalSeverity(sev_name.upper())
-                                    break
+                            # 1. Direct pre-modifier check (e.g. "mild fever", "severe right-sided throbbing headache")
+                            sev_matches = list(SEVERITY_REGEX.finditer(preceding))
+                            if sev_matches:
+                                last_m = sev_matches[-1]
+                                between = preceding[last_m.end():]
+                                if not DISALLOWED_SEVERITY_INTERVENING.search(between):
+                                    val = last_m.group(1).lower()
+                                    if val in {"severe", "intense", "acute", "excruciating", "unbearable", "worst"}:
+                                        sev = ClinicalSeverity("SEVERE")
+                                    elif val in {"moderate", "considerable", "medium", "significant"}:
+                                        sev = ClinicalSeverity("MODERATE")
+                                    elif val in {"mild", "slight", "minimal", "minor", "low"}:
+                                        sev = ClinicalSeverity("MILD")
+
+                            # 2. Direct post-modifier check (predicative position, e.g. "headache is severe")
+                            if sev == ClinicalSeverity("UNKNOWN"):
+                                post_text = clause[end:]
+                                post_m = re.match(
+                                    r"^\s*(?:is|was|feels|became|feels\s+quite)?\s*(?:very|quite|extremely|fairly)?\s*(severe|intense|acute|excruciating|unbearable|worst|moderate|considerable|medium|significant|mild|slight|minimal|minor|low)\b",
+                                    post_text,
+                                    re.IGNORECASE,
+                                )
+                                if post_m:
+                                    val = post_m.group(1).lower()
+                                    if val in {"severe", "intense", "acute", "excruciating", "unbearable", "worst"}:
+                                        sev = ClinicalSeverity("SEVERE")
+                                    elif val in {"moderate", "considerable", "medium", "significant"}:
+                                        sev = ClinicalSeverity("MODERATE")
+                                    elif val in {"mild", "slight", "minimal", "minor", "low"}:
+                                        sev = ClinicalSeverity("MILD")
 
                     # Qualifiers for specific clinical presentation
                     item_laterality = meta.get("laterality")

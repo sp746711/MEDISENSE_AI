@@ -200,7 +200,16 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             elif s.get("context") and s.get("context") != s.get("trigger"):
                 if len(s.get("context", "")) < 80:
                     qualifiers.append(s["context"])
-            qual_str = ", ".join(qualifiers) if qualifiers else "—"
+            # Deduplicate qualifiers display text while preserving order (e.g. avoid 'mostly dry, mostly dry')
+            seen_q = set()
+            deduped_qualifiers = []
+            for q in qualifiers:
+                q_clean = str(q).strip()
+                q_norm = q_clean.lower()
+                if q_clean and q_norm not in seen_q:
+                    seen_q.add(q_norm)
+                    deduped_qualifiers.append(q_clean)
+            qual_str = ", ".join(deduped_qualifiers) if deduped_qualifiers else "—"
 
             symp_data.append(
                 [

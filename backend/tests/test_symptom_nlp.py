@@ -55,3 +55,98 @@ def test_extract_cough_character_and_mucus():
     # Check that unrelated symptoms are not created or contaminated
     assert "mucus" not in symptoms.get("fever", {})
 
+
+def test_regression_a_mild_fever_and_sore_throat():
+    """Requirement A: 'I have a mild fever and sore throat.'
+    Expected: fever = PRESENT / MILD, sore throat = PRESENT / UNKNOWN (no severity leakage).
+    """
+    res = extract_symptoms("I have a mild fever and sore throat.")
+    s_map = {s["symptom"]: s for s in res["symptoms"]}
+
+    assert "fever" in s_map
+    assert s_map["fever"]["state"] == "PRESENT"
+    assert s_map["fever"]["severity"] == "MILD"
+
+    assert "sore throat" in s_map
+    assert s_map["sore throat"]["state"] == "PRESENT"
+    assert s_map["sore throat"]["severity"] == "UNKNOWN"
+
+
+def test_regression_b_tired_and_mild_chest_discomfort_when_coughing():
+    """Requirement B: 'I feel tired and have mild chest discomfort when coughing.'
+    Expected: fatigue = PRESENT / UNKNOWN, chest discomfort = PRESENT / MILD / trigger coughing.
+    """
+    res = extract_symptoms("I feel tired and have mild chest discomfort when coughing.")
+    s_map = {s["symptom"]: s for s in res["symptoms"]}
+
+    # Fatigue / tiredness
+    fatigue = s_map.get("tiredness") or s_map.get("fatigue")
+    assert fatigue is not None
+    assert fatigue["state"] == "PRESENT"
+    assert fatigue["severity"] == "UNKNOWN"
+
+    # Chest discomfort
+    assert "chest discomfort" in s_map
+    cd = s_map["chest discomfort"]
+    assert cd["state"] == "PRESENT"
+    assert cd["severity"] == "MILD"
+    assert cd.get("trigger") == "coughing"
+
+
+def test_regression_c_do_not_feel_confused():
+    """Requirement C: 'I do not feel confused.'
+    Expected: confusion = ABSENT (canonical concept).
+    """
+    res = extract_symptoms("I do not feel confused.")
+    s_map = {s["symptom"]: s for s in res["symptoms"]}
+
+    assert "confusion" in s_map
+    assert s_map["confusion"]["state"] == "ABSENT"
+
+
+def test_regression_d_no_severe_breathing_difficulty():
+    """Requirement D: 'I do not have severe breathing difficulty.'
+    Expected: severe breathing difficulty = ABSENT (exact negation scope preserved).
+    """
+    res = extract_symptoms("I do not have severe breathing difficulty.")
+    s_map = {s["symptom"]: s for s in res["symptoms"]}
+
+    assert "severe breathing difficulty" in s_map
+    assert s_map["severe breathing difficulty"]["state"] == "ABSENT"
+    # Must NOT create difficulty breathing PRESENT
+    assert s_map.get("difficulty breathing", {}).get("state") != "PRESENT"
+
+
+def test_regression_e_headache_duration_scoping():
+    """Requirement E: 'I have had a headache for 2 days. I feel nauseous.'
+    Expected: headache duration = 2 days, nausea duration = UNKNOWN (None).
+    """
+    res = extract_symptoms("I have had a headache for 2 days. I feel nauseous.")
+    s_map = {s["symptom"]: s for s in res["symptoms"]}
+
+    assert "headache" in s_map
+    assert s_map["headache"]["state"] == "PRESENT"
+    assert "2 days" in (s_map["headache"]["duration"] or "")
+
+    assert "nausea" in s_map
+    assert s_map["nausea"]["state"] == "PRESENT"
+    assert s_map["nausea"]["duration"] is None
+
+
+def test_regression_f_chest_discomfort_not_erased_by_negative_chest_pain_at_rest():
+    """Requirement F: 'I have mild chest discomfort when coughing. I do not have chest pain when resting.'
+    Expected BOTH: chest discomfort = PRESENT / MILD / trigger coughing, chest pain at rest = ABSENT.
+    The negative finding must not erase the positive finding.
+    """
+    res = extract_symptoms("I have mild chest discomfort when coughing. I do not have chest pain when resting.")
+    s_map = {s["symptom"]: s for s in res["symptoms"]}
+
+    assert "chest discomfort" in s_map
+    assert s_map["chest discomfort"]["state"] == "PRESENT"
+    assert s_map["chest discomfort"]["severity"] == "MILD"
+    assert s_map["chest discomfort"].get("trigger") == "coughing"
+
+    assert "chest pain at rest" in s_map
+    assert s_map["chest pain at rest"]["state"] == "ABSENT"
+
+

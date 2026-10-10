@@ -279,6 +279,8 @@ def combine_evidence(
         relevant_critical_checks.extend(["sudden onset", "weakness", "speech difficulty", "fever"])
     elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
         relevant_critical_checks.extend(["severe swelling/deformity", "numbness", "severe bleeding"])
+    elif any(s.get("domain") in {"gi", "gastrointestinal", "abdominal"} for s in current_present) or any("abdominal" in s.get("symptom", "").lower() for s in current_present):
+        relevant_critical_checks.extend(["sudden onset", "vomiting", "blood in stool", "fever"])
 
     for crit in relevant_critical_checks:
         addressed = False
@@ -295,6 +297,10 @@ def combine_evidence(
         elif crit == "weakness" and any("weakness" in n or "numb" in n for n in all_known_names):
             addressed = True
         elif crit == "speech difficulty" and any("speech" in n for n in all_known_names):
+            addressed = True
+        elif crit == "vomiting" and any("vomit" in n for n in all_known_names):
+            addressed = True
+        elif crit == "blood in stool" and any("blood in stool" in n for n in all_known_names):
             addressed = True
         elif crit == "severe bleeding" and any("bleed" in n or "hemorrhage" in n for n in all_known_names):
             addressed = True

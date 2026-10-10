@@ -1,9 +1,13 @@
 import { apiRequest } from './api';
 
-export async function submitSymptoms(assessmentId, rawText) {
+export async function submitSymptoms(assessmentId, rawText, followupAnswers = null) {
+  const body = { raw_text: rawText };
+  if (followupAnswers && Object.keys(followupAnswers).length > 0) {
+    body.followup_answers = followupAnswers;
+  }
   return apiRequest(`/assessments/${assessmentId}/symptoms`, {
     method: 'POST',
-    body: { raw_text: rawText },
+    body,
   });
 }
 

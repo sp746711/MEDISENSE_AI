@@ -31,6 +31,7 @@ class AssessmentResponse(BaseModel):
 
 class SymptomSubmitRequest(BaseModel):
     raw_text: str = Field(..., min_length=1, max_length=5000)
+    followup_answers: Optional[dict[str, Any]] = None
 
 
 class AssistantChatRequest(BaseModel):

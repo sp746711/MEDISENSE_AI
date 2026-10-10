@@ -7,6 +7,7 @@ Preserves user responses as PRESENT, ABSENT, or UNKNOWN evidence states.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 CRITICAL_FOLLOWUP_DEFINITIONS = [
@@ -124,6 +125,40 @@ CRITICAL_FOLLOWUP_DEFINITIONS = [
 ]
 
 
+def is_target_addressed(target: str, symptoms: list[dict[str, Any]] | None = None) -> bool:
+    """Check if a clinical target is already addressed by known symptoms."""
+    symptoms = symptoms or []
+    known_names = {s.get("symptom", "").lower() for s in symptoms}
+    if target in {"vomiting", "vomiting (red flag)"}:
+        # Nausea does NOT answer vomiting; explicit vomiting information required
+        return any("vomit" in n for n in known_names)
+    if target == "duration":
+        return any(s.get("duration") for s in symptoms)
+    if target in known_names:
+        return True
+    if target == "severe swelling/deformity" and any("swelling" in n or "deform" in n for n in known_names):
+        return True
+    if target == "chest pain" and any("chest" in n for n in known_names):
+        return True
+    if target == "difficulty breathing" and any("breath" in n or "dyspnea" in n for n in known_names):
+        return True
+    if target == "fever" and any("fever" in n or "temperature" in n for n in known_names):
+        return True
+    if target == "numbness" and any("numb" in n or "tingling" in n for n in known_names):
+        return True
+    if target == "reduced movement" and any("movement" in n or "motion" in n for n in known_names):
+        return True
+    if target == "fall/trauma" and any("fall" in n or "trauma" in n or "injury" in n for n in known_names):
+        return True
+    if target == "sudden onset":
+        return any(s.get("onset") in {"GRADUAL", "SUDDEN"} for s in symptoms) or any("onset" in n for n in known_names)
+    if target == "fainting" and any("faint" in n or "seizure" in n for n in known_names):
+        return True
+    if target == "speech difficulty" and any("speech" in n for n in known_names):
+        return True
+    return False
+
+
 def suggest_followups(
     symptoms: list[dict[str, Any]] | None = None,
     evidence: dict[str, Any] | None = None,
@@ -137,9 +172,7 @@ def suggest_followups(
         symptoms_present = [s for s in symptoms if s.get("state") == "PRESENT"]
         symptoms_absent = [s for s in symptoms if s.get("state") == "ABSENT"]
 
-    known_names = {
-        s.get("symptom", "").lower() for s in (symptoms_present + symptoms_absent)
-    }
+    all_symptoms = symptoms_present + symptoms_absent
 
     # Detect active clinical domains from present symptoms
     present_domains = {s.get("domain", "").lower() for s in symptoms_present}
@@ -170,43 +203,19 @@ def suggest_followups(
 
     questions: list[dict[str, Any]] = []
 
-    def is_target_addressed(target: str) -> bool:
-        if target == "duration":
-            return has_duration
-        if target in known_names:
-            return True
-        if target == "severe swelling/deformity" and any("swelling" in n or "deform" in n for n in known_names):
-            return True
-        if target == "chest pain" and any("chest" in n for n in known_names):
-            return True
-        if target == "difficulty breathing" and any("breath" in n or "dyspnea" in n for n in known_names):
-            return True
-        if target == "fever" and any("fever" in n or "temperature" in n for n in known_names):
-            return True
-        if target == "numbness" and any("numb" in n or "tingling" in n for n in known_names):
-            return True
-        if target == "reduced movement" and any("movement" in n or "motion" in n for n in known_names):
-            return True
-        if target == "fall/trauma" and any("fall" in n or "trauma" in n or "injury" in n for n in known_names):
-            return True
-        if target == "sudden onset" and any("onset" in n for n in known_names):
-            return True
-        if target == "vomiting" and any("vomit" in n or "nausea" in n for n in known_names):
-            return True
-        if target == "fainting" and any("faint" in n or "seizure" in n for n in known_names):
-            return True
-        if target == "speech difficulty" and any("speech" in n for n in known_names):
-            return True
-        return False
-
-    # Filter candidate definitions by relevant domains
+    # Filter candidate definitions by relevant domains with clinical priority
     candidate_defs: list[dict[str, Any]] = []
 
+    # Prioritize neurological questions when headache/neurological presentation is active
+    if is_neuro and any(s.get("symptom") in {"headache", "migraine"} for s in symptoms_present):
+        candidate_defs.extend([
+            d for d in CRITICAL_FOLLOWUP_DEFINITIONS if d["domain"] in {"neurological", "neurological/gi"}
+        ])
     if is_msk:
         candidate_defs.extend([
             d for d in CRITICAL_FOLLOWUP_DEFINITIONS if d["domain"] == "musculoskeletal"
         ])
-    if is_neuro:
+    if is_neuro and not any(s.get("symptom") in {"headache", "migraine"} for s in symptoms_present):
         candidate_defs.extend([
             d for d in CRITICAL_FOLLOWUP_DEFINITIONS if d["domain"] in {"neurological", "neurological/gi"}
         ])
@@ -234,7 +243,7 @@ def suggest_followups(
         if item["id"] in seen_ids:
             continue
         seen_ids.add(item["id"])
-        if not is_target_addressed(item["target"]):
+        if not is_target_addressed(item["target"], all_symptoms):
             questions.append(item)
 
     # Limit to maximum 3 questions
@@ -257,7 +266,7 @@ def apply_followup_answer(
     answer: str,
 ) -> list[dict[str, Any]]:
     """Update symptoms evidence list based on user's follow-up answer."""
-    updated = list(symptoms)
+    updated = [dict(s) for s in symptoms]
     q_map = {q["id"]: q for q in CRITICAL_FOLLOWUP_DEFINITIONS}
     target_def = q_map.get(question_id)
 
@@ -270,6 +279,32 @@ def apply_followup_answer(
         for s in updated:
             if s.get("state") == "PRESENT" and not s.get("duration"):
                 s["duration"] = answer
+        return updated
+
+    # q_sudden_onset: Map to onset attribute, NOT a fake symptom
+    if question_id == "q_sudden_onset" or target_name == "sudden onset":
+        ans_norm = answer.strip().lower()
+        if "not sure" in ans_norm or "unsure" in ans_norm:
+            onset_val = "UNKNOWN"
+        elif "gradual" in ans_norm or re.search(r"\bno\b", ans_norm):
+            onset_val = "GRADUAL"
+        elif "sudden" in ans_norm or "peak" in ans_norm or re.search(r"\byes\b", ans_norm):
+            onset_val = "SUDDEN"
+        else:
+            onset_val = "UNKNOWN"
+
+        matched = False
+        for s in updated:
+            if s.get("state") == "PRESENT":
+                s_name = s.get("symptom", "").lower()
+                if s_name in {"headache", "migraine"} or s.get("domain") == "neurological":
+                    s["onset"] = onset_val
+                    matched = True
+        if not matched:
+            for s in updated:
+                if s.get("state") == "PRESENT" and s.get("type") != "HISTORICAL" and s.get("symptom") not in {"gradual onset", "sudden onset"}:
+                    s["onset"] = onset_val
+                    break
         return updated
 
     # Map answers to state

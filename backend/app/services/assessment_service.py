@@ -41,6 +41,7 @@ def generate_assessment_feedback(
     symptoms_meta = evidence.get("symptoms", {})
     present = symptoms_meta.get("present", [])
     absent = symptoms_meta.get("absent", [])
+    historical = symptoms_meta.get("historical", [])
 
     report_meta = evidence.get("report", {})
     report_provided = report_meta.get("provided", False)
@@ -86,6 +87,10 @@ def generate_assessment_feedback(
     else:
         summary_sentences.append("No active physical symptoms reported.")
 
+    if historical:
+        h_desc = [f"{h.get('symptom')} ({h.get('history') or h.get('context') or 'historical occurrence'})" for h in historical]
+        summary_sentences.append(f"Historical context noted: {', '.join(h_desc)} (documented for clinical context, excluded from active acute symptom counts).")
+
     if absent:
         key_negatives = [s.get("symptom") for s in absent[:5]]
         summary_sentences.append(f"Patient explicitly confirmed absence of: {', '.join(key_negatives)}.")
@@ -94,15 +99,15 @@ def generate_assessment_feedback(
 
     if report_provided:
         if abnormal_rep:
-            abn_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')}, {r.get('interpretation')})" for r in abnormal_rep[:3]]
+            abn_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')}, {r.get('interpretation')})" for r in abnormal_rep]
             summary_sentences.append(f"Laboratory evaluation revealed {len(abnormal_rep)} out-of-range parameter(s): {', '.join(abn_names)}.")
         elif normal_rep:
             summary_sentences.append(f"All {len(normal_rep)} evaluated laboratory parameter(s) are within standard reference ranges.")
         if unknown_range_rep:
-            unk_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')})" for r in unknown_range_rep[:3]]
+            unk_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')})" for r in unknown_range_rep]
             summary_sentences.append(f"Recorded parameter(s) without standardized reference ranges: {', '.join(unk_names)} (status: UNKNOWN).")
         if qualitative_rep:
-            q_names = [f"{q.get('finding')} ({q.get('state')})" for q in qualitative_rep[:3]]
+            q_names = [f"{q.get('finding')} ({q.get('state')})" for q in qualitative_rep]
             summary_sentences.append(f"Medical report provided with qualitative findings: {', '.join(q_names)}.")
         elif narrative_rep:
             summary_sentences.append("Medical report provided with clinical history and examination details.")
@@ -259,7 +264,7 @@ def generate_assessment_feedback(
         dynamic_guidance = f"Comprehensive clinical evaluation is recommended for the acute headache pattern with a specialist ({suggested_spec})."
         dynamic_action = "Schedule an in-person consultation with a neurologist. Review any abnormal laboratory findings with your clinician; note that systemic or metabolic lab variations require medical interpretation to determine relevance to headache symptoms."
         if abnormal_rep:
-            abn_list = ', '.join([r.get('test_name') for r in abnormal_rep[:3]])
+            abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
             dynamic_action += f" Discuss specific abnormal laboratory findings ({abn_list}) with your doctor."
     elif is_msk:
         dynamic_guidance = "Orthopedic evaluation is advised to assess joint mobility, localized swelling, and structural integrity following trauma or limb strain."
@@ -274,6 +279,21 @@ def generate_assessment_feedback(
         "suggested_specialty": suggested_spec,
     }
 
+    # Historical symptoms structured representation
+    historical_symptoms = [
+        {
+            "symptom": h.get("symptom"),
+            "finding": h.get("symptom"),
+            "type": "HISTORICAL",
+            "history": h.get("history") or h.get("context") or "once or twice before",
+            "duration": None,
+            "status": "PRESENT",
+            "state": "PRESENT",
+            "source": h.get("source") or "user_input",
+        }
+        for h in historical
+    ]
+
     # 12. Safety Disclaimer
     safety_disclaimer = (
         "MEDICAL DISCLAIMER: MediSense AI is an academic clinical decision-support and health navigation tool. "
@@ -283,9 +303,13 @@ def generate_assessment_feedback(
 
     return {
         "assessment_summary": assessment_summary,
+        "current_symptoms": symptoms_identified,
         "current_symptom_pattern": symptoms_identified,
         "symptoms_identified": symptoms_identified,
+        "historical_symptoms": historical_symptoms,
+        "historical_context": historical_symptoms,
         "relevant_negative_findings": negative_red_flags,
+        "negative_findings": negative_red_flags,
         "negative_red_flags": negative_red_flags,
         "medical_report_interpretation": medical_report_message,
         "medical_report_findings": medical_report_findings,
@@ -296,8 +320,10 @@ def generate_assessment_feedback(
         "supporting_evidence": supporting_evidence,
         "reassuring_evidence": reassuring_evidence,
         "separate_contextual_findings": separate_contextual,
+        "additional_contextual_findings": separate_contextual,
         "contradictory_evidence": contradictory_evidence,
         "uncertain_missing_info": uncertain_missing,
+        "unknown_unassessed_info": uncertain_missing,
         "triage_level": triage_level,
         "triage_rationale": why_this_pathway,
         "why_this_triage_selected": why_this_pathway,
@@ -448,6 +474,8 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
                 onset = m_on.group(1)
 
         # Contextual inferences if not in prefix
+        if not sym_type and (s.symptom == "previous similar headache" or "once or twice before" in clean_ctx.lower() or "similar headache" in clean_ctx.lower()):
+            sym_type = "HISTORICAL"
         if not laterality and "right" in clean_ctx.lower() and s.symptom in {"headache", "migraine"}:
             laterality = "RIGHT"
         if not quality and "throbbing" in clean_ctx.lower() and s.symptom in {"headache", "migraine"}:
@@ -455,13 +483,15 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         if not trigger and "coughing" in clean_ctx.lower() and s.symptom == "chest discomfort":
             trigger = "coughing"
 
+        s_dur = None if sym_type == "HISTORICAL" else s.duration
+
         symptoms_list.append(
             {
                 "finding": s.symptom,
                 "symptom": s.symptom,
                 "state": s.state,
                 "status": s.state,
-                "duration": s.duration,
+                "duration": s_dur,
                 "severity": s.severity,
                 "body_area": s.body_area,
                 "laterality": laterality,

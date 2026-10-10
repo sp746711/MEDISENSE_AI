@@ -74,6 +74,11 @@ export default function AssessmentResult() {
 
   const symptomsPresent = evidence.symptoms?.present || [];
   const symptomsAbsent = evidence.symptoms?.absent || [];
+  const historicalSymptoms =
+    payload.feedback?.historical_symptoms ||
+    payload.feedback?.historical_context ||
+    evidence.symptoms?.historical ||
+    [];
   const reportFindings = payload.feedback?.medical_report_findings?.length
     ? payload.feedback.medical_report_findings
     : (evidence.report?.abnormal_findings || [])
@@ -135,6 +140,24 @@ export default function AssessmentResult() {
             </div>
           )}
         </EvidenceCard>
+
+        {/* 1b. HISTORICAL CONTEXT */}
+        {historicalSymptoms.length > 0 ? (
+          <EvidenceCard title="HISTORICAL CONTEXT">
+            <div className="symptoms-list">
+              {historicalSymptoms.map((h, idx) => (
+                <div key={idx} className="evidence-pill" style={{ background: '#f8fafc', borderColor: '#cbd5e1' }}>
+                  <span className="badge" style={{ background: '#64748b', color: '#fff' }}>HISTORICAL</span>
+                  <strong>{h.symptom || h.finding}</strong>
+                  <span className="pill-detail">{h.history || h.context || 'Documented occurrence'}</span>
+                </div>
+              ))}
+            </div>
+            <p className="small muted" style={{ marginTop: '0.5rem', marginBottom: 0 }}>
+              Historical findings are documented for clinical context and excluded from active acute symptom counts.
+            </p>
+          </EvidenceCard>
+        ) : null}
 
         {/* 2. MEDICAL REPORT */}
         <EvidenceCard title="MEDICAL REPORT FINDINGS">

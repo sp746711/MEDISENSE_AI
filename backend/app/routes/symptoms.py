@@ -30,6 +30,12 @@ def submit_symptoms(
     nlp_result = extract_symptoms(payload.raw_text)
     extracted_symptoms = nlp_result.get("symptoms", [])
 
+    if payload.followup_answers:
+        from app.ai.followup_engine import apply_followup_answer
+        for q_id, ans in payload.followup_answers.items():
+            if ans and str(ans).strip():
+                extracted_symptoms = apply_followup_answer(extracted_symptoms, q_id, str(ans).strip())
+
     # Clear prior symptoms for this assessment if re-submitting
     db.query(Symptom).filter(Symptom.assessment_id == assessment.assessment_id).delete()
 

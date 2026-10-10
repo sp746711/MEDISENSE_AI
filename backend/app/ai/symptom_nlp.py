@@ -216,6 +216,11 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "neurological",
         "body_area": "head",
     },
+    "confusion": {
+        "canonical": "confusion",
+        "domain": "neurological",
+        "body_area": "head/mental",
+    },
     "fainting": {
         "canonical": "fainting",
         "domain": "neurological/cardiovascular",
@@ -292,6 +297,11 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "body_area": "head",
     },
     "started gradually": {
+        "canonical": "gradual onset",
+        "domain": "general",
+        "body_area": "unspecified",
+    },
+    "gradually started": {
         "canonical": "gradual onset",
         "domain": "general",
         "body_area": "unspecified",
@@ -809,7 +819,7 @@ QUALITY_PATTERNS = [
 ]
 
 ONSET_PATTERNS = [
-    (re.compile(r"\b(gradual|gradually|started gradually)\b", re.IGNORECASE), "GRADUAL"),
+    (re.compile(r"\b(gradual|gradually|started gradually|gradually started)\b", re.IGNORECASE), "GRADUAL"),
     (re.compile(r"\b(sudden|suddenly|abrupt|abruptly)\b", re.IGNORECASE), "SUDDEN"),
 ]
 
@@ -843,11 +853,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
     extracted: list[dict[str, Any]] = []
     seen_canonicals: set[str] = set()
 
-    # Find global duration from text
-    global_duration_match = DURATION_REGEX.search(cleaned)
-    global_duration = global_duration_match.group(0).strip() if global_duration_match else None
-    if global_duration:
-        global_duration = re.sub(r"^(?:for|since|past|last)\s+", "", global_duration, flags=re.IGNORECASE).strip()
+
 
     # Check objective temperature
     temp_match = TEMP_REGEX.search(cleaned)
@@ -869,11 +875,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             global_quality = q_val
             break
 
-    global_onset = None
-    for on_re, on_val in ONSET_PATTERNS:
-        if on_re.search(cleaned):
-            global_onset = on_val
-            break
+
 
     sorted_keywords = sorted(SYMPTOM_LEXICON.keys(), key=len, reverse=True)
 
@@ -893,9 +895,11 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             occupied_spans: list[tuple[int, int]] = []
 
             clause_dur_m = DURATION_REGEX.search(clause)
-            clause_duration = clause_dur_m.group(0).strip() if clause_dur_m else global_duration
+            clause_duration = clause_dur_m.group(0).strip() if clause_dur_m else None
             if clause_duration:
                 clause_duration = re.sub(r"^(?:for|since|past|last)\s+", "", clause_duration, flags=re.IGNORECASE).strip()
+
+            with_m = re.search(r"\bwith\b", clause, re.IGNORECASE)
 
             for kw in sorted_keywords:
                 pattern = r"\b" + re.escape(kw) + r"\b"
@@ -904,6 +908,15 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     # Check span overlap to avoid matching substring when superstring was matched
                     if any(start < o_end and end > o_start for o_start, o_end in occupied_spans):
                         continue
+
+                    # Check duration scoping for this symptom match: duration before 'with' does not scope after 'with'
+                    sym_duration = clause_duration
+                    if clause_dur_m and with_m:
+                        dur_start = clause_dur_m.start()
+                        if dur_start < with_m.start() and start > with_m.end():
+                            sym_duration = None
+                        elif dur_start > with_m.end() and start < with_m.start():
+                            sym_duration = None
 
                     meta = SYMPTOM_LEXICON[kw]
                     canonical = meta["canonical"]
@@ -1038,9 +1051,12 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     elif state == "UNKNOWN":
                         item_type = "UNKNOWN"
                         item_duration = None
+                    elif canonical in {"gradual onset", "sudden onset"}:
+                        item_type = meta.get("type") or "CURRENT"
+                        item_duration = None
                     else:
                         item_type = meta.get("type") or "CURRENT"
-                        item_duration = clause_duration
+                        item_duration = sym_duration
 
                     item = {
                         "finding": canonical,
@@ -1055,15 +1071,63 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         "quality": item_quality,
                         "trigger": item_trigger,
                         "domain": meta["domain"],
+                        "onset": None,
                         "context": item_context or clause,
                         "source": "user_input",
                     }
                     if is_historical:
                         item["history"] = item_context or "historical occurrence"
-                    if global_onset and state == "PRESENT":
-                        item["onset"] = global_onset
-
                     extracted.append(item)
+
+    # Event-scoped onset resolution: attach onset attribute to the specific symptom or primary complaint
+    for sent in raw_sentences:
+        sent_clean = sent.strip()
+        if not sent_clean:
+            continue
+        sent_lower = sent_clean.lower()
+        sent_onset = None
+        for on_re, on_val in ONSET_PATTERNS:
+            if on_re.search(sent_clean):
+                sent_onset = on_val
+                break
+        if not sent_onset:
+            continue
+
+        # Check if sentence explicitly references a specific symptom
+        targeted_symptom = None
+        if "headache" in sent_lower or "migraine" in sent_lower:
+            targeted_symptom = "headache"
+        elif "cough" in sent_lower:
+            targeted_symptom = "cough"
+        elif "chest pain" in sent_lower:
+            targeted_symptom = "chest pain"
+        elif "pain" in sent_lower:
+            for s in extracted:
+                if s.get("state") == "PRESENT" and "pain" in s.get("symptom", "").lower():
+                    targeted_symptom = s.get("symptom")
+                    break
+
+        if targeted_symptom:
+            for s in extracted:
+                if s.get("symptom", "").lower() == targeted_symptom and s.get("state") == "PRESENT":
+                    s["onset"] = sent_onset
+        elif "symptom" in sent_lower or "started" in sent_lower:
+            # Group-level reference ("symptoms started gradually"): attach to primary presenting symptom only
+            primary_target = None
+            for candidate in ["cough", "headache", "chest pain", "wrist pain"]:
+                for s in extracted:
+                    if s.get("symptom", "").lower() == candidate and s.get("state") == "PRESENT":
+                        primary_target = s
+                        break
+                if primary_target:
+                    break
+            if primary_target:
+                primary_target["onset"] = sent_onset
+            else:
+                for s in extracted:
+                    if s.get("state") == "PRESENT" and s.get("type") != "HISTORICAL" and s.get("symptom") not in {"gradual onset", "sudden onset"}:
+                        s["onset"] = sent_onset
+                        break
 
     # Temperature objective finding
     if temp_val and "temperature" not in seen_canonicals:
@@ -1072,7 +1136,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             "symptom": "temperature",
             "status": "PRESENT",
             "state": "PRESENT",
-            "duration": global_duration,
+            "duration": None,
             "severity": "UNKNOWN",
             "body_area": "whole body",
             "laterality": None,
@@ -1091,7 +1155,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                 "symptom": cleaned[:80],
                 "status": "UNKNOWN",
                 "state": "UNKNOWN",
-                "duration": global_duration,
+                "duration": None,
                 "severity": "UNKNOWN",
                 "body_area": "unspecified",
                 "laterality": None,

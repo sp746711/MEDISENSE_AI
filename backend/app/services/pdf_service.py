@@ -225,6 +225,13 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         story.append(Paragraph("<b>Negative Findings / Red Flags Explicitly Denied:</b>", body_style))
         abs_items = [f"• <b>{s.get('finding') or s.get('symptom', '')}:</b> ABSENT" for s in negative_flags]
         story.append(Paragraph("<br/>".join(abs_items), body_style))
+
+    historical_symptoms = feedback.get("historical_symptoms", []) or feedback.get("historical_context", [])
+    if historical_symptoms:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("<b>Historical Context (Documented for context; excluded from active acute counts):</b>", body_style))
+        hist_items = [f"• <b>{h.get('symptom') or h.get('finding', '')}:</b> {h.get('history') or h.get('context') or 'historical occurrence'}" for h in historical_symptoms]
+        story.append(Paragraph("<br/>".join(hist_items), body_style))
     story.append(Spacer(1, 8))
 
     # 3. Medical Report Findings
@@ -310,13 +317,25 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         story.append(Paragraph("<b>Supporting Indicators:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• {item}" for item in support_items]), body_style))
 
+    reassuring_items = feedback.get("reassuring_evidence", [])
+    if reassuring_items:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("<b>Reassuring Indicators:</b>", body_style))
+        story.append(Paragraph("<br/>".join([f"• <font color='#059669'>{item}</font>" for item in reassuring_items]), body_style))
+
+    contextual_items = feedback.get("separate_contextual_findings", []) or feedback.get("additional_contextual_findings", [])
+    if contextual_items:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("<b>Additional / Contextual Findings:</b>", body_style))
+        story.append(Paragraph("<br/>".join([f"• {item}" for item in contextual_items]), body_style))
+
     contra_items = feedback.get("contradictory_evidence", [])
     if contra_items:
         story.append(Spacer(1, 4))
         story.append(Paragraph("<b>Contradictory Findings:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• <font color='#dc2626'>{item}</font>" for item in contra_items]), body_style))
 
-    missing_items = feedback.get("uncertain_missing_info", [])
+    missing_items = feedback.get("uncertain_missing_info", []) or feedback.get("unknown_unassessed_info", [])
     if missing_items:
         story.append(Spacer(1, 4))
         story.append(Paragraph("<b>Unknown / Unassessed Factors:</b>", body_style))

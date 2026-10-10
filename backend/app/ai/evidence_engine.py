@@ -56,13 +56,24 @@ def combine_evidence(
         s for s in symptoms
         if s.get("state") == "PRESENT"
         and s.get("type") != "HISTORICAL"
-        and s.get("symptom") != "previous similar headache"
+        and s.get("symptom") not in {"previous similar headache", "gradual onset", "sudden onset"}
     ]
     historical = [
         s for s in symptoms
         if s.get("state") == "PRESENT"
         and (s.get("type") == "HISTORICAL" or s.get("symptom") == "previous similar headache")
     ]
+    # Propagate onset attribute from gradual onset / sudden onset pseudo-symptoms if not already set
+    has_gradual = any(s.get("symptom") == "gradual onset" for s in symptoms)
+    has_sudden = any(s.get("symptom") == "sudden onset" for s in symptoms)
+    if has_gradual or has_sudden:
+        target_onset = "GRADUAL" if has_gradual else "SUDDEN"
+        for s in current_present:
+            if not s.get("onset"):
+                if s.get("symptom") in {"headache", "migraine", "cough", "chest pain"}:
+                    s["onset"] = target_onset
+                    break
+
     symptoms_present = current_present
     symptoms_absent = [s for s in symptoms if s.get("state") == "ABSENT"]
     symptoms_unknown = [s for s in symptoms if s.get("state") == "UNKNOWN"]
@@ -156,7 +167,8 @@ def combine_evidence(
         if msk_features:
             supporting.append(f"Musculoskeletal trauma indicators: {', '.join(list(dict.fromkeys(msk_features)))}.")
 
-    # Abnormal laboratory parameters (explicitly named, factual)
+    # Abnormal laboratory parameters (factual classification: supporting vs separate/contextual)
+    has_separate_abnormal_labs = False
     for item in report_abnormal:
         fname = item.get("test_name", "")
         val = item.get("value")
@@ -164,7 +176,26 @@ def combine_evidence(
         interp = item.get("interpretation") or "ABNORMAL"
         ref = item.get("reference_range")
         ref_text = f" (reference: {ref})" if ref else ""
-        supporting.append(f"Laboratory parameter {fname} recorded outside reference range ({val} {unit}{ref_text}, {interp}).")
+        fname_lower = fname.lower()
+
+        is_supporting_lab = False
+        if has_respiratory_symptom and any(k in fname_lower for k in ["wbc", "white blood cell", "crp", "c-reactive", "esr"]):
+            is_supporting_lab = True
+            supporting.append(f"Laboratory parameter {fname} recorded outside reference range ({val} {unit}{ref_text}, {interp}).")
+
+        if not is_supporting_lab:
+            has_separate_abnormal_labs = True
+            separate.append(f"Additional abnormal laboratory finding: {fname} recorded outside reference range ({val} {unit}{ref_text}, {interp}); requires clinical interpretation and does not by itself establish the etiology of the primary presenting complaint.")
+            evidence_relationships.append({
+                "source_a": "symptoms",
+                "source_b": "medical_report",
+                "finding": fname,
+                "relationship": "SEPARATE",
+                "reason": f"{fname} is outside standard reference limits but does not directly establish the cause of the presenting complaints."
+            })
+
+    if has_separate_abnormal_labs and "headache" in present_names:
+        separate.append("Additional abnormal laboratory findings were identified and require clinical interpretation; they do not by themselves establish the cause of the headache.")
 
     # Normal laboratory parameters (reassuring evidence)
     if report_normal:

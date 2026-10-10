@@ -349,28 +349,24 @@ export default function SymptomsInput() {
       const res = await analyzeSymptoms(assessmentId, text.trim());
       if (res?.followups?.needed && Array.isArray(res?.followups?.questions) && res.followups.questions.length > 0) {
         setFollowupQuestions(res.followups.questions);
-        const initialAnswers = {};
-        res.followups.questions.forEach((q) => {
-          initialAnswers[q.id] = q.options ? q.options[0] : 'No';
-        });
-        setFollowupAnswers(initialAnswers);
+        setFollowupAnswers({});
         setStage('followup');
       } else {
-        await finalizeAndSubmit(text.trim());
+        await finalizeAndSubmit(text.trim(), null);
       }
     } catch {
       // In case preview check encounters an issue, proceed directly with submission
-      await finalizeAndSubmit(text.trim());
+      await finalizeAndSubmit(text.trim(), null);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const finalizeAndSubmit = async (finalText) => {
+  const finalizeAndSubmit = async (finalText, structuredFollowups = null) => {
     setSubmitting(true);
     setError('');
     try {
-      await submitSymptoms(assessmentId, finalText);
+      await submitSymptoms(assessmentId, finalText, structuredFollowups);
       navigate(nextPath());
     } catch (err) {
       setError(err.message || 'Failed to submit symptoms.');
@@ -381,16 +377,7 @@ export default function SymptomsInput() {
 
   const handleFollowupConfirm = (e) => {
     e.preventDefault();
-    const clarifications = followupQuestions.map((q) => {
-      const ans = followupAnswers[q.id] || (q.options ? q.options[0] : 'Not sure');
-      return `${q.target}: ${ans}`;
-    });
-
-    const combinedText = clarifications.length > 0
-      ? `${text.trim()}.\n\nFollow-up responses: ${clarifications.join('. ')}.`
-      : text.trim();
-
-    finalizeAndSubmit(combinedText);
+    finalizeAndSubmit(text.trim(), followupAnswers);
   };
 
   return (
@@ -517,7 +504,7 @@ export default function SymptomsInput() {
                       <button
                         type="button"
                         key={opt}
-                        className={`btn-choice ${(followupAnswers[q.id] || q.options?.[0]) === opt ? 'selected' : ''}`}
+                        className={`btn-choice ${followupAnswers[q.id] === opt ? 'selected' : ''}`}
                         onClick={() =>
                           setFollowupAnswers((prev) => ({
                             ...prev,

@@ -90,18 +90,23 @@ def generate_assessment_feedback(
         key_negatives = [s.get("symptom") for s in absent[:5]]
         summary_sentences.append(f"Patient explicitly confirmed absence of: {', '.join(key_negatives)}.")
 
+    unknown_range_rep = report_meta.get("unknown_range_findings", [])
+
     if report_provided:
         if abnormal_rep:
             abn_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')}, {r.get('interpretation')})" for r in abnormal_rep[:3]]
             summary_sentences.append(f"Laboratory evaluation revealed {len(abnormal_rep)} out-of-range parameter(s): {', '.join(abn_names)}.")
         elif normal_rep:
             summary_sentences.append(f"All {len(normal_rep)} evaluated laboratory parameter(s) are within standard reference ranges.")
+        if unknown_range_rep:
+            unk_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')})" for r in unknown_range_rep[:3]]
+            summary_sentences.append(f"Recorded parameter(s) without standardized reference ranges: {', '.join(unk_names)} (status: UNKNOWN).")
         if qualitative_rep:
             q_names = [f"{q.get('finding')} ({q.get('state')})" for q in qualitative_rep[:3]]
             summary_sentences.append(f"Medical report provided with qualitative findings: {', '.join(q_names)}.")
         elif narrative_rep:
             summary_sentences.append("Medical report provided with clinical history and examination details.")
-        elif not abnormal_rep and not normal_rep:
+        elif not abnormal_rep and not normal_rep and not unknown_range_rep:
             summary_sentences.append("Medical report provided (clinical documentation).")
     else:
         summary_sentences.append("Medical laboratory report was not provided.")
@@ -143,7 +148,8 @@ def generate_assessment_feedback(
         for s in present
     ]
 
-    # 3. Medical Report Findings
+    # 3. Medical Report Findings (Including Unknown Range Findings)
+    all_lab_rep = abnormal_rep + normal_rep + unknown_range_rep
     if report_provided:
         medical_report_findings = [
             {
@@ -155,7 +161,7 @@ def generate_assessment_feedback(
                 "domain": f.get("domain"),
                 "source": "uploaded_report",
             }
-            for f in (abnormal_rep + normal_rep)
+            for f in all_lab_rep
         ]
         medical_report_status = "PROVIDED"
         if medical_report_findings:
@@ -200,8 +206,10 @@ def generate_assessment_feedback(
             "uncertainty": None,
         }
 
-    # 5. Supporting Evidence
+    # 5. Supporting & Reassuring Evidence
     supporting_evidence = list(evidence.get("supporting", []))
+    reassuring_evidence = list(evidence.get("reassuring", []))
+    separate_contextual = list(evidence.get("separate_or_contextual", evidence.get("separate", [])))
 
     # 6. Contradictory Evidence
     contradictory_evidence = list(evidence.get("contradictory", []))
@@ -234,11 +242,35 @@ def generate_assessment_feedback(
     # 10. Why This Triage Was Selected
     why_this_pathway = triage_result.get("why_this_pathway") or "Determined by clinical rule evaluation."
 
-    # 11. Recommended Next Step / Specialty
-    suggested_spec = specialty or "General Physician / Internal Medicine"
+    # 11. Recommended Next Step / Specialty (Dynamic & Evidence-Specific)
+    suggested_spec = (
+        specialty.get("suggested_specialty") if isinstance(specialty, dict) else specialty
+    ) or "General Physician / Internal Medicine"
+    is_resp = any(s.get("domain") == "respiratory" or s.get("symptom") in {"cough", "sore throat", "chest discomfort", "shortness of breath"} for s in present)
+    is_neuro = any(s.get("domain") == "neurological" or s.get("symptom") in {"headache", "migraine", "photophobia", "phonophobia"} for s in present)
+    is_msk = any(s.get("domain") in {"musculoskeletal", "injury/trauma"} or s.get("body_area") in {"wrist", "hand", "knee", "ankle"} for s in present)
+
+    if is_resp:
+        dynamic_guidance = "Clinical consultation is advised for professional evaluation of persistent respiratory symptoms. Provided laboratory and imaging reports should be reviewed by your clinician."
+        dynamic_action = "Schedule a clinical examination with a pulmonologist or primary physician. Seek prompt medical care if acute red flags such as severe breathing difficulty or persistent high fever develop."
+        if xray_status == "UNAVAILABLE":
+            dynamic_action += f" Note: Automated interpretation for the selected {xray_region} X-ray was unavailable; bring physical films for physician review."
+    elif is_neuro:
+        dynamic_guidance = f"Comprehensive clinical evaluation is recommended for the acute headache pattern with a specialist ({suggested_spec})."
+        dynamic_action = "Schedule an in-person consultation with a neurologist. Review any abnormal laboratory findings with your clinician; note that systemic or metabolic lab variations require medical interpretation to determine relevance to headache symptoms."
+        if abnormal_rep:
+            abn_list = ', '.join([r.get('test_name') for r in abnormal_rep[:3]])
+            dynamic_action += f" Discuss specific abnormal laboratory findings ({abn_list}) with your doctor."
+    elif is_msk:
+        dynamic_guidance = "Orthopedic evaluation is advised to assess joint mobility, localized swelling, and structural integrity following trauma or limb strain."
+        dynamic_action = f"Consult with an orthopedic specialist ({suggested_spec}). If imaging was obtained ({xray_region_label}), present direct radiographic images for clinical assessment."
+    else:
+        dynamic_guidance = triage_result.get("guidance") or f"Consult with a specialist ({suggested_spec}) or general physician, and review your findings."
+        dynamic_action = triage_result.get("next_steps") or "Schedule in-person medical evaluation and bring all available medical records."
+
     recommended_next_step = {
-        "guidance": triage_result.get("guidance"),
-        "next_steps": triage_result.get("next_steps"),
+        "guidance": dynamic_guidance,
+        "next_steps": dynamic_action,
         "suggested_specialty": suggested_spec,
     }
 
@@ -251,17 +283,25 @@ def generate_assessment_feedback(
 
     return {
         "assessment_summary": assessment_summary,
+        "current_symptom_pattern": symptoms_identified,
         "symptoms_identified": symptoms_identified,
+        "relevant_negative_findings": negative_red_flags,
+        "negative_red_flags": negative_red_flags,
+        "medical_report_interpretation": medical_report_message,
         "medical_report_findings": medical_report_findings,
         "medical_report_status": medical_report_status,
         "medical_report_message": medical_report_message,
         "xray_findings": xray_findings_data,
+        "xray_status": xray_findings_data["status"],
         "supporting_evidence": supporting_evidence,
+        "reassuring_evidence": reassuring_evidence,
+        "separate_contextual_findings": separate_contextual,
         "contradictory_evidence": contradictory_evidence,
-        "negative_red_flags": negative_red_flags,
         "uncertain_missing_info": uncertain_missing,
         "triage_level": triage_level,
+        "triage_rationale": why_this_pathway,
         "why_this_triage_selected": why_this_pathway,
+        "specialty_rationale": f"Specialty selection ({suggested_spec}) is aligned with the predominant clinical symptom pattern.",
         "recommended_next_step": recommended_next_step,
         "safety_disclaimer": safety_disclaimer,
     }
@@ -410,7 +450,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         # Contextual inferences if not in prefix
         if not laterality and "right" in clean_ctx.lower() and s.symptom in {"headache", "migraine"}:
             laterality = "RIGHT"
-        if not quality and "throbbing" in clean_ctx.lower():
+        if not quality and "throbbing" in clean_ctx.lower() and s.symptom in {"headache", "migraine"}:
             quality = "THROBBING"
         if not trigger and "coughing" in clean_ctx.lower() and s.symptom == "chest discomfort":
             trigger = "coughing"
@@ -440,15 +480,53 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         .filter(MedicalReport.assessment_id == assessment_id)
         .all()
     )
-    report_findings_list: list[dict[str, Any]] = []
-    qualitative_findings_list: list[dict[str, Any]] = []
-    narrative_findings_list: list[dict[str, Any]] = []
+    raw_lab_list: list[dict[str, Any]] = []
+    raw_qual_list: list[dict[str, Any]] = []
+    raw_narr_list: list[dict[str, Any]] = []
     for r in report_rows:
         struct = r.structured_findings or {}
         if isinstance(struct, dict):
-            report_findings_list.extend(struct.get("lab_parameters", []))
-            qualitative_findings_list.extend(struct.get("qualitative_findings", []))
-            narrative_findings_list.extend(struct.get("narrative_findings", []))
+            raw_lab_list.extend(struct.get("lab_parameters", []))
+            raw_qual_list.extend(struct.get("qualitative_findings", []))
+            raw_narr_list.extend(struct.get("narrative_findings", []))
+
+    # Exact duplicate deduplication (preserves distinct test values/states)
+    report_findings_list: list[dict[str, Any]] = []
+    seen_lab_keys: set[tuple] = set()
+    for item in raw_lab_list:
+        key = (
+            str(item.get("test_name", "")).strip().lower(),
+            item.get("value"),
+            str(item.get("unit", "")).strip().lower(),
+            str(item.get("reference_range", "")).strip().lower(),
+            str(item.get("interpretation") or item.get("status") or "").strip().upper(),
+        )
+        if key not in seen_lab_keys:
+            seen_lab_keys.add(key)
+            report_findings_list.append(item)
+
+    qualitative_findings_list: list[dict[str, Any]] = []
+    seen_qual_keys: set[tuple] = set()
+    for item in raw_qual_list:
+        key = (
+            str(item.get("finding", "")).strip().lower(),
+            str(item.get("state", "")).strip().upper(),
+            str(item.get("context", "")).strip().lower(),
+        )
+        if key not in seen_qual_keys:
+            seen_qual_keys.add(key)
+            qualitative_findings_list.append(item)
+
+    narrative_findings_list: list[dict[str, Any]] = []
+    seen_narr_keys: set[tuple] = set()
+    for item in raw_narr_list:
+        key = (
+            str(item.get("section", "")).strip().lower(),
+            str(item.get("content", "")).strip().lower(),
+        )
+        if key not in seen_narr_keys:
+            seen_narr_keys.add(key)
+            narrative_findings_list.append(item)
 
     # 3. Fetch X-ray result isolated strictly by assessment_id
     xray_row = (

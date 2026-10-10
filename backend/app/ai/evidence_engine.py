@@ -52,7 +52,18 @@ def combine_evidence(
         else bool(report_findings or qualitative_report_findings or narrative_report_findings)
     )
 
-    symptoms_present = [s for s in symptoms if s.get("state") == "PRESENT"]
+    current_present = [
+        s for s in symptoms
+        if s.get("state") == "PRESENT"
+        and s.get("type") != "HISTORICAL"
+        and s.get("symptom") != "previous similar headache"
+    ]
+    historical = [
+        s for s in symptoms
+        if s.get("state") == "PRESENT"
+        and (s.get("type") == "HISTORICAL" or s.get("symptom") == "previous similar headache")
+    ]
+    symptoms_present = current_present
     symptoms_absent = [s for s in symptoms if s.get("state") == "ABSENT"]
     symptoms_unknown = [s for s in symptoms if s.get("state") == "UNKNOWN"]
 
@@ -67,16 +78,20 @@ def combine_evidence(
     ]
 
     supporting: list[str] = []
+    reassuring: list[str] = []
+    separate: list[str] = []
     contradictory: list[str] = []
     missing: list[str] = []
+    unassessed: list[str] = []
+    evidence_relationships: list[dict[str, Any]] = []
 
-    present_names = {s.get("symptom", "").lower() for s in symptoms_present}
+    present_names = {s.get("symptom", "").lower() for s in current_present}
     absent_names = {s.get("symptom", "").lower() for s in symptoms_absent}
-    all_known_names = present_names.union(absent_names)
+    all_known_names = present_names.union(absent_names).union({s.get("symptom", "").lower() for s in historical})
 
     # 1. Contradiction Detection
     has_fever_absent = "fever" in absent_names
-    for s in symptoms_present:
+    for s in current_present:
         if s.get("symptom") == "temperature":
             val_str = str(s.get("context") or "")
             import re
@@ -91,17 +106,32 @@ def combine_evidence(
                 except ValueError:
                     pass
 
-    # 2. Supporting Clinical Correlations
+    # 2. Supporting Clinical Correlations & Reassuring Evidence
     has_respiratory_symptom = bool(
         present_names.intersection({"cough", "dry cough", "productive cough", "shortness of breath", "dyspnea", "wheezing", "chest discomfort"})
     )
     has_fever = "fever" in present_names or "temperature" in present_names
 
-    if has_respiratory_symptom and (has_fever or any(f.get("domain") == "respiratory" for f in report_abnormal)):
-        supporting.append("Respiratory symptoms correlate with systemic/inflammatory indicators.")
+    normal_lab_tests = {f.get("test_name", "").lower() for f in report_normal}
+    has_normal_wbc_or_crp = any(
+        k in t for t in normal_lab_tests for k in ["wbc", "white blood cell", "crp", "c-reactive"]
+    )
+    has_abnormal_wbc_or_crp = any(
+        f.get("interpretation") in {"HIGH", "ABNORMAL"}
+        and any(k in f.get("test_name", "").lower() for k in ["wbc", "crp", "white blood cell", "c-reactive", "esr"])
+        for f in report_abnormal
+    )
+
+    if has_respiratory_symptom:
+        if has_abnormal_wbc_or_crp:
+            supporting.append("Respiratory symptoms correlate with elevated inflammatory/systemic laboratory indicators.")
+        elif has_normal_wbc_or_crp:
+            reassuring.append("Available WBC and CRP values are within the supplied reference ranges.")
+        elif has_fever and not has_normal_wbc_or_crp:
+            supporting.append("Respiratory symptoms correlate with systemic febrile presentation.")
 
     if "headache" in present_names:
-        headache_sym = next((s for s in symptoms_present if s.get("symptom") == "headache"), None)
+        headache_sym = next((s for s in current_present if s.get("symptom") == "headache"), None)
         features = []
         if headache_sym and headache_sym.get("laterality"):
             features.append(f"{headache_sym.get('laterality').lower()}-sided")
@@ -119,30 +149,53 @@ def combine_evidence(
     # Musculoskeletal correlations
     if any(n in present_names for n in {"wrist pain", "wrist injury", "fall/trauma", "swelling", "tenderness"}):
         msk_features = []
-        for s in symptoms_present:
+        for s in current_present:
             if s.get("body_area") == "wrist" or s.get("symptom") in {"wrist pain", "wrist injury", "fall/trauma"}:
                 lat = f"{s.get('laterality').lower()} " if s.get("laterality") else ""
                 msk_features.append(f"{lat}{s.get('symptom')}")
         if msk_features:
             supporting.append(f"Musculoskeletal trauma indicators: {', '.join(list(dict.fromkeys(msk_features)))}.")
 
+    # Abnormal laboratory parameters (explicitly named, factual)
     for item in report_abnormal:
         fname = item.get("test_name", "")
         val = item.get("value")
         unit = item.get("unit") or ""
         interp = item.get("interpretation") or "ABNORMAL"
-        supporting.append(f"Laboratory parameter {fname} recorded outside reference range ({val} {unit}, {interp}).")
+        ref = item.get("reference_range")
+        ref_text = f" (reference: {ref})" if ref else ""
+        supporting.append(f"Laboratory parameter {fname} recorded outside reference range ({val} {unit}{ref_text}, {interp}).")
 
-    if report_normal and not report_abnormal:
-        supporting.append(f"All {len(report_normal)} evaluated laboratory parameter(s) are within standard reference ranges.")
+    # Normal laboratory parameters (reassuring evidence)
+    if report_normal:
+        normal_names = [f.get("test_name") for f in report_normal if f.get("test_name")]
+        reassuring.append(f"Available laboratory values ({', '.join(normal_names)}) are within standard supplied reference ranges.")
 
+    # Cross-modal relevance: Aligned vs Separate/Contextual qualitative findings
     for qf in qualitative_report_findings:
         f_name = qf.get("finding", "")
         f_state = qf.get("state", "PRESENT")
-        if f_state == "PRESENT":
-            supporting.append(f"Medical report qualitative finding confirmed: {f_name}.")
-        elif f_state == "ABSENT":
-            supporting.append(f"Medical report explicitly confirms absence of: {f_name}.")
+
+        # Ankle swelling / lower limb finding when patient has acute respiratory presentation
+        is_separate = False
+        if has_respiratory_symptom and not any(k in present_names for k in {"ankle", "foot", "knee", "swelling", "joint", "edema"}):
+            if any(k in f_name.lower() for k in {"ankle", "foot", "knee"}) or ("swelling" in f_name.lower() and "throat" not in f_name.lower()):
+                is_separate = True
+
+        if is_separate:
+            separate.append(f"Qualitative finding of {f_name} does not directly account for the acute respiratory presentation.")
+            evidence_relationships.append({
+                "source_a": "symptoms",
+                "source_b": "medical_report",
+                "finding": f_name,
+                "relationship": "SEPARATE",
+                "reason": f"{f_name.capitalize()} does not directly explain the respiratory symptom pattern."
+            })
+        else:
+            if f_state == "PRESENT":
+                supporting.append(f"Medical report qualitative finding confirmed: {f_name}.")
+            elif f_state == "ABSENT":
+                reassuring.append(f"Medical report explicitly confirms absence of: {f_name}.")
 
     for nf in narrative_report_findings:
         sec = nf.get("section", "")
@@ -172,12 +225,13 @@ def combine_evidence(
         xray_interpretation = "UNAVAILABLE"
         xray_evidence_status = "UNKNOWN"
         xray_status_display = "UNAVAILABLE"
-        supporting.append(f"{region_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
+        unassessed.append(f"{region_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
     elif xray_result and xray_status_normalized not in {"none", "not_provided"}:
         xray_received = True
         xray_interpretation = "UNAVAILABLE"
         xray_evidence_status = "UNKNOWN"
         xray_status_display = xray_status_normalized.upper()
+        unassessed.append(f"{region_label} status: {xray_status_normalized.upper()}. Automated interpretation unavailable.")
     else:
         xray_received = False
         xray_interpretation = "NOT_PROVIDED"
@@ -199,8 +253,8 @@ def combine_evidence(
         if not addressed:
             missing.append(f"Status of '{crit}' (neither confirmed nor denied)")
 
-    durations = [s.get("duration") for s in symptoms_present if s.get("duration")]
-    if symptoms_present and not durations:
+    durations = [s.get("duration") for s in current_present if s.get("duration")]
+    if current_present and not durations:
         missing.append("Symptom duration (onset timeframe unspecified)")
 
     if not is_report_provided:
@@ -211,7 +265,7 @@ def combine_evidence(
 
     # 5. Determine overall evidence state
     total_active_signals = (
-        len(symptoms_present)
+        len(current_present)
         + len(report_abnormal)
         + len(qualitative_report_findings)
         + (1 if xray_finding_str else 0)
@@ -223,6 +277,7 @@ def combine_evidence(
         total_active_signals > 0
         or len(report_normal) > 0
         or len(symptoms_absent) > 0
+        or len(historical) > 0
         or is_report_provided
         or (xray_received and xray_interpretation == "UNAVAILABLE")
     ):
@@ -236,34 +291,64 @@ def combine_evidence(
         else ("NOT_ASSESSED" if not is_report_provided else "RECORDED")
     )
 
+    current_present_list = [
+        {
+            "finding": s.get("symptom"),
+            "symptom": s.get("symptom"),
+            "status": "PRESENT",
+            "state": "PRESENT",
+            "duration": s.get("duration"),
+            "severity": (s.get("severity") or "UNKNOWN").upper(),
+            "body_area": s.get("body_area"),
+            "laterality": s.get("laterality"),
+            "quality": s.get("quality"),
+            "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
+            "context": s.get("context"),
+            "trigger": s.get("trigger"),
+            "type": s.get("type") or "CURRENT",
+            "onset": s.get("onset"),
+            "source": "user_input",
+            "provenance": "symptom_nlp",
+        }
+        for s in current_present
+    ]
+
+    historical_list = [
+        {
+            "finding": s.get("symptom"),
+            "symptom": s.get("symptom"),
+            "status": "PRESENT",
+            "state": "PRESENT",
+            "duration": None,
+            "severity": (s.get("severity") or "UNKNOWN").upper(),
+            "body_area": s.get("body_area"),
+            "laterality": s.get("laterality"),
+            "quality": s.get("quality"),
+            "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
+            "context": s.get("context"),
+            "trigger": s.get("trigger"),
+            "type": "HISTORICAL",
+            "history": s.get("history") or s.get("context") or "historical occurrence",
+            "source": "user_input",
+            "provenance": "symptom_nlp",
+        }
+        for s in historical
+    ]
+
     return {
         "evidence_state": evidence_state,
         "symptoms": {
-            "present": [
-                {
-                    "finding": s.get("symptom"),
-                    "symptom": s.get("symptom"),
-                    "status": "PRESENT",
-                    "duration": s.get("duration"),
-                    "severity": (s.get("severity") or "UNKNOWN").upper(),
-                    "body_area": s.get("body_area"),
-                    "laterality": s.get("laterality"),
-                    "quality": s.get("quality"),
-                    "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
-                    "context": s.get("context"),
-                    "trigger": s.get("trigger"),
-                    "type": s.get("type"),
-                    "onset": s.get("onset"),
-                    "source": "user_input",
-                    "provenance": "symptom_nlp",
-                }
-                for s in symptoms_present
-            ],
+            "current_present": current_present_list,
+            "historical": historical_list,
+            "present": current_present_list,
+            "all_present": current_present_list + historical_list,
             "absent": [
                 {
                     "finding": s.get("symptom"),
                     "symptom": s.get("symptom"),
                     "status": "ABSENT",
+                    "state": "ABSENT",
+                    "type": "NEGATIVE",
                     "body_area": s.get("body_area"),
                     "context": s.get("context"),
                     "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
@@ -316,8 +401,13 @@ def combine_evidence(
             "provenance": "xray_deep_learning" if xray_received else "none",
         },
         "supporting": supporting,
+        "reassuring": reassuring,
+        "separate": separate,
+        "separate_or_contextual": separate,
+        "unassessed": unassessed,
         "contradictory": contradictory,
         "missing": missing,
+        "evidence_relationships": evidence_relationships,
         "message": (
             "Multimodal evidence compiled successfully."
             if evidence_state == "EVIDENCE_PRESENT"

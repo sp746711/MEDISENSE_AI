@@ -74,7 +74,11 @@ export default function AssessmentResult() {
 
   const symptomsPresent = evidence.symptoms?.present || [];
   const symptomsAbsent = evidence.symptoms?.absent || [];
-  const reportFindings = evidence.report?.abnormal_findings?.concat(evidence.report?.normal_findings || []) || [];
+  const reportFindings = payload.feedback?.medical_report_findings?.length
+    ? payload.feedback.medical_report_findings
+    : (evidence.report?.abnormal_findings || [])
+        .concat(evidence.report?.normal_findings || [])
+        .concat(evidence.report?.unknown_range_findings || []);
   const xrayData = evidence.xray;
 
   return (
@@ -202,8 +206,14 @@ export default function AssessmentResult() {
 
         {/* 6. GENERAL GUIDANCE & NEXT STEPS */}
         <EvidenceCard title="RECOMMENDED NEXT STEPS">
-          <p><strong>Guidance:</strong> {triage.guidance || 'Consult a qualified physician.'}</p>
-          <p><strong>Next Action:</strong> {triage.next_steps || 'Schedule in-person medical evaluation.'}</p>
+          <p>
+            <strong>Guidance:</strong>{' '}
+            {payload.feedback?.recommended_next_step?.guidance || triage.guidance || 'Consult a qualified physician.'}
+          </p>
+          <p>
+            <strong>Next Action:</strong>{' '}
+            {payload.feedback?.recommended_next_step?.next_steps || triage.next_steps || 'Schedule in-person medical evaluation.'}
+          </p>
         </EvidenceCard>
 
         {/* 7. SUPPORTING EVIDENCE */}
@@ -212,6 +222,50 @@ export default function AssessmentResult() {
             <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
               {payload.feedback.supporting_evidence.map((item, idx) => (
                 <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem' }}>{item}</li>
+              ))}
+            </ul>
+          </EvidenceCard>
+        ) : null}
+
+        {/* 8. REASSURING EVIDENCE */}
+        {payload.feedback?.reassuring_evidence?.length ? (
+          <EvidenceCard title="REASSURING EVIDENCE">
+            <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
+              {payload.feedback.reassuring_evidence.map((item, idx) => (
+                <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem', color: '#15803d' }}>{item}</li>
+              ))}
+            </ul>
+          </EvidenceCard>
+        ) : null}
+
+        {/* 9. SEPARATE / CONTEXTUAL FINDINGS */}
+        {payload.feedback?.separate_contextual_findings?.length ? (
+          <EvidenceCard title="SEPARATE / CONTEXTUAL FINDINGS">
+            <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
+              {payload.feedback.separate_contextual_findings.map((item, idx) => (
+                <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem', color: '#475569' }}>{item}</li>
+              ))}
+            </ul>
+          </EvidenceCard>
+        ) : null}
+
+        {/* 10. CONTRADICTORY EVIDENCE */}
+        {payload.feedback?.contradictory_evidence?.length ? (
+          <EvidenceCard title="CONTRADICTORY EVIDENCE">
+            <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
+              {payload.feedback.contradictory_evidence.map((item, idx) => (
+                <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem', color: '#b91c1c' }}>{item}</li>
+              ))}
+            </ul>
+          </EvidenceCard>
+        ) : null}
+
+        {/* 11. UNKNOWN / MISSING INFORMATION */}
+        {payload.feedback?.uncertain_missing_info?.length ? (
+          <EvidenceCard title="UNKNOWN / MISSING INFORMATION">
+            <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
+              {payload.feedback.uncertain_missing_info.map((item, idx) => (
+                <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem', color: '#64748b' }}>{item}</li>
               ))}
             </ul>
           </EvidenceCard>

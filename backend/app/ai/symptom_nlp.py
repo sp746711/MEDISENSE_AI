@@ -305,16 +305,31 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "canonical": "previous similar headache",
         "domain": "neurological",
         "body_area": "head",
+        "type": "HISTORICAL",
     },
     "similar headaches before": {
         "canonical": "previous similar headache",
         "domain": "neurological",
         "body_area": "head",
+        "type": "HISTORICAL",
     },
     "similar headaches": {
         "canonical": "previous similar headache",
         "domain": "neurological",
         "body_area": "head",
+        "type": "HISTORICAL",
+    },
+    "similar headache": {
+        "canonical": "previous similar headache",
+        "domain": "neurological",
+        "body_area": "head",
+        "type": "HISTORICAL",
+    },
+    "previous similar headache": {
+        "canonical": "previous similar headache",
+        "domain": "neurological",
+        "body_area": "head",
+        "type": "HISTORICAL",
     },
     "numbness": {
         "canonical": "numbness",
@@ -986,19 +1001,55 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         if "right" in clause_lower or "right side" in clause_lower:
                             item_laterality = "RIGHT"
 
+                    # Photophobia / Phonophobia specific qualifiers (quality must remain None)
+                    if canonical == "photophobia":
+                        item_quality = None
+                        if "bright light" in clause_lower or "bright light" in full_text_lower:
+                            item_trigger = "bright light"
+                            item_context = "exposure to bright light"
+
+                    if canonical == "phonophobia":
+                        item_quality = None
+                        if "loud sound" in clause_lower or "loud sound" in full_text_lower:
+                            item_trigger = "loud sounds"
+                            item_context = "exposure to loud sounds"
+
                     # Chest discomfort specific qualifiers
                     if canonical == "chest discomfort" and state == "PRESENT":
                         if not item_trigger and "cough" in full_text_lower and "when coughing" in full_text_lower:
                             item_trigger = "coughing"
                             item_context = "when coughing"
 
+                    # Distinguish current symptoms from historical/contextual findings
+                    is_historical = (
+                        meta.get("type") == "HISTORICAL"
+                        or canonical == "previous similar headache"
+                        or bool(re.search(r"\b(?:previous|previously|once or twice before|in the past|history of|prior to this)\b", clause, re.IGNORECASE))
+                    )
+
+                    if is_historical:
+                        item_type = "HISTORICAL"
+                        item_duration = None
+                        if "once or twice before" in clause_lower:
+                            item_context = "once or twice before"
+                    elif state == "ABSENT":
+                        item_type = "NEGATIVE"
+                        item_duration = None
+                    elif state == "UNKNOWN":
+                        item_type = "UNKNOWN"
+                        item_duration = None
+                    else:
+                        item_type = meta.get("type") or "CURRENT"
+                        item_duration = clause_duration
+
                     item = {
                         "finding": canonical,
                         "symptom": canonical,
                         "status": state,
                         "state": state,
-                        "duration": clause_duration if state == "PRESENT" else None,
-                        "severity": sev if state == "PRESENT" else None,
+                        "type": item_type,
+                        "duration": item_duration,
+                        "severity": sev if state == "PRESENT" and not is_historical else None,
                         "body_area": item_body_area,
                         "laterality": item_laterality,
                         "quality": item_quality,
@@ -1007,8 +1058,8 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         "context": item_context or clause,
                         "source": "user_input",
                     }
-                    if meta.get("type"):
-                        item["type"] = meta["type"]
+                    if is_historical:
+                        item["history"] = item_context or "historical occurrence"
                     if global_onset and state == "PRESENT":
                         item["onset"] = global_onset
 

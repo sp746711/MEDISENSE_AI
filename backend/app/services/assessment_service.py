@@ -69,7 +69,7 @@ def generate_assessment_feedback(
 
     if present:
         top_symptoms = []
-        for s in present[:5]:
+        for s in present:
             desc = s.get("symptom", "")
             details = []
             if s.get("severity") and s.get("severity") != "UNKNOWN":
@@ -78,6 +78,14 @@ def generate_assessment_feedback(
                 details.append(f"{s['laterality'].lower()}-sided")
             if s.get("quality"):
                 details.append(s["quality"].lower())
+            if s.get("onset"):
+                details.append(f"{s['onset'].lower()} onset")
+            if s.get("character") and s.get("character") not in {"CURRENT", "PRESENT"}:
+                details.append(s["character"])
+            elif s.get("type") and s.get("type") not in {"CURRENT", "PRESENT"}:
+                details.append(s["type"])
+            if s.get("mucus"):
+                details.append(s["mucus"])
             if details:
                 desc += f" ({', '.join(details)})"
             top_symptoms.append(desc)
@@ -92,7 +100,7 @@ def generate_assessment_feedback(
         summary_sentences.append(f"Historical context noted: {', '.join(h_desc)} (documented for clinical context, excluded from active acute symptom counts).")
 
     if absent:
-        key_negatives = [s.get("symptom") for s in absent[:5]]
+        key_negatives = [s.get("symptom") for s in absent]
         summary_sentences.append(f"Patient explicitly confirmed absence of: {', '.join(key_negatives)}.")
 
     unknown_range_rep = report_meta.get("unknown_range_findings", [])
@@ -257,15 +265,24 @@ def generate_assessment_feedback(
 
     if is_resp:
         dynamic_guidance = "Clinical consultation is advised for professional evaluation of persistent respiratory symptoms. Provided laboratory and imaging reports should be reviewed by your clinician."
-        dynamic_action = "Schedule a clinical examination with a pulmonologist or primary physician. Seek prompt medical care if acute red flags such as severe breathing difficulty or persistent high fever develop."
+        if abnormal_rep:
+            abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
+            dynamic_action = f"Schedule a clinical examination with a pulmonologist or primary physician. Discuss the recorded abnormal laboratory findings with your clinician: {abn_list}. Seek prompt medical care if acute red flags such as severe breathing difficulty or persistent high fever develop."
+        elif normal_rep:
+            dynamic_action = "Schedule a clinical examination with a pulmonologist or primary physician. Available laboratory values are within the supplied reference ranges. Seek prompt medical care if acute red flags such as severe breathing difficulty or persistent high fever develop."
+        else:
+            dynamic_action = "Schedule a clinical examination with a pulmonologist or primary physician. Seek prompt medical care if acute red flags such as severe breathing difficulty or persistent high fever develop."
         if xray_status == "UNAVAILABLE":
             dynamic_action += f" Note: Automated interpretation for the selected {xray_region} X-ray was unavailable; bring physical films for physician review."
     elif is_neuro:
         dynamic_guidance = f"Comprehensive clinical evaluation is recommended for the acute headache pattern with a specialist ({suggested_spec})."
-        dynamic_action = "Schedule an in-person consultation with a neurologist. Review any abnormal laboratory findings with your clinician; note that systemic or metabolic lab variations require medical interpretation to determine relevance to headache symptoms."
         if abnormal_rep:
             abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
-            dynamic_action += f" Discuss specific abnormal laboratory findings ({abn_list}) with your doctor."
+            dynamic_action = f"Schedule an in-person consultation with a neurologist. Discuss the recorded abnormal laboratory findings with your clinician: {abn_list}."
+        elif normal_rep:
+            dynamic_action = "Schedule an in-person consultation with a neurologist. Available laboratory values are within the supplied reference ranges. Clinical evaluation should focus on the current headache pattern and associated symptoms."
+        else:
+            dynamic_action = "Schedule an in-person consultation with a neurologist. Clinical evaluation should focus on the current headache pattern and associated symptoms."
     elif is_msk:
         dynamic_guidance = "Orthopedic evaluation is advised to assess joint mobility, localized swelling, and structural integrity following trauma or limb strain."
         dynamic_action = f"Consult with an orthopedic specialist ({suggested_spec}). If imaging was obtained ({xray_region_label}), present direct radiographic images for clinical assessment."

@@ -89,7 +89,11 @@ def primary_suggestion(domain: Optional[str]) -> Optional[str]:
 
 
 def map_evidence_to_specialty(evidence: dict[str, Any] | None) -> dict[str, Any]:
-    """Map structured multimodal evidence dynamically to suggested specialty."""
+    """Map structured multimodal evidence dynamically to suggested specialty.
+
+    Primary active symptom presentation has strict priority over incidental/contextual
+    laboratory abnormalities. Abnormal labs cannot hijack primary specialty.
+    """
     if not evidence or evidence.get("evidence_state") == "INSUFFICIENT_EVIDENCE":
         return {
             "suggested_specialty": "General Physician / Internal Medicine",
@@ -98,45 +102,82 @@ def map_evidence_to_specialty(evidence: dict[str, Any] | None) -> dict[str, Any]
             "wording": "Suggested specialty",
         }
 
-    domain_instances: list[str] = []
-
     # 1. From active present symptoms
+    symptom_domains: list[str] = []
     symptoms = (evidence.get("symptoms") or {}).get("present", [])
     for s in symptoms:
+        s_name = s.get("symptom", "").lower()
         d = s.get("domain")
-        if d:
-            # If domain has slash like respiratory/cardiovascular, split
+        if s_name in {"cough", "sore throat", "shortness of breath", "wheezing"}:
+            symptom_domains.append("respiratory")
+        elif s_name in {"headache", "migraine", "photophobia", "phonophobia"}:
+            symptom_domains.append("neurological")
+        elif s_name in {"wrist pain", "wrist injury", "fall/trauma", "wrist swelling"}:
+            symptom_domains.append("musculoskeletal")
+        elif d:
             for part in d.split("/"):
                 part_clean = part.strip().lower()
                 if part_clean:
-                    domain_instances.append(part_clean)
+                    symptom_domains.append(part_clean)
 
-    # 2. From abnormal report findings
-    reports = (evidence.get("report") or {}).get("abnormal_findings", [])
-    for r in reports:
-        d = r.get("domain")
-        if d:
-            domain_instances.append(d.strip().lower())
-
-    # 3. From X-ray model
+    # 2. From X-ray model
+    xray_domains: list[str] = []
     xray = evidence.get("xray") or {}
     if xray.get("prediction"):
         reg = (xray.get("region") or "").lower()
         if "chest" in reg:
-            domain_instances.append("respiratory")
+            xray_domains.append("respiratory")
         elif "bone" in reg or "joint" in reg:
-            domain_instances.append("bones")
+            xray_domains.append("bones")
 
-    # If only normal report findings and no symptoms
-    if not domain_instances:
-        normal_reports = (evidence.get("report") or {}).get("normal_findings", [])
-        if normal_reports:
-            return {
-                "suggested_specialty": "General Physician / Internal Medicine",
-                "candidates": ["General Physician", "Internal Medicine"],
-                "message": "Routine preventive check / General Physician consultation.",
-                "wording": "Suggested specialty",
-            }
-        return map_specialty(["general"])
+    # 3. From abnormal report findings
+    report_domains: list[str] = []
+    reports = (evidence.get("report") or {}).get("abnormal_findings", [])
+    for r in reports:
+        d = r.get("domain")
+        if d:
+            report_domains.append(d.strip().lower())
 
-    return map_specialty(domain_instances)
+    # Specific organ domains from primary symptoms take absolute priority
+    specific_symptom_domains = [d for d in symptom_domains if d not in {"systemic", "general"}]
+
+    if specific_symptom_domains:
+        primary_mapping = map_specialty(specific_symptom_domains)
+        primary_spec = primary_mapping["suggested_specialty"]
+
+        # Append secondary report candidates without changing the primary suggested specialty
+        candidates = list(primary_mapping["candidates"])
+        if report_domains:
+            report_mapping = map_specialty(report_domains)
+            for c in report_mapping["candidates"]:
+                if c not in candidates:
+                    candidates.append(c)
+
+        return {
+            "suggested_specialty": primary_spec,
+            "candidates": candidates,
+            "message": f"Suggested specialty: {primary_spec}",
+            "wording": "Suggested specialty",
+        }
+
+    if xray_domains:
+        return map_specialty(xray_domains)
+
+    if symptom_domains:
+        if report_domains:
+            return map_specialty(report_domains)
+        return map_specialty(symptom_domains)
+
+    if report_domains:
+        return map_specialty(report_domains)
+
+    normal_reports = (evidence.get("report") or {}).get("normal_findings", [])
+    if normal_reports:
+        return {
+            "suggested_specialty": "General Physician / Internal Medicine",
+            "candidates": ["General Physician", "Internal Medicine"],
+            "message": "Routine preventive check / General Physician consultation.",
+            "wording": "Suggested specialty",
+        }
+
+    return map_specialty(["general"])

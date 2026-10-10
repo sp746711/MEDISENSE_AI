@@ -1129,6 +1129,54 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         s["onset"] = sent_onset
                         break
 
+    # Group-level duration resolution (e.g. "The symptoms gradually started about 5 days ago")
+    for sent in raw_sentences:
+        sent_clean = sent.strip()
+        if not sent_clean:
+            continue
+        sent_lower = sent_clean.lower()
+        dur_m = DURATION_REGEX.search(sent_clean)
+        if dur_m and ("symptom" in sent_lower or "started" in sent_lower):
+            dur_str = dur_m.group(0).strip()
+            dur_val = re.sub(r"^(?:for|since|past|last)\s+", "", dur_str, flags=re.IGNORECASE).strip()
+            primary_target = None
+            for candidate in ["cough", "headache", "chest pain", "wrist pain"]:
+                for s in extracted:
+                    if s.get("symptom", "").lower() == candidate and s.get("state") == "PRESENT":
+                        primary_target = s
+                        break
+                if primary_target:
+                    break
+            if primary_target and not primary_target.get("duration"):
+                primary_target["duration"] = dur_val
+
+    # Cough character and qualifier resolution (e.g. "mostly dry but sometimes produces a small amount of mucus")
+    for s in extracted:
+        if s.get("symptom") == "cough" and s.get("state") == "PRESENT":
+            if re.search(r"\b(?:mostly\s+dry|predominantly\s+dry)\b", full_text_lower):
+                s["type"] = "mostly dry"
+                s["character"] = "mostly dry"
+            elif re.search(r"\bdry\s+cough\b", full_text_lower) or re.search(r"\bcough\s+(?:is|was)\s+dry\b", full_text_lower):
+                if s.get("type") in {"CURRENT", None}:
+                    s["type"] = "dry"
+                    s["character"] = "dry"
+            elif re.search(r"\b(?:productive|wet)\s+cough\b", full_text_lower):
+                s["type"] = "productive"
+                s["character"] = "productive"
+
+            has_mucus = bool(re.search(r"\b(?:sometimes\s+produces\s+a\s+small\s+amount\s+of\s+mucus|small\s+amount\s+of\s+mucus|occasional(?:ly)?\s+(?:small\s+amount\s+of\s+)?(?:mucus|phlegm|sputum)|sometimes\s+mucus)\b", full_text_lower))
+            if has_mucus:
+                s["mucus"] = "occasional small amount of mucus"
+                s["qualifier"] = "occasional mucus"
+
+            quals = []
+            if s.get("type") and s.get("type") not in {"CURRENT", "PRESENT"}:
+                quals.append(s["type"])
+            if has_mucus:
+                quals.append("occasional small amount of mucus")
+            if quals:
+                s["context"] = "; ".join(quals)
+
     # Temperature objective finding
     if temp_val and "temperature" not in seen_canonicals:
         extracted.append({

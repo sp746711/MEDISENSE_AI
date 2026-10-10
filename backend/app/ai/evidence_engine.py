@@ -46,6 +46,11 @@ def combine_evidence(
     qualitative_report_findings = qualitative_report_findings or []
     narrative_report_findings = narrative_report_findings or []
 
+    # If qualitative findings are passed inside report_findings, normalize them
+    for f in list(report_findings):
+        if "finding" in f and "test_name" not in f and f not in qualitative_report_findings:
+            qualitative_report_findings.append(f)
+
     is_report_provided = (
         report_provided
         if report_provided is not None
@@ -134,9 +139,7 @@ def combine_evidence(
     )
 
     if has_respiratory_symptom:
-        if has_abnormal_wbc_or_crp:
-            supporting.append("Respiratory symptoms correlate with elevated inflammatory/systemic laboratory indicators.")
-        elif has_normal_wbc_or_crp:
+        if has_normal_wbc_or_crp:
             reassuring.append("Available WBC and CRP values are within the supplied reference ranges.")
         elif has_fever and not has_normal_wbc_or_crp:
             supporting.append("Respiratory symptoms correlate with systemic febrile presentation.")
@@ -167,8 +170,7 @@ def combine_evidence(
         if msk_features:
             supporting.append(f"Musculoskeletal trauma indicators: {', '.join(list(dict.fromkeys(msk_features)))}.")
 
-    # Abnormal laboratory parameters (factual classification: supporting vs separate/contextual)
-    has_separate_abnormal_labs = False
+    # Abnormal laboratory parameters: contextual laboratory evidence (never causal proof)
     for item in report_abnormal:
         fname = item.get("test_name", "")
         val = item.get("value")
@@ -176,26 +178,20 @@ def combine_evidence(
         interp = item.get("interpretation") or "ABNORMAL"
         ref = item.get("reference_range")
         ref_text = f" (reference: {ref})" if ref else ""
-        fname_lower = fname.lower()
 
-        is_supporting_lab = False
-        if has_respiratory_symptom and any(k in fname_lower for k in ["wbc", "white blood cell", "crp", "c-reactive", "esr"]):
-            is_supporting_lab = True
-            supporting.append(f"Laboratory parameter {fname} recorded outside reference range ({val} {unit}{ref_text}, {interp}).")
+        separate.append(f"Additional abnormal laboratory finding: {fname} recorded outside reference range ({val} {unit}{ref_text}, {interp}); requires clinical interpretation and does not by itself establish the cause of the presenting complaint.")
+        evidence_relationships.append({
+            "source_a": "symptoms",
+            "source_b": "medical_report",
+            "finding": fname,
+            "relationship": "SEPARATE",
+            "reason": f"{fname} is outside standard reference limits but does not directly establish the cause of the presenting complaints."
+        })
 
-        if not is_supporting_lab:
-            has_separate_abnormal_labs = True
-            separate.append(f"Additional abnormal laboratory finding: {fname} recorded outside reference range ({val} {unit}{ref_text}, {interp}); requires clinical interpretation and does not by itself establish the etiology of the primary presenting complaint.")
-            evidence_relationships.append({
-                "source_a": "symptoms",
-                "source_b": "medical_report",
-                "finding": fname,
-                "relationship": "SEPARATE",
-                "reason": f"{fname} is outside standard reference limits but does not directly establish the cause of the presenting complaints."
-            })
-
-    if has_separate_abnormal_labs and "headache" in present_names:
+    if report_abnormal and "headache" in present_names:
         separate.append("Additional abnormal laboratory findings were identified and require clinical interpretation; they do not by themselves establish the cause of the headache.")
+    elif report_abnormal and has_respiratory_symptom:
+        separate.append("Additional abnormal laboratory findings were identified and require clinical interpretation; they do not by themselves establish the cause of the respiratory symptoms.")
 
     # Normal laboratory parameters (reassuring evidence)
     if report_normal:
@@ -206,21 +202,27 @@ def combine_evidence(
     for qf in qualitative_report_findings:
         f_name = qf.get("finding", "")
         f_state = qf.get("state", "PRESENT")
+        f_lower = f_name.lower()
 
-        # Ankle swelling / lower limb finding when patient has acute respiratory presentation
-        is_separate = False
-        if has_respiratory_symptom and not any(k in present_names for k in {"ankle", "foot", "knee", "swelling", "joint", "edema"}):
-            if any(k in f_name.lower() for k in {"ankle", "foot", "knee"}) or ("swelling" in f_name.lower() and "throat" not in f_name.lower()):
-                is_separate = True
+        is_relevant = False
+        if has_respiratory_symptom:
+            if any(k in f_lower for k in ["lung", "breath", "cough", "throat", "chest", "wheez", "rales", "rhonchi", "bronch", "pharynx"]):
+                is_relevant = True
+        elif "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
+            if any(k in f_lower for k in ["head", "neuro", "pupil", "cranial", "mening", "vision", "speech", "reflex"]):
+                is_relevant = True
+        elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
+            if any(k in f_lower for k in ["wrist", "hand", "joint", "bone", "swelling", "fracture", "tendon", "ligament", "sprain", "strain"]):
+                is_relevant = True
 
-        if is_separate:
-            separate.append(f"Qualitative finding of {f_name} does not directly account for the acute respiratory presentation.")
+        if not is_relevant:
+            separate.append(f"Qualitative finding of {f_name} does not directly account for the primary presenting clinical presentation.")
             evidence_relationships.append({
                 "source_a": "symptoms",
                 "source_b": "medical_report",
                 "finding": f_name,
                 "relationship": "SEPARATE",
-                "reason": f"{f_name.capitalize()} does not directly explain the respiratory symptom pattern."
+                "reason": f"{f_name.capitalize()} does not directly explain the primary symptom presentation."
             })
         else:
             if f_state == "PRESENT":
@@ -269,16 +271,34 @@ def combine_evidence(
         xray_evidence_status = "NOT_ASSESSED"
         xray_status_display = "NOT_PROVIDED"
 
-    # 4. Missing critical information and unassessed modalities
-    for crit in CRITICAL_NEGATIVES:
+    # 4. Missing critical information (context-sensitive, never generic across unrelated domains)
+    relevant_critical_checks: list[str] = []
+    if has_respiratory_symptom:
+        relevant_critical_checks.extend(["difficulty breathing", "chest pain", "high fever"])
+    elif "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
+        relevant_critical_checks.extend(["sudden onset", "weakness", "speech difficulty", "fever"])
+    elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
+        relevant_critical_checks.extend(["severe swelling/deformity", "numbness", "severe bleeding"])
+
+    for crit in relevant_critical_checks:
         addressed = False
         if crit in all_known_names:
             addressed = True
-        elif crit == "chest pain" and any("chest" in n for n in all_known_names):
+        elif crit == "chest pain" and any("chest pain" in n for n in all_known_names):
             addressed = True
-        elif crit == "shortness of breath" and any("breath" in n or "dyspnea" in n for n in all_known_names):
+        elif crit in {"difficulty breathing", "shortness of breath"} and any("breath" in n or "dyspnea" in n for n in all_known_names):
             addressed = True
-        elif crit == "high fever" and ("fever" in all_known_names or "temperature" in all_known_names):
+        elif crit in {"high fever", "fever"} and ("fever" in all_known_names or "temperature" in all_known_names):
+            addressed = True
+        elif crit == "sudden onset" and (any(s.get("onset") for s in current_present) or any("onset" in n for n in all_known_names)):
+            addressed = True
+        elif crit == "weakness" and any("weakness" in n or "numb" in n for n in all_known_names):
+            addressed = True
+        elif crit == "speech difficulty" and any("speech" in n for n in all_known_names):
+            addressed = True
+        elif crit == "severe bleeding" and any("bleed" in n or "hemorrhage" in n for n in all_known_names):
+            addressed = True
+        elif crit == "severe swelling/deformity" and any("deform" in n or "swelling" in n for n in all_known_names):
             addressed = True
 
         if not addressed:

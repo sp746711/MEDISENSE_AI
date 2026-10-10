@@ -139,7 +139,7 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
          Paragraph("<b>Triage Pathway:</b>", body_style),
          Paragraph(f"<font color='{pathway_color}'><b>{assessment.pathway or 'PENDING'}</b></font>", body_style)],
         [Paragraph("<b>Suggested Specialty:</b>", body_style),
-         Paragraph(assessment.specialty or "General Physician", body_style),
+         Paragraph(feedback.get("recommended_next_step", {}).get("suggested_specialty") or assessment.specialty or "General Physician", body_style),
          Paragraph("<b>Rules Version:</b>", body_style), Paragraph(assessment.rules_version or "v2.1", body_style)],
     ]
     meta_table = Table(meta_data, colWidths=[110, 150, 110, 150])
@@ -183,14 +183,23 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         for s in symptoms_present:
             name_disp = s.get("symptom", "").title()
             qualifiers = []
+            if s.get("onset"):
+                qualifiers.append(f"Onset: {s['onset']}")
             if s.get("laterality"):
                 qualifiers.append(f"{s['laterality']}-sided")
             if s.get("quality"):
                 qualifiers.append(s["quality"])
             if s.get("trigger"):
                 qualifiers.append(f"Trigger: {s['trigger']}")
-            if s.get("context") and s.get("context") != s.get("trigger"):
-                qualifiers.append(s["context"])
+            if s.get("character") and s.get("character") not in {"CURRENT", "PRESENT"}:
+                qualifiers.append(s["character"])
+            elif s.get("type") and s.get("type") not in {"CURRENT", "PRESENT", "NEGATIVE"}:
+                qualifiers.append(s["type"])
+            if s.get("mucus"):
+                qualifiers.append(s["mucus"])
+            elif s.get("context") and s.get("context") != s.get("trigger"):
+                if len(s.get("context", "")) < 80:
+                    qualifiers.append(s["context"])
             qual_str = ", ".join(qualifiers) if qualifiers else "—"
 
             symp_data.append(

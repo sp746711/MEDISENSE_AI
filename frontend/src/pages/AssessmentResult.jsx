@@ -129,6 +129,16 @@ export default function AssessmentResult() {
                   {s.laterality ? <span className="pill-detail">[{s.laterality}-sided]</span> : null}
                   {s.quality ? <span className="pill-detail">[{s.quality}]</span> : null}
                   {s.trigger ? <span className="pill-detail">Trigger: {s.trigger}</span> : null}
+                  {s.onset ? <span className="pill-detail">Onset: {s.onset}</span> : null}
+                  {s.character && !['CURRENT', 'PRESENT'].includes(s.character) ? (
+                    <span className="pill-detail">{s.character}</span>
+                  ) : s.type && !['CURRENT', 'PRESENT', 'NEGATIVE'].includes(s.type) ? (
+                    <span className="pill-detail">{s.type}</span>
+                  ) : null}
+                  {s.mucus ? <span className="pill-detail">{s.mucus}</span> : null}
+                  {s.context && s.context !== s.trigger && !s.mucus && s.context.length < 80 ? (
+                    <span className="pill-detail">{s.context}</span>
+                  ) : null}
                 </div>
               ))}
               {symptomsAbsent.map((s, idx) => (
@@ -222,7 +232,7 @@ export default function AssessmentResult() {
         {/* 5. SUGGESTED SPECIALTY */}
         <EvidenceCard title="SUGGESTED SPECIALTY">
           <p className="highlight-specialty">
-            {result?.specialty || assessment?.specialty || 'General Physician / Internal Medicine'}
+            {payload.feedback?.recommended_next_step?.suggested_specialty || result?.specialty || assessment?.specialty || 'General Physician / Internal Medicine'}
           </p>
           <p className="small muted">Controlled mapping based on affected clinical domain.</p>
         </EvidenceCard>

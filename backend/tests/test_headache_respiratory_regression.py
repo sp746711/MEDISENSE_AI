@@ -325,3 +325,371 @@ def test_case_comparisons_and_differing_feedback():
     assert fb_x_valid["xray_findings"]["prediction"] == "Consolidation pattern"
     assert fb_x_unavail["xray_findings"]["prediction"] is None
     assert fb_x_valid["assessment_summary"] != fb_x_unavail["assessment_summary"]
+
+
+def test_prompt_21_regression_coverage():
+    """Explicitly verify all 21 regression requirements from master prompt."""
+    from app.ai.evidence_engine import combine_evidence
+    from app.ai.specialty_mapper import map_evidence_to_specialty
+    from app.ai.followup_engine import is_target_addressed
+    from app.services.assessment_service import generate_assessment_feedback
+
+    # 1. Headache onset = GRADUAL
+    res_headache = extract_symptoms(HEADACHE_TEXT)
+    s_map_h = {s["symptom"]: s for s in res_headache["symptoms"]}
+    assert s_map_h["headache"]["onset"] == "GRADUAL"
+
+    # 2. Cough onset = GRADUAL
+    cough_text = "The symptoms gradually started about 5 days ago. The cough is mostly dry but sometimes produces a small amount of mucus."
+    res_cough = extract_symptoms(cough_text)
+    s_map_c = {s["symptom"]: s for s in res_cough["symptoms"]}
+    assert s_map_c["cough"]["onset"] == "GRADUAL"
+
+    # 3. Photophobia does not inherit headache onset
+    assert s_map_h["photophobia"]["onset"] is None
+
+    # 4. Nausea does not inherit headache duration
+    assert s_map_h["nausea"]["duration"] is None
+
+    # 5. Cough "mostly dry" is preserved
+    assert s_map_c["cough"].get("character") == "mostly dry" or s_map_c["cough"].get("type") == "mostly dry"
+
+    # 6. Occasional mucus is preserved without forcing productive cough
+    assert s_map_c["cough"].get("type") != "productive"
+    assert "mucus" in (s_map_c["cough"].get("mucus") or s_map_c["cough"].get("qualifier") or s_map_c["cough"].get("context") or "")
+
+    # 7. Historical headache remains HISTORICAL
+    assert s_map_h["previous similar headache"]["type"] == "HISTORICAL"
+
+    # 8. WBC/CRP abnormal is not automatically causal/supporting
+    abnormal_inflam_labs = [
+        {"test_name": "WBC", "value": 14000, "unit": "/uL", "reference_range": "4000 - 11000", "interpretation": "HIGH"},
+        {"test_name": "CRP", "value": 25.0, "unit": "mg/L", "reference_range": "0 - 5", "interpretation": "HIGH"},
+    ]
+    ev_resp_labs = combine_evidence(
+        symptoms=res_cough["symptoms"],
+        report_findings=abnormal_inflam_labs,
+        xray_result=None,
+    )
+    assert not any("WBC" in s and "cause" in s.lower() for s in ev_resp_labs["supporting"])
+    assert not any("WBC" in s for s in ev_resp_labs["supporting"])
+    assert any("WBC" in s and "does not by itself establish the cause" in s for s in ev_resp_labs["separate"])
+
+    # 9. ALT/AST/bilirubin remain contextual in headache/respiratory cases
+    abnormal_liver_labs = [
+        {"test_name": "ALT", "value": 75, "unit": "U/L", "reference_range": "7 - 56", "interpretation": "HIGH"},
+        {"test_name": "AST", "value": 60, "unit": "U/L", "reference_range": "10 - 40", "interpretation": "HIGH"},
+        {"test_name": "Total Bilirubin", "value": 2.1, "unit": "mg/dL", "reference_range": "0.2 - 1.2", "interpretation": "HIGH"},
+    ]
+    ev_liver = combine_evidence(
+        symptoms=res_cough["symptoms"],
+        report_findings=abnormal_liver_labs,
+        xray_result=None,
+    )
+    assert not any("ALT" in s for s in ev_liver["supporting"])
+    assert any("ALT" in s for s in ev_liver["separate"])
+
+    # 10. Ankle swelling cannot support headache
+    qual_ankle = [{"finding": "ankle swelling", "state": "PRESENT", "context": "bilateral"}]
+    ev_headache_ankle = combine_evidence(
+        symptoms=res_headache["symptoms"],
+        report_findings=qual_ankle,
+        xray_result=None,
+    )
+    assert not any("ankle swelling" in s.lower() for s in ev_headache_ankle["supporting"])
+    assert any("ankle swelling" in s.lower() for s in ev_headache_ankle["separate"])
+
+    # 11. Respiratory symptoms -> Pulmonology even with abnormal liver labs
+    all_abnormal_labs = abnormal_inflam_labs + abnormal_liver_labs
+    ev_resp_multimodal = combine_evidence(
+        symptoms=res_cough["symptoms"],
+        report_findings=all_abnormal_labs,
+        xray_result=None,
+    )
+    spec_resp = map_evidence_to_specialty(ev_resp_multimodal)
+    assert spec_resp["suggested_specialty"] == "Pulmonology"
+
+    # 12. Headache symptoms -> Neurology
+    ev_headache = combine_evidence(
+        symptoms=res_headache["symptoms"],
+        report_findings=abnormal_liver_labs,
+        xray_result=None,
+    )
+    spec_headache = map_evidence_to_specialty(ev_headache)
+    assert spec_headache["suggested_specialty"] == "Neurology"
+
+    # 13. Header specialty and recommended specialty are identical
+    fb_headache = generate_assessment_feedback(
+        evidence=ev_headache,
+        triage_result={"pathway": "CONSULTATION", "why_this_pathway": "Headache consultation."},
+        specialty=spec_headache,
+    )
+    assert fb_headache["recommended_next_step"]["suggested_specialty"] == spec_headache["suggested_specialty"]
+
+    # 14. All-normal labs do not generate "abnormal lab review" recommendation
+    norm_labs = [
+        {"test_name": "WBC", "value": 6500, "unit": "/uL", "reference_range": "4000 - 11000", "interpretation": "NORMAL"},
+        {"test_name": "ALT", "value": 25, "unit": "U/L", "reference_range": "7 - 56", "interpretation": "NORMAL"},
+    ]
+    ev_normal = combine_evidence(
+        symptoms=res_headache["symptoms"],
+        report_findings=norm_labs,
+        xray_result=None,
+    )
+    fb_normal = generate_assessment_feedback(
+        evidence=ev_normal,
+        triage_result={"pathway": "CONSULTATION", "why_this_pathway": "Headache consultation."},
+        specialty="Neurology",
+    )
+    # 14. All-normal labs do not generate "abnormal lab review" recommendation
+    assert "abnormal laboratory findings" not in str(fb_normal["recommended_next_step"]).lower()
+    assert "within the supplied reference ranges" in fb_normal["recommended_next_step"]["next_steps"]
+
+    # 15. Abnormal labs are explicitly named when they exist
+    fb_abnormal = generate_assessment_feedback(
+        evidence=ev_resp_multimodal,
+        triage_result={"pathway": "CONSULTATION", "why_this_pathway": "Respiratory consultation."},
+        specialty="Pulmonology",
+    )
+    action_abn = fb_abnormal["recommended_next_step"]["next_steps"]
+    assert "WBC" in action_abn
+    assert "ALT" in action_abn
+    assert "AST" in action_abn
+    assert "Total Bilirubin" in action_abn
+
+    # 16. Summary count equals number of listed active symptoms
+    summary_text = fb_headache["assessment_summary"]
+    import re
+    match = re.search(r"Active symptom presentation includes (\d+) finding\(s\):\s*(.+?)\.\s*(?:Historical|Patient|$)", summary_text)
+    assert match is not None
+    count_reported = int(match.group(1))
+    assert count_reported == len(fb_headache["current_symptoms"])
+    # Confirm historical headache is excluded from active count
+    assert not any(s["symptom"] == "previous similar headache" for s in fb_headache["current_symptoms"])
+    assert any(h["symptom"] == "previous similar headache" for h in fb_headache.get("historical_symptoms", []))
+
+    # 17. Generic severe bleeding does not appear as irrelevant UNKNOWN evidence
+    assert not any("severe bleeding" in u.lower() for u in ev_headache.get("missing", []))
+    assert not any("severe bleeding" in u.lower() for u in ev_resp_multimodal.get("missing", []))
+
+    # 18. Nausea does not answer vomiting
+    assert not is_target_addressed("vomiting", [{"symptom": "nausea", "state": "PRESENT"}])
+
+    # 19. Chest discomfort does not answer chest pain
+    assert not is_target_addressed("chest pain", [{"symptom": "chest discomfort", "state": "PRESENT"}])
+
+    # 20. X-ray unavailable remains UNKNOWN/UNAVAILABLE
+    xray_unavail = {"status": "UNAVAILABLE", "region": "chest", "prediction": None}
+    ev_xray = combine_evidence(
+        symptoms=res_headache["symptoms"],
+        report_findings=[],
+        xray_result=xray_unavail,
+    )
+    assert ev_xray["xray"]["status"] == "UNAVAILABLE"
+    assert ev_xray["xray"]["prediction"] is None
+
+    # 21. No X-ray disease is fabricated
+    fb_xray = generate_assessment_feedback(
+        evidence=ev_xray,
+        triage_result={"pathway": "CONSULTATION", "why_this_pathway": "Headache consultation."},
+        specialty="Neurology",
+    )
+    assert fb_xray["xray_findings"]["prediction"] is None
+    assert "pneumonia" not in str(fb_xray["xray_findings"]).lower()
+    assert "fracture" not in str(fb_xray["xray_findings"]).lower()
+    assert "consolidation" not in str(fb_xray["xray_findings"]).lower()
+
+
+# ─────────────────────────────────────────────────────────────
+# 22-26: Dynamic Follow-Up Engine Regression Suite
+# ─────────────────────────────────────────────────────────────
+
+def test_dynamic_followup_most_important_automated_regression_state_abc():
+    """Verify Section 23: State A != State B != State C dynamically recalculated."""
+    from app.ai.followup_engine import suggest_followups, apply_followup_answer
+
+    # STATE A: abdominal pain only
+    syms_a = [{"symptom": "abdominal pain", "state": "PRESENT", "body_area": "abdomen", "domain": "gi"}]
+    res_a = suggest_followups(symptoms=syms_a)
+    assert res_a["needed"] is True
+    assert len(res_a["questions"]) == 1
+    q_a = res_a["questions"][0]
+    assert q_a["id"] == "q_abdominal_location"
+    assert "where" in q_a["question"].lower()
+
+    # STATE B: abdominal pain + lower-right location
+    syms_b = apply_followup_answer(syms_a, q_a["id"], "Lower right side")
+    res_b = suggest_followups(symptoms=syms_b)
+    assert res_b["needed"] is True
+    assert len(res_b["questions"]) == 1
+    q_b = res_b["questions"][0]
+    assert q_b["id"] == "q_abdominal_onset"
+    assert q_b["id"] != q_a["id"]
+    assert "suddenly or gradually" in q_b["question"].lower()
+
+    # STATE C: abdominal pain + lower-right location + sudden onset
+    syms_c = apply_followup_answer(syms_b, q_b["id"], "Suddenly")
+    res_c = suggest_followups(symptoms=syms_c)
+    assert res_c["needed"] is True
+    assert len(res_c["questions"]) == 1
+    q_c = res_c["questions"][0]
+    assert q_c["id"] == "q_severity"
+    assert q_c["id"] not in {q_a["id"], q_b["id"]}
+    assert "severe" in q_c["question"].lower()
+
+    # STATE D: after answering severity -> sufficiency termination
+    syms_d = apply_followup_answer(syms_c, q_c["id"], "Severe")
+    res_d = suggest_followups(symptoms=syms_d)
+    assert res_d["needed"] is False
+    assert len(res_d["questions"]) == 0
+
+
+def test_dynamic_followup_complete_abdominal_input():
+    """Verify Section 12: Complete abdominal input asks no follow-ups."""
+    from app.ai.followup_engine import suggest_followups
+
+    complete_text = (
+        "I have had abdominal pain since yesterday evening. The pain is mainly in "
+        "the lower right side of my abdomen and feels sharp. It becomes worse when I "
+        "walk or move. I also feel nauseous and have a reduced appetite. I have a mild "
+        "fever. I have not vomited. I do not have diarrhea. I do not have blood in my "
+        "stool. I have not fainted. The pain started suddenly yesterday evening."
+    )
+    nlp_res = extract_symptoms(complete_text)
+    res = suggest_followups(symptoms=nlp_res["symptoms"], raw_text=complete_text)
+
+    # Must NOT ask duration, onset, vomiting, diarrhea, breathing difficulty, chest pain
+    q_ids = [q["id"] for q in res["questions"]]
+    assert "q_duration" not in q_ids
+    assert "q_abdominal_onset" not in q_ids
+    assert "q_sudden_onset" not in q_ids
+    assert "q_vomiting" not in q_ids
+    assert "q_diarrhea" not in q_ids
+    assert "q_breathing_difficulty" not in q_ids
+    assert "q_chest_pain" not in q_ids
+
+    # Sufficient: No additional questions needed
+    assert res["needed"] is False
+    assert len(res["questions"]) == 0
+
+
+def test_dynamic_followup_same_symptom_different_inputs():
+    """Verify Section 3: Same primary symptom produces different questions based on input detail."""
+    from app.ai.followup_engine import suggest_followups
+
+    # Input A: vague abdominal pain -> asks location
+    syms_a = extract_symptoms("I have abdominal pain.")["symptoms"]
+    res_a = suggest_followups(symptoms=syms_a)
+    assert res_a["needed"] is True
+    assert res_a["questions"][0]["id"] == "q_abdominal_location"
+
+    # Input B: location and severity already given -> asks onset
+    syms_b = extract_symptoms("I have severe lower-right abdominal pain.")["symptoms"]
+    res_b = suggest_followups(symptoms=syms_b)
+    assert res_b["needed"] is True
+    assert res_b["questions"][0]["id"] == "q_abdominal_onset"
+    assert res_b["questions"][0]["id"] != res_a["questions"][0]["id"]
+
+    # Input C: location, severity, onset, duration, fever given -> asks vomiting
+    syms_c = extract_symptoms("I have severe lower-right abdominal pain that started suddenly yesterday and I have a fever.")["symptoms"]
+    res_c = suggest_followups(symptoms=syms_c)
+    assert res_c["needed"] is True
+    assert res_c["questions"][0]["id"] == "q_vomiting"
+    assert res_c["questions"][0]["id"] not in {res_a["questions"][0]["id"], res_b["questions"][0]["id"]}
+
+
+def test_dynamic_followup_headache_presentation():
+    """Verify Section 4: Headache presentation dynamic question flow."""
+    from app.ai.followup_engine import suggest_followups, apply_followup_answer
+
+    syms = extract_symptoms("I have a severe headache.")["symptoms"]
+    res = suggest_followups(symptoms=syms)
+    assert res["needed"] is True
+    # Asks sudden onset / thunderclap check
+    assert res["questions"][0]["id"] == "q_sudden_onset"
+
+    # Answer sudden onset
+    syms_updated = apply_followup_answer(syms, "q_sudden_onset", "Yes, sudden peak")
+    res_updated = suggest_followups(symptoms=syms_updated)
+    assert res_updated["needed"] is True
+    # Re-evaluates to neurological deficit red flags
+    assert res_updated["questions"][0]["id"] == "q_neuro_weakness"
+    assert res_updated["questions"][0]["id"] != "q_sudden_onset"
+
+
+def test_dynamic_followup_respiratory_presentation():
+    """Verify Section 5: Respiratory presentation dynamic question flow."""
+    from app.ai.followup_engine import suggest_followups, apply_followup_answer
+
+    syms = extract_symptoms("I have a cough.")["symptoms"]
+    res = suggest_followups(symptoms=syms)
+    assert res["needed"] is True
+    # Respiratory red flag: breathing difficulty
+    assert res["questions"][0]["id"] == "q_breathing_difficulty"
+
+    # User denies difficulty breathing
+    syms_1 = apply_followup_answer(syms, "q_breathing_difficulty", "No")
+    res_1 = suggest_followups(symptoms=syms_1)
+    assert res_1["needed"] is True
+    assert res_1["questions"][0]["id"] != "q_breathing_difficulty"
+    # Next missing factor: chest pain or duration
+    assert res_1["questions"][0]["id"] in {"q_chest_pain", "q_duration"}
+
+    # User provides duration
+    syms_2 = apply_followup_answer(syms_1, "q_duration", "5 days")
+    res_2 = suggest_followups(symptoms=syms_2)
+    q_ids_2 = [q["id"] for q in res_2["questions"]]
+    assert "q_duration" not in q_ids_2
+    assert "q_breathing_difficulty" not in q_ids_2
+
+
+def test_dynamic_followup_separations_negatives_and_unanswered():
+    """Verify Sections 15, 16, 17, 18: Symptom separation, explicit negatives, no default answers."""
+    from app.ai.followup_engine import is_target_addressed, apply_followup_answer
+
+    # 1. Nausea does not answer vomiting
+    assert not is_target_addressed("vomiting", [{"symptom": "nausea", "state": "PRESENT"}])
+
+    # 2. Fatigue does not answer weakness
+    assert not is_target_addressed("weakness", [{"symptom": "fatigue", "state": "PRESENT"}])
+
+    # 3. Dizziness does not answer fainting
+    assert not is_target_addressed("fainting", [{"symptom": "dizziness", "state": "PRESENT"}])
+
+    # 4. Chest discomfort does not answer chest pain
+    assert not is_target_addressed("chest pain", [{"symptom": "chest discomfort", "state": "PRESENT"}])
+
+    # 5. Chest discomfort does not answer difficulty breathing
+    assert not is_target_addressed("difficulty breathing", [{"symptom": "chest discomfort", "state": "PRESENT"}])
+
+    # 6. Explicit negative preserved as ABSENT
+    syms = [{"symptom": "abdominal pain", "state": "PRESENT"}]
+    updated = apply_followup_answer(syms, "q_vomiting", "No")
+    vom_item = next(s for s in updated if s["symptom"] == "vomiting")
+    assert vom_item["state"] == "ABSENT"
+    assert is_target_addressed("vomiting", updated)
+
+    # 7. Unanswered question remains unchanged (no default conversion to ABSENT)
+    unans_updated = apply_followup_answer(syms, "q_vomiting", "")
+    assert not any(s["symptom"] == "vomiting" for s in unans_updated)
+
+    # 8. Not sure maps to UNKNOWN, not ABSENT
+    unk_updated = apply_followup_answer(syms, "q_vomiting", "Not sure")
+    unk_item = next(s for s in unk_updated if s["symptom"] == "vomiting")
+    assert unk_item["state"] == "UNKNOWN"
+
+
+def test_dynamic_followup_no_cross_domain_irrelevant_questions():
+    """Verify Section 11: Abdominal case does not receive generic respiratory or chest questions."""
+    from app.ai.followup_engine import suggest_followups
+
+    syms = [{"symptom": "abdominal pain", "state": "PRESENT", "domain": "gi", "body_area": "abdomen"}]
+    res = suggest_followups(symptoms=syms)
+    targets = [q["target"] for q in res["questions"]]
+
+    assert "difficulty breathing" not in targets
+    assert "chest pain" not in targets
+    assert "fall/trauma" not in targets
+    assert any(t in targets for t in ["abdominal location", "sudden onset", "vomiting"])
+
+

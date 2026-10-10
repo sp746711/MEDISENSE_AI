@@ -346,3 +346,27 @@ def test_historical_symptoms_do_not_inflate_active_count():
     # Historical must be separated
     assert len(evidence["symptoms"]["historical"]) == 1
     assert evidence["symptoms"]["historical"][0]["symptom"] == "previous similar headache"
+
+
+# ─────────────────────────────────────────────────────────────
+# 16. Fully characterized presentation requires no follow-up
+# ─────────────────────────────────────────────────────────────
+def test_fully_characterized_presentation_requires_no_followup():
+    from app.ai.followup_engine import suggest_followups
+
+    headache_full_text = (
+        "I have had a severe headache for 2 days, mainly on the right side of my head. "
+        "The pain feels throbbing and becomes worse when I am exposed to bright light or loud sounds. "
+        "I feel nauseous but I have not vomited. "
+        "The headache started gradually yesterday morning. "
+        "I do not have a fever. "
+        "I do not have weakness or numbness in my arms or legs. "
+        "I do not have difficulty speaking. "
+        "I have not fainted and I do not have a seizure."
+    )
+    res = extract_symptoms(headache_full_text)
+    followup_res = suggest_followups(symptoms=res["symptoms"], raw_text=headache_full_text)
+
+    assert followup_res["needed"] is False
+    assert len(followup_res["questions"]) == 0
+

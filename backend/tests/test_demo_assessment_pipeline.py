@@ -257,3 +257,14 @@ def test_16_final_feedback_does_not_contain_unsupported_diagnosis():
     assert feedback["xray_findings"]["description"] != "X-ray is normal."
     assert feedback["triage_level"]["level"] == "CONSULTATION"
     assert len(feedback["negative_red_flags"]) >= 4
+
+
+def test_17_exact_demo_followups_not_needed():
+    """Verify demo respiratory text with ruled-out red flags needs no follow-ups."""
+    from app.ai.followup_engine import suggest_followups
+
+    sym_res = extract_symptoms(EXACT_DEMO_TEXT)
+    res = suggest_followups(symptoms=sym_res["symptoms"], raw_text=EXACT_DEMO_TEXT)
+    assert res["needed"] is False
+    assert len(res["questions"]) == 0
+

@@ -124,15 +124,44 @@ def generate_assessment_feedback(
     else:
         summary_sentences.append("Medical laboratory report was not provided.")
 
-    if xray_received:
+    xray_images_list = xray_meta.get("images", [])
+    xray_reports_list = xray_meta.get("reports", []) or report_meta.get("xray_reports", [])
+    medical_reports_list = report_meta.get("medical_reports", [])
+
+    if xray_images_list:
+        if len(xray_images_list) == 1:
+            img = xray_images_list[0]
+            istat = (img.get("status") or "").upper()
+            ireg = (img.get("region") or "not declared").capitalize()
+            ipred = img.get("prediction")
+            if istat == "COMPLETED" and ipred:
+                summary_sentences.append(f"{ireg} X-ray ({img.get('file_name')}) model identified: {ipred}.")
+            elif istat == "UNAVAILABLE":
+                summary_sentences.append(f"{ireg} X-ray ({img.get('file_name')}) received; automated model interpretation is unavailable. No radiographic disease is assumed.")
+            else:
+                summary_sentences.append(f"{ireg} X-ray ({img.get('file_name')}) status: {istat}.")
+        else:
+            summary_sentences.append(f"Received {len(xray_images_list)} X-ray image(s).")
+            for img in xray_images_list:
+                istat = (img.get("status") or "").upper()
+                ireg = (img.get("region") or "not declared").capitalize()
+                ipred = img.get("prediction")
+                if istat == "COMPLETED" and ipred:
+                    summary_sentences.append(f"• {ireg} X-ray ({img.get('file_name')}): {ipred}.")
+                else:
+                    summary_sentences.append(f"• {ireg} X-ray ({img.get('file_name')}): Automated interpretation unavailable.")
+    elif xray_received:
         if xray_status == "COMPLETED" and xray_pred:
             summary_sentences.append(f"{xray_region_label} deep learning model identified radiographic pattern: {xray_pred}.")
         elif xray_status == "UNAVAILABLE":
             summary_sentences.append(f"{xray_region_label} received; automated model interpretation is currently unavailable. No radiographic disease is assumed.")
         else:
             summary_sentences.append(f"{xray_region_label} status: {xray_status}.")
-    else:
+    elif not xray_reports_list:
         summary_sentences.append("Radiographic imaging was not provided.")
+
+    if xray_reports_list:
+        summary_sentences.append(f"Received {len(xray_reports_list)} radiology report(s) with extracted clinical documentation.")
 
     summary_sentences.append(
         f"Deterministic clinical safety evaluation assigned triage level: {triage_pathway}."
@@ -173,6 +202,8 @@ def generate_assessment_feedback(
                 "interpretation": f.get("interpretation") or "UNKNOWN",
                 "domain": f.get("domain"),
                 "source": "uploaded_report",
+                "source_file": f.get("source_file"),
+                "source_type": f.get("source_type") or "MEDICAL_REPORT",
             }
             for f in all_lab_rep
         ]
@@ -189,16 +220,30 @@ def generate_assessment_feedback(
         medical_report_message = "Medical Report: Not provided."
 
     # 4. X-Ray Findings / Availability
-    if xray_received:
-        if xray_status == "COMPLETED" and xray_pred:
+    if xray_received or xray_reports_list:
+        if xray_images_list:
+            completed_imgs = [img for img in xray_images_list if (img.get("status") or "").lower() == "completed" and img.get("prediction")]
+            if completed_imgs:
+                pred_labels = []
+                for img in completed_imgs:
+                    p = img.get("prediction")
+                    r = (img.get("region") or "").strip()
+                    pred_labels.append(f"{p} ({r.capitalize()})" if r and r != "not declared" else str(p))
+                xray_findings_text = f"Radiographic pattern(s) identified: {', '.join(pred_labels)}. Clinical correlation and verification by a radiologist required."
+            else:
+                xray_findings_text = (
+                    f"Automated interpretation for the {len(xray_images_list)} uploaded X-ray image(s) is currently unavailable (no trained model checkpoint configured). "
+                    "No disease finding is generated or assumed."
+                )
+        elif xray_status == "COMPLETED" and xray_pred:
             xray_findings_text = f"Radiographic pattern identified: {xray_pred}. Clinical correlation and verification by a radiologist required."
         elif xray_status == "UNAVAILABLE":
             xray_findings_text = (
                 f"Automated interpretation for this X-ray type ({xray_region}) is currently unavailable (no trained model checkpoint configured). "
-                "No disease finding is generated or assumed. If you have the associated radiology report, upload it for text-based analysis."
+                "No disease finding is generated or assumed."
             )
         else:
-            xray_findings_text = f"{xray_region_label} status: {xray_status}."
+            xray_findings_text = f"Radiology documentation received: {len(xray_reports_list)} report(s)."
         xray_findings_data = {
             "received": True,
             "status": xray_status,
@@ -207,6 +252,8 @@ def generate_assessment_feedback(
             "prediction": xray_pred,
             "description": xray_findings_text,
             "uncertainty": xray_meta.get("uncertainty"),
+            "images": xray_images_list,
+            "reports": xray_reports_list,
         }
     else:
         xray_findings_data = {
@@ -217,6 +264,8 @@ def generate_assessment_feedback(
             "prediction": None,
             "description": "X-Ray: Not provided.",
             "uncertainty": None,
+            "images": [],
+            "reports": [],
         }
 
     # 5. Supporting & Reassuring Evidence
@@ -334,6 +383,9 @@ def generate_assessment_feedback(
         "medical_report_message": medical_report_message,
         "xray_findings": xray_findings_data,
         "xray_status": xray_findings_data["status"],
+        "xray_images": xray_images_list,
+        "xray_reports": xray_reports_list,
+        "medical_reports": medical_reports_list,
         "supporting_evidence": supporting_evidence,
         "reassuring_evidence": reassuring_evidence,
         "separate_contextual_findings": separate_contextual,
@@ -525,17 +577,57 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
     report_rows = (
         db.query(MedicalReport)
         .filter(MedicalReport.assessment_id == assessment_id)
+        .order_by(MedicalReport.created_at.asc())
         .all()
     )
     raw_lab_list: list[dict[str, Any]] = []
     raw_qual_list: list[dict[str, Any]] = []
     raw_narr_list: list[dict[str, Any]] = []
+
+    medical_reports_list: list[dict[str, Any]] = []
+    xray_reports_list: list[dict[str, Any]] = []
+
     for r in report_rows:
+        cat = getattr(r, "report_category", "medical_report") or "medical_report"
+        r_entry = {
+            "id": str(r.report_id),
+            "report_id": str(r.report_id),
+            "file_name": r.file_name,
+            "file_type": r.file_type,
+            "report_category": cat,
+            "extracted_text": r.extracted_text,
+            "structured_findings": r.structured_findings,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "source_type": "XRAY_REPORT" if cat == "xray_report" else "MEDICAL_REPORT",
+            "source_file": r.file_name,
+        }
+        if cat == "xray_report":
+            xray_reports_list.append(r_entry)
+        else:
+            medical_reports_list.append(r_entry)
+
         struct = r.structured_findings or {}
         if isinstance(struct, dict):
-            raw_lab_list.extend(struct.get("lab_parameters", []))
-            raw_qual_list.extend(struct.get("qualitative_findings", []))
-            raw_narr_list.extend(struct.get("narrative_findings", []))
+            for l in struct.get("lab_parameters", []):
+                l_copy = dict(l)
+                l_copy["source_file"] = r.file_name
+                l_copy["source_id"] = str(r.report_id)
+                l_copy["source_type"] = "XRAY_REPORT" if cat == "xray_report" else "MEDICAL_REPORT"
+                raw_lab_list.append(l_copy)
+
+            for q in struct.get("qualitative_findings", []):
+                q_copy = dict(q)
+                q_copy["source_file"] = r.file_name
+                q_copy["source_id"] = str(r.report_id)
+                q_copy["source_type"] = "XRAY_REPORT" if cat == "xray_report" else "MEDICAL_REPORT"
+                raw_qual_list.append(q_copy)
+
+            for n in struct.get("narrative_findings", []):
+                n_copy = dict(n)
+                n_copy["source_file"] = r.file_name
+                n_copy["source_id"] = str(r.report_id)
+                n_copy["source_type"] = "XRAY_REPORT" if cat == "xray_report" else "MEDICAL_REPORT"
+                raw_narr_list.append(n_copy)
 
     # Exact duplicate deduplication (preserves distinct test values/states)
     report_findings_list: list[dict[str, Any]] = []
@@ -575,30 +667,43 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             seen_narr_keys.add(key)
             narrative_findings_list.append(item)
 
-    # 3. Fetch X-ray result isolated strictly by assessment_id
-    xray_row = (
+    # 3. Fetch ALL X-ray results isolated strictly by assessment_id
+    xray_rows = (
         db.query(XrayResult)
         .filter(XrayResult.assessment_id == assessment_id)
-        .order_by(XrayResult.created_at.desc())
-        .first()
+        .order_by(XrayResult.created_at.asc())
+        .all()
     )
-    xray_dict = None
-    if xray_row:
-        xray_dict = {
-            "status": xray_row.status,
-            "region": xray_row.region,
-            "prediction": xray_row.prediction,
-            "model_version": xray_row.model_version,
-            "uncertainty": xray_row.uncertainty,
-            "explainability_artifact": xray_row.explainability_artifact,
-            "message": xray_row.message,
+    xray_results_list: list[dict[str, Any]] = [
+        {
+            "id": str(xr.xray_result_id),
+            "xray_result_id": str(xr.xray_result_id),
+            "file_name": xr.file_name or "xray_image",
+            "region": xr.region,
+            "prediction": xr.prediction,
+            "confidence_if_valid": xr.confidence_if_valid,
+            "uncertainty": xr.uncertainty,
+            "model_version": xr.model_version,
+            "explainability_artifact": xr.explainability_artifact,
+            "status": xr.status,
+            "message": xr.message,
+            "source": "xray_image",
+            "source_type": "XRAY_IMAGE",
+            "source_file": xr.file_name or "xray_image",
+            "created_at": xr.created_at.isoformat() if xr.created_at else None,
         }
+        for xr in xray_rows
+    ]
+    primary_xray_dict = xray_results_list[-1] if xray_results_list else None
 
     # 4. Combine evidence afresh
     evidence = combine_evidence(
         symptoms=symptoms_list,
         report_findings=report_findings_list,
-        xray_result=xray_dict,
+        xray_result=primary_xray_dict,
+        xray_results=xray_results_list,
+        xray_reports=xray_reports_list,
+        medical_reports=medical_reports_list,
         report_provided=len(report_rows) > 0,
         qualitative_report_findings=qualitative_findings_list,
         narrative_report_findings=narrative_findings_list,

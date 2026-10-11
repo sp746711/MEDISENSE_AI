@@ -44,27 +44,6 @@ function ShieldLockIcon({ size = 14, color = 'currentColor' }) {
   );
 }
 
-function RadiologyUploadIcon({ size = 34, color = 'currentColor' }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="3" y="3" width="18" height="18" rx="4" />
-      <path d="M7 9a3 3 0 0 1 3 3v3a1 1 0 0 1-2 0v-3a1 1 0 0 0-1-1" />
-      <path d="M17 9a3 3 0 0 0-3 3v3a1 1 0 0 0 2 0v-3a1 1 0 0 1 1-1" />
-      <line x1="12" y1="7" x2="12" y2="17" strokeWidth="2" />
-      <path d="M12 12h.01" />
-    </svg>
-  );
-}
-
-function FileCheckBadgeIcon({ size = 22, color = 'currentColor' }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-      <polyline points="14 2 14 8 20 8" />
-      <path d="m9 15 2 2 4-4" />
-    </svg>
-  );
-}
 
 /* ============================================================
    CANVAS NEURAL NETWORK BACKGROUND (MINT/CYAN TINT)
@@ -291,54 +270,195 @@ const REGION_OPTIONS = [
   { value: 'spine', label: 'Spine' },
 ];
 
+import { uploadReport } from '../services/reportService';
+import FilePreviewModal from '../components/FilePreviewModal';
+
 /* ============================================================
-   MAIN X-RAY UPLOAD COMPONENT
+   MAIN X-RAY & RADIOLOGY UPLOAD COMPONENT (MULTI-FILE)
    ============================================================ */
 export default function XrayUpload() {
   const navigate = useNavigate();
   const { assessmentId } = useAssessment();
-  const [file, setFile] = useState(null);
-  const [region, setRegion] = useState('');
+  const [xrayImages, setXrayImages] = useState([]);
+  const [xrayReports, setXrayReports] = useState([]);
+  const [region, setRegion] = useState(''); // Initial state must be empty; user must explicitly select
   const [info, setInfo] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [dragActive, setDragActive] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState(null);
-  const fileInputRef = useRef(null);
+  const [dragActiveImages, setDragActiveImages] = useState(false);
+  const [dragActiveReports, setDragActiveReports] = useState(false);
+  const [previewState, setPreviewState] = useState(null); // { id, file, name, size, previewUrl, previewType }
 
+  const imageInputRef = useRef(null);
+  const reportInputRef = useRef(null);
+  const previewUrlRef = useRef(null);
+
+  // Clean up object URL when component genuinely unmounts
   useEffect(() => {
-    if (!file) {
-      setPreviewUrl(null);
-      return;
-    }
-    const objectUrl = URL.createObjectURL(file);
-    setPreviewUrl(objectUrl);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [file]);
+    return () => {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
+      }
+    };
+  }, []);
 
-  const handleDrag = (e) => {
+  const ALLOWED_IMAGE_EXTS = ['.png', '.jpg', '.jpeg'];
+  const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg'];
+
+  const handleImageDrag = (e) => {
     e.preventDefault();
     e.stopPropagation();
     if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActive(true);
+      setDragActiveImages(true);
     } else if (e.type === 'dragleave') {
-      setDragActive(false);
+      setDragActiveImages(false);
     }
   };
 
-  const handleDrop = (e) => {
+  const handleImageDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
+    setDragActiveImages(false);
+    if (e.dataTransfer.files) {
+      addImages(e.dataTransfer.files);
     }
   };
 
-  const handleFileInputChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+  const handleReportDrag = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActiveReports(true);
+    } else if (e.type === 'dragleave') {
+      setDragActiveReports(false);
     }
+  };
+
+  const handleReportDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActiveReports(false);
+    if (e.dataTransfer.files) {
+      addReports(e.dataTransfer.files);
+    }
+  };
+
+  const addImages = (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    setError('');
+    const newItems = [];
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      const ext = '.' + f.name.split('.').pop().toLowerCase();
+      const isAllowed = ALLOWED_IMAGE_EXTS.includes(ext) || ALLOWED_IMAGE_TYPES.includes(f.type);
+      if (!isAllowed) {
+        setError('Please select a PNG, JPG, or JPEG image.');
+        return;
+      }
+      const exists = xrayImages.some(
+        (existing) => existing.file.name === f.name && existing.file.size === f.size
+      );
+      if (!exists) {
+        newItems.push({
+          id: `img-${f.name}-${f.size}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          file: f,
+          name: f.name,
+          size: f.size,
+          type: f.type,
+          status: 'READY',
+          error: null,
+        });
+      }
+    }
+    if (newItems.length > 0) {
+      setXrayImages((prev) => [...prev, ...newItems]);
+      setError('');
+    }
+  };
+
+  const addReports = (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    setError('');
+    const newItems = [];
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      const ext = '.' + f.name.split('.').pop().toLowerCase();
+      if (ext !== '.pdf' && f.type !== 'application/pdf') {
+        setError('Please select a PDF radiology report.');
+        return;
+      }
+      const fnameLower = f.name.toLowerCase();
+      const isMedicalReport = ['medical_report', 'medical-report', 'blood_report', 'lab_report', 'cbc', 'liver_report', 'kidney_report'].some(
+        (m) => fnameLower.includes(m)
+      );
+      if (isMedicalReport) {
+        setError(`This file appears to be a general medical report (${f.name}). Please upload it in the Medical Reports section, not X-Ray / Radiology Reports.`);
+        return;
+      }
+      const exists = xrayReports.some(
+        (existing) => existing.file.name === f.name && existing.file.size === f.size
+      );
+      if (!exists) {
+        newItems.push({
+          id: `rep-${f.name}-${f.size}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          file: f,
+          name: f.name,
+          size: f.size,
+          type: f.type,
+          status: 'READY',
+          error: null,
+        });
+      }
+    }
+    if (newItems.length > 0) {
+      setXrayReports((prev) => [...prev, ...newItems]);
+      setError('');
+    }
+  };
+
+  const handleOpenPreview = (item) => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    try {
+      const url = URL.createObjectURL(item.file);
+      previewUrlRef.current = url;
+      const isPdf = item.name.toLowerCase().endsWith('.pdf') || item.type === 'application/pdf';
+      setPreviewState({
+        id: item.id,
+        file: item.file,
+        name: item.name,
+        size: item.size,
+        previewUrl: url,
+        previewType: isPdf ? 'pdf' : 'image',
+      });
+    } catch {
+      setError(`Unable to generate preview for ${item.name}.`);
+    }
+  };
+
+  const handleClosePreview = () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setPreviewState(null);
+  };
+
+  const handleRemoveImage = (idToRemove) => {
+    if (previewState && previewState.id === idToRemove) {
+      handleClosePreview();
+    }
+    setXrayImages((prev) => prev.filter((item) => item.id !== idToRemove));
+  };
+
+  const handleRemoveReport = (idToRemove) => {
+    if (previewState && previewState.id === idToRemove) {
+      handleClosePreview();
+    }
+    setXrayReports((prev) => prev.filter((item) => item.id !== idToRemove));
   };
 
   const formatFileSize = (bytes) => {
@@ -351,17 +471,68 @@ export default function XrayUpload() {
   const onContinue = async () => {
     setError('');
     if (!assessmentId) return setError('No assessment in progress. Start a new assessment.');
-    if (!region) return setError('Please select the body region for this X-ray.');
-    if (!file) return setError('Please select an X-ray image.');
+
+    const totalFiles = xrayImages.length + xrayReports.length;
+    if (totalFiles === 0) {
+      return setError('Please upload at least one X-ray image or X-ray report before continuing.');
+    }
+
+    if (xrayImages.length > 0 && (!region || !region.trim())) {
+      return setError('Please select an X-ray body region/type.');
+    }
+
     setSubmitting(true);
-    try {
-      const result = await uploadXray(assessmentId, file, region);
-      setInfo(result.message || 'X-ray uploaded successfully.');
+    let anyFailed = false;
+
+    // 1. Process Images
+    const updatedImages = [...xrayImages];
+    for (let i = 0; i < updatedImages.length; i++) {
+      const item = updatedImages[i];
+      if (item.status === 'COMPLETED') continue;
+
+      item.status = 'UPLOADING';
+      setXrayImages([...updatedImages]);
+
+      try {
+        await uploadXray(assessmentId, item.file, region);
+        item.status = 'COMPLETED';
+        item.error = null;
+      } catch (err) {
+        anyFailed = true;
+        item.status = 'FAILED';
+        item.error = err.message || 'Image upload failed';
+      }
+      setXrayImages([...updatedImages]);
+    }
+
+    // 2. Process X-Ray / Radiology Reports
+    const updatedReports = [...xrayReports];
+    for (let i = 0; i < updatedReports.length; i++) {
+      const item = updatedReports[i];
+      if (item.status === 'COMPLETED') continue;
+
+      item.status = 'UPLOADING';
+      setXrayReports([...updatedReports]);
+
+      try {
+        await uploadReport(assessmentId, item.file, 'xray_report');
+        item.status = 'COMPLETED';
+        item.error = null;
+      } catch (err) {
+        anyFailed = true;
+        item.status = 'FAILED';
+        item.error = err.message || 'Radiology report upload failed';
+      }
+      setXrayReports([...updatedReports]);
+    }
+
+    setSubmitting(false);
+
+    if (anyFailed) {
+      setError('Some X-ray files failed to upload. You can retry failed files or remove them.');
+    } else {
+      setInfo('All X-ray evidence uploaded successfully.');
       navigate('/assessment/processing');
-    } catch (err) {
-      setError(err.message || 'Failed to upload X-ray.');
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -374,24 +545,21 @@ export default function XrayUpload() {
       <FloatingXrayObjects />
 
       {/* Central Floating 3D Glass Content Panel */}
-      <section className="assessment-glass-panel panel-narrow" aria-label="X-Ray Image Upload Panel">
+      <section className="assessment-glass-panel panel-narrow" aria-label="X-Ray & Radiology Evidence Panel">
         {/* Top Badge */}
         <div className="na-top-badge">
           <span className="na-top-badge-pulse" />
           <SparkleIcon size={14} color="#0284c7" />
-          <span>Radiological Vision AI · Step 2</span>
+          <span>Radiological Vision &amp; Report Analysis · Step 2</span>
         </div>
 
         {/* Title & Description */}
         <div className="na-header-section">
           <h1 className="na-title">
-            X-Ray <span className="na-title-highlight">Upload</span>
+            X-Ray &amp; Radiology <span className="na-title-highlight">Evidence</span>
           </h1>
           <p className="na-description">
-            Upload JPG, JPEG, or PNG radiograph images.
-          </p>
-          <p className="na-sub-description">
-            Supports chest radiographs and musculoskeletal regions. Unsupported body regions return an unavailable status — never a fabricated finding.
+            Upload X-ray images, radiology reports, or both. You can preview every file to verify it before proceeding.
           </p>
         </div>
 
@@ -432,112 +600,266 @@ export default function XrayUpload() {
           </div>
         ) : null}
 
-        {/* Required X-Ray Body Region Selector */}
+        {/* 1. Required X-Ray Body Region Selector */}
         <div className="xray-region-selection-box" style={{ width: '100%', marginBottom: '1.25rem' }}>
-          <label htmlFor="xray-region-select" style={{ display: 'block', fontSize: '0.88rem', fontWeight: 600, color: '#e2e8f0', marginBottom: '0.45rem' }}>
+          <label
+            htmlFor="xray-region-select"
+            style={{
+              display: 'block',
+              fontSize: '0.9rem',
+              fontWeight: 700,
+              color: '#0369a1',
+              marginBottom: '0.45rem',
+              textTransform: 'uppercase',
+              letterSpacing: '0.03em',
+            }}
+          >
             Select Body Region / X-Ray Type <span style={{ color: '#ef4444' }}>*</span>
           </label>
           <select
             id="xray-region-select"
             value={region}
-            onChange={(e) => setRegion(e.target.value)}
-            required
+            onChange={(e) => {
+              setRegion(e.target.value);
+              if (error) setError('');
+            }}
             style={{
               width: '100%',
               padding: '0.75rem 1rem',
-              backgroundColor: 'rgba(15, 23, 42, 0.85)',
-              border: '1px solid rgba(56, 189, 248, 0.4)',
+              backgroundColor: '#ffffff',
+              border: '1.5px solid #0284c7',
               borderRadius: '10px',
-              color: '#f8fafc',
+              color: '#0f172a',
               fontSize: '0.95rem',
+              fontWeight: 600,
               outline: 'none',
               cursor: 'pointer',
+              boxShadow: '0 2px 6px rgba(2, 132, 199, 0.08)',
             }}
           >
-            {REGION_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value} style={{ backgroundColor: '#0f172a', color: '#f8fafc' }}>
+            <option value="">-- Select Body Region / X-Ray Type --</option>
+            {REGION_OPTIONS.filter((o) => o.value !== '').map((opt) => (
+              <option key={opt.value} value={opt.value}>
                 {opt.label}
               </option>
             ))}
           </select>
         </div>
 
-        {/* Drag & Drop Glass Radiology Upload Zone */}
+        {/* 2. X-RAY IMAGES SECTION */}
+        <div className="section-divider-title">
+          <h3>X-Ray Images</h3>
+          <button
+            type="button"
+            className="section-upload-btn"
+            onClick={() => imageInputRef.current?.click()}
+          >
+            + Upload X-Ray Image
+          </button>
+        </div>
+        <p className="upload-hint-text" style={{ textAlign: 'left', margin: '0 0 0.5rem 0' }}>
+          Accepted: PNG, JPG, JPEG
+        </p>
+
+        <input
+          ref={imageInputRef}
+          type="file"
+          multiple
+          accept="image/png,image/jpeg,.png,.jpg,.jpeg"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            addImages(e.target.files);
+            e.target.value = '';
+          }}
+          aria-hidden="true"
+        />
+
+        {/* X-Ray Image Upload Dropzone (Always Visible) */}
         <div
-          className={`assessment-upload-dropzone ${dragActive ? 'drag-active' : ''}`}
-          onDragEnter={handleDrag}
-          onDragLeave={handleDrag}
-          onDragOver={handleDrag}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
+          className={`assessment-upload-dropzone ${dragActiveImages ? 'drag-active' : ''}`}
+          style={{ padding: '1.25rem 1rem', minHeight: '90px', marginBottom: xrayImages.length > 0 ? '0.75rem' : '1.25rem' }}
+          onDragEnter={handleImageDrag}
+          onDragLeave={handleImageDrag}
+          onDragOver={handleImageDrag}
+          onDrop={handleImageDrop}
+          onClick={() => imageInputRef.current?.click()}
           role="button"
           tabIndex={0}
-          aria-label="Upload X-ray image"
+          aria-label="Upload X-ray images"
           onKeyDown={(e) => {
             if (e.key === ' ' || e.key === 'Enter') {
               e.preventDefault();
-              fileInputRef.current?.click();
+              imageInputRef.current?.click();
             }
           }}
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".jpg,.jpeg,.png"
-            className="hidden-file-input"
-            onChange={handleFileInputChange}
-            aria-hidden="true"
-          />
-
-          <div className="upload-icon-circle upload-icon-xray">
-            <RadiologyUploadIcon size={34} color="#ffffff" />
-          </div>
-
-          <p className="upload-primary-text">
-            Drag &amp; drop your X-ray image here, or <span className="upload-browse-link">Browse files</span>
-          </p>
-          <p className="upload-hint-text">
-            Supports standard JPG, JPEG, and PNG radiograph scans. Images are processed with deep convolutional vision models.
+          <p className="upload-primary-text" style={{ margin: 0, fontSize: '0.92rem' }}>
+            Drag &amp; drop X-ray images, or <span className="upload-browse-link">Browse images</span>
           </p>
         </div>
 
-        {/* Selected File State Display with Preview Thumbnail */}
-        {file ? (
-          <div className="file-selected-card">
-            <div className="file-selected-left">
-              {previewUrl ? (
-                <img
-                  src={previewUrl}
-                  alt="X-ray preview"
-                  style={{
-                    width: '46px',
-                    height: '46px',
-                    borderRadius: '10px',
-                    objectFit: 'cover',
-                    border: '1px solid #10b981',
-                  }}
-                />
-              ) : (
-                <div className="file-badge-icon">
-                  <FileCheckBadgeIcon size={22} color="#10b981" />
+        {/* Selected Images List */}
+        {xrayImages.length > 0 ? (
+          <div className="file-list-container" style={{ marginBottom: '1.25rem' }}>
+            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#475569' }}>
+              Selected Images ({xrayImages.length}):
+            </span>
+            {xrayImages.map((img) => (
+              <div key={img.id} className="file-card-item">
+                <div className="file-card-left">
+                  <div className="file-card-icon-badge badge-img">IMG</div>
+                  <div className="file-card-info">
+                    <span className="file-card-name" title={img.name}>
+                      ✓ {img.name}
+                    </span>
+                    <span className="file-card-meta">
+                      {formatFileSize(img.size)} ·{' '}
+                      {img.status === 'READY' ? (
+                        <span className="status-ready">Ready for upload</span>
+                      ) : img.status === 'UPLOADING' ? (
+                        <span className="status-uploading">Uploading &amp; Analyzing...</span>
+                      ) : img.status === 'COMPLETED' ? (
+                        <span className="status-completed">✓ Uploaded</span>
+                      ) : (
+                        <span className="status-failed">✗ {img.error || 'Upload failed'}</span>
+                      )}
+                    </span>
+                  </div>
                 </div>
-              )}
-              <div className="file-info-text">
-                <span className="file-name-label">{file.name}</span>
-                <span className="file-meta-label">
-                  {formatFileSize(file.size)} · Ready for neural vision inference
-                </span>
+
+                <div className="file-card-actions">
+                  <button
+                    type="button"
+                    className="btn-card-view"
+                    onClick={() => handleOpenPreview(img)}
+                    aria-label={`View ${img.name}`}
+                  >
+                    View
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-card-remove"
+                    onClick={() => handleRemoveImage(img.id)}
+                    disabled={submitting}
+                    aria-label={`Remove ${img.name}`}
+                  >
+                    Remove
+                  </button>
+                </div>
               </div>
-            </div>
-            <button
-              type="button"
-              className="file-change-btn"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Change image
-            </button>
+            ))}
           </div>
         ) : null}
+
+        {/* 3. X-RAY / RADIOLOGY REPORTS SECTION */}
+        <div className="section-divider-title">
+          <h3>X-Ray / Radiology Reports</h3>
+          <button
+            type="button"
+            className="section-upload-btn"
+            onClick={() => reportInputRef.current?.click()}
+          >
+            + Upload X-Ray Report
+          </button>
+        </div>
+        <p className="upload-hint-text" style={{ textAlign: 'left', margin: '0 0 0.5rem 0' }}>
+          Accepted: PDF
+        </p>
+
+        <input
+          ref={reportInputRef}
+          type="file"
+          multiple
+          accept="application/pdf,.pdf"
+          style={{ display: 'none' }}
+          onChange={(e) => {
+            addReports(e.target.files);
+            e.target.value = '';
+          }}
+          aria-hidden="true"
+        />
+
+        {/* Radiology Report Upload Dropzone (Always Visible) */}
+        <div
+          className={`assessment-upload-dropzone ${dragActiveReports ? 'drag-active' : ''}`}
+          style={{ padding: '1.25rem 1rem', minHeight: '90px', marginBottom: xrayReports.length > 0 ? '0.75rem' : '1.25rem' }}
+          onDragEnter={handleReportDrag}
+          onDragLeave={handleReportDrag}
+          onDragOver={handleReportDrag}
+          onDrop={handleReportDrop}
+          onClick={() => reportInputRef.current?.click()}
+          role="button"
+          tabIndex={0}
+          aria-label="Upload radiology reports"
+          onKeyDown={(e) => {
+            if (e.key === ' ' || e.key === 'Enter') {
+              e.preventDefault();
+              reportInputRef.current?.click();
+            }
+          }}
+        >
+          <p className="upload-primary-text" style={{ margin: 0, fontSize: '0.92rem' }}>
+            Drag &amp; drop radiology reports, or <span className="upload-browse-link">Browse reports</span>
+          </p>
+        </div>
+
+        {/* Selected Reports List */}
+        {xrayReports.length > 0 ? (
+          <div className="file-list-container" style={{ marginBottom: '1rem' }}>
+            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#475569' }}>
+              Selected Reports ({xrayReports.length}):
+            </span>
+            {xrayReports.map((rep) => {
+              const isPdf = rep.name.toLowerCase().endsWith('.pdf');
+              return (
+                <div key={rep.id} className="file-card-item">
+                  <div className="file-card-left">
+                    <div className={`file-card-icon-badge ${isPdf ? 'badge-pdf' : 'badge-img'}`}>
+                      {isPdf ? 'PDF' : 'DOC'}
+                    </div>
+                    <div className="file-card-info">
+                      <span className="file-card-name" title={rep.name}>
+                        ✓ {rep.name}
+                      </span>
+                      <span className="file-card-meta">
+                        {formatFileSize(rep.size)} ·{' '}
+                        {rep.status === 'READY' ? (
+                          <span className="status-ready">Ready for OCR/NLP</span>
+                        ) : rep.status === 'UPLOADING' ? (
+                          <span className="status-uploading">Extracting text &amp; findings...</span>
+                        ) : rep.status === 'COMPLETED' ? (
+                          <span className="status-completed">✓ Extracted</span>
+                        ) : (
+                          <span className="status-failed">✗ {rep.error || 'Upload failed'}</span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                <div className="file-card-actions">
+                  <button
+                    type="button"
+                    className="btn-card-view"
+                    onClick={() => handleOpenPreview(rep)}
+                    aria-label={`View ${rep.name}`}
+                  >
+                    View
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-card-remove"
+                    onClick={() => handleRemoveReport(rep.id)}
+                    disabled={submitting}
+                    aria-label={`Remove ${rep.name}`}
+                  >
+                    Remove
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
 
         {/* Panel Footer */}
         <div className="na-panel-footer" style={{ marginTop: '1.5rem' }}>
@@ -545,7 +867,7 @@ export default function XrayUpload() {
             type="button"
             className="na-continue-btn"
             onClick={onContinue}
-            disabled={submitting || !file}
+            disabled={submitting || (xrayImages.length === 0 && xrayReports.length === 0)}
           >
             <span>{submitting ? 'Uploading & Analyzing...' : 'Continue'}</span>
             <span className="na-btn-arrow">
@@ -557,10 +879,21 @@ export default function XrayUpload() {
             <span className="na-security-icon">
               <ShieldLockIcon size={15} color="#10b981" />
             </span>
-            <span>HIPAA-Compliant Radiology Inference &amp; Verification</span>
+            <span>Independent Verification · HIPAA-Compliant Vision AI &amp; OCR</span>
           </div>
         </div>
       </section>
+
+      {/* Independent Verification Preview Modal */}
+      {previewState ? (
+        <FilePreviewModal
+          file={previewState.file}
+          previewUrl={previewState.previewUrl}
+          previewType={previewState.previewType}
+          onClose={handleClosePreview}
+        />
+      ) : null}
     </div>
   );
 }
+

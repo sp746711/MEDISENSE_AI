@@ -39,12 +39,18 @@ def combine_evidence(
     report_provided: bool | None = None,
     qualitative_report_findings: list[dict[str, Any]] | None = None,
     narrative_report_findings: list[dict[str, Any]] | None = None,
+    xray_results: list[dict[str, Any]] | None = None,
+    xray_reports: list[dict[str, Any]] | None = None,
+    medical_reports: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Combine multimodal inputs into structured clinical evidence."""
     symptoms = symptoms or []
     report_findings = report_findings or []
     qualitative_report_findings = qualitative_report_findings or []
     narrative_report_findings = narrative_report_findings or []
+    xray_images = list(xray_results) if xray_results is not None else ([xray_result] if xray_result else [])
+    xray_reports = list(xray_reports or [])
+    medical_reports = list(medical_reports or [])
 
     # If qualitative findings are passed inside report_findings, normalize them
     for f in list(report_findings):
@@ -54,7 +60,7 @@ def combine_evidence(
     is_report_provided = (
         report_provided
         if report_provided is not None
-        else bool(report_findings or qualitative_report_findings or narrative_report_findings)
+        else bool(report_findings or qualitative_report_findings or narrative_report_findings or medical_reports or xray_reports)
     )
 
     current_present = [
@@ -237,39 +243,116 @@ def combine_evidence(
             short_cnt = cnt[:100] + "..." if len(cnt) > 100 else cnt
             supporting.append(f"Report narrative ({sec}): {short_cnt}")
 
-    # 3. Truthful X-ray Status and Interpretation
+    # 3. Truthful X-ray Status and Interpretation (Multi-Image & Multi-Report Aware)
+    processed_images: list[dict[str, Any]] = []
     xray_finding_str = None
-    xray_status_raw = (xray_result or {}).get("status", "none")
-    xray_status_normalized = (xray_status_raw or "none").lower()
+    xray_received = bool(xray_images)
+    xray_status_display = "NOT_PROVIDED"
+    xray_interpretation = "NOT_PROVIDED"
+    xray_evidence_status = "NOT_ASSESSED"
+    xray_region = "not declared"
 
-    raw_reg = ((xray_result or {}).get("region") or "").strip().lower()
-    xray_region = raw_reg if raw_reg else "not declared"
-    region_label = f"{xray_region.capitalize()} X-ray" if xray_region not in {"not declared", "unknown"} else "X-ray"
+    if xray_images:
+        completed_preds = []
+        any_unavailable = False
+        all_regions = set()
 
-    if xray_result and xray_status_normalized == "completed" and xray_result.get("prediction"):
-        xray_finding_str = xray_result.get("prediction")
-        xray_received = True
-        xray_interpretation = "AVAILABLE"
-        xray_evidence_status = "SUPPORTING"
-        xray_status_display = "COMPLETED"
-        supporting.append(f"{region_label} deep learning model identified radiographic pattern: {xray_finding_str}.")
-    elif xray_result and xray_status_normalized == "unavailable":
-        xray_received = True
-        xray_interpretation = "UNAVAILABLE"
-        xray_evidence_status = "UNKNOWN"
-        xray_status_display = "UNAVAILABLE"
-        unassessed.append(f"{region_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
-    elif xray_result and xray_status_normalized not in {"none", "not_provided"}:
-        xray_received = True
-        xray_interpretation = "UNAVAILABLE"
-        xray_evidence_status = "UNKNOWN"
-        xray_status_display = xray_status_normalized.upper()
-        unassessed.append(f"{region_label} status: {xray_status_normalized.upper()}. Automated interpretation unavailable.")
-    else:
-        xray_received = False
-        xray_interpretation = "NOT_PROVIDED"
-        xray_evidence_status = "NOT_ASSESSED"
-        xray_status_display = "NOT_PROVIDED"
+        for idx, img in enumerate(xray_images):
+            img_status = (img.get("status") or "unavailable").lower()
+            img_reg = (img.get("region") or "").strip().lower() or "not declared"
+            all_regions.add(img_reg)
+            img_fname = img.get("file_name") or img.get("source_file") or f"xray_image_{idx+1}"
+            img_label = f"{img_reg.capitalize()} X-ray ({img_fname})" if img_reg not in {"not declared", "unknown"} else f"X-ray ({img_fname})"
+            pred = img.get("prediction")
+
+            p_entry = {
+                "id": img.get("id") or img.get("xray_result_id"),
+                "file_name": img_fname,
+                "region": img_reg,
+                "status": img_status.upper(),
+                "prediction": pred,
+                "model_version": img.get("model_version") or "N/A",
+                "confidence": img.get("confidence_if_valid"),
+                "uncertainty": img.get("uncertainty"),
+                "message": img.get("message"),
+                "source": "xray_image",
+                "source_type": "XRAY_IMAGE",
+                "source_file": img_fname,
+            }
+            processed_images.append(p_entry)
+
+            if img_status == "completed" and pred:
+                completed_preds.append(pred)
+                supporting.append(f"{img_label} deep learning model identified radiographic pattern: {pred}.")
+            elif img_status == "unavailable":
+                any_unavailable = True
+                unassessed.append(f"{img_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
+            else:
+                any_unavailable = True
+                unassessed.append(f"{img_label} status: {img_status.upper()}. Automated interpretation unavailable.")
+
+        xray_region = ", ".join(sorted(all_regions)) if all_regions else "not declared"
+        if completed_preds:
+            xray_finding_str = "; ".join(completed_preds)
+            xray_interpretation = "AVAILABLE"
+            xray_evidence_status = "SUPPORTING"
+            xray_status_display = "COMPLETED"
+        elif any_unavailable:
+            xray_interpretation = "UNAVAILABLE"
+            xray_evidence_status = "UNKNOWN"
+            xray_status_display = "UNAVAILABLE"
+        else:
+            xray_interpretation = "UNAVAILABLE"
+            xray_evidence_status = "UNKNOWN"
+            xray_status_display = "RECEIVED"
+
+    # Process X-ray / Radiology Reports
+    processed_xray_reports: list[dict[str, Any]] = []
+    for idx, xr in enumerate(xray_reports):
+        xr_fname = xr.get("file_name") or f"xray_report_{idx+1}.pdf"
+        struct = xr.get("structured_findings") or {}
+        xr_qual = struct.get("qualitative_findings", []) if isinstance(struct, dict) else []
+        xr_entry = {
+            "id": xr.get("id") or xr.get("report_id"),
+            "file_name": xr_fname,
+            "source_type": "XRAY_REPORT",
+            "source_file": xr_fname,
+            "status": "EXTRACTED" if xr.get("extracted_text") else "UNREADABLE",
+            "structured_findings": struct,
+            "created_at": xr.get("created_at"),
+            "is_historical": xr.get("is_historical", False),
+        }
+        processed_xray_reports.append(xr_entry)
+
+        for qf in xr_qual:
+            q_name = qf.get("finding", "")
+            q_lower = q_name.lower()
+            q_state = qf.get("state", "PRESENT")
+            if any(neg in q_lower for neg in ["no fracture", "no acute fracture", "no dislocation", "intact", "unremarkable", "normal"]):
+                reassuring.append(f"Radiology report ({xr_fname}) explicitly confirms: {q_name}.")
+            else:
+                supporting.append(f"Radiology report ({xr_fname}) clinical finding: {q_name} ({q_state}).")
+
+        # Check for body-region mismatch between X-ray images and radiology reports
+        if processed_images:
+            rep_text = (xr.get("extracted_text") or "").lower() + " " + xr_fname.lower()
+            for img in processed_images:
+                img_reg = img.get("region", "").lower()
+                if img_reg and img_reg not in {"not declared", "unknown"}:
+                    comp_regions = ["chest", "knee", "wrist", "hand", "elbow", "shoulder", "spine", "pelvis", "hip", "ankle", "foot"]
+                    for other_r in comp_regions:
+                        if other_r != img_reg and other_r in rep_text and img_reg not in rep_text:
+                            contradictory.append(
+                                f"Conflicting evidence / body region mismatch: Image region is '{img_reg.capitalize()}', but radiology report '{xr_fname}' indicates '{other_r.capitalize()}'. Evidence kept unlinked."
+                            )
+                            evidence_relationships.append({
+                                "source_a": f"xray_image ({img.get('file_name')})",
+                                "source_b": f"xray_report ({xr_fname})",
+                                "finding": "body_region_mismatch",
+                                "relationship": "CONFLICTING",
+                                "reason": f"Image anatomical region '{img_reg}' differs from radiology report '{other_r}'.",
+                            })
+                            break
 
     # 4. Missing critical information (context-sensitive, never generic across unrelated domains)
     relevant_critical_checks: list[str] = []
@@ -419,6 +502,8 @@ def combine_evidence(
         "report": {
             "provided": is_report_provided,
             "evidence_status": report_evidence_status,
+            "medical_reports": medical_reports,
+            "xray_reports": processed_xray_reports,
             "abnormal_findings": [
                 {
                     **f,
@@ -451,10 +536,12 @@ def combine_evidence(
             "status": xray_status_display,
             "region": xray_region,
             "prediction": xray_finding_str,
-            "model_version": (xray_result or {}).get("model_version") or "N/A",
-            "uncertainty": (xray_result or {}).get("uncertainty"),
-            "explainability_artifact": (xray_result or {}).get("explainability_artifact"),
-            "message": (xray_result or {}).get("message"),
+            "images": processed_images,
+            "reports": processed_xray_reports,
+            "model_version": (xray_images[0] if xray_images else (xray_result or {})).get("model_version") or "N/A",
+            "uncertainty": (xray_images[0] if xray_images else (xray_result or {})).get("uncertainty"),
+            "explainability_artifact": (xray_images[0] if xray_images else (xray_result or {})).get("explainability_artifact"),
+            "message": (xray_images[0] if xray_images else (xray_result or {})).get("message"),
             "provenance": "xray_deep_learning" if xray_received else "none",
         },
         "supporting": supporting,

@@ -4,7 +4,7 @@ import uuid
 from pathlib import Path
 from uuid import UUID
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
 from app.core.config import get_settings
 from app.core.dependencies import CurrentUser, DbSession
@@ -20,19 +20,46 @@ async def upload_report(
     current_user: CurrentUser,
     db: DbSession,
     file: UploadFile = File(...),
+    report_category: str = Form("medical_report"),
 ) -> dict:
     assessment = _owned(db, assessment_id, current_user.user_id)
-    if "medical_report" not in (assessment.input_types or []):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="This assessment was not configured for medical report input.",
-        )
+    category = (report_category or "medical_report").strip().lower()
+    if category not in {"medical_report", "xray_report"}:
+        category = "medical_report"
+
+    input_types = assessment.input_types or []
+    if category == "xray_report":
+        if "xray" not in input_types and "medical_report" not in input_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This assessment was not configured for X-ray or medical report input.",
+            )
+    else:
+        if "medical_report" not in input_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This assessment was not configured for medical report input.",
+            )
 
     settings = get_settings()
     content = await file.read()
     validation = validate_report_file(file.filename or "", content, settings.max_upload_size_mb)
     if not validation["ok"]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=validation["message"])
+
+    fname_lower = (file.filename or "").lower()
+    if category == "xray_report":
+        if validation["extension"] != ".pdf":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="X-ray reports must be PDF files.",
+            )
+        # Prevent normal medical reports from being falsely categorized as xray reports
+        if any(marker in fname_lower for marker in ["medical_report", "medical-report", "blood_report", "lab_report", "cbc", "liver_report", "kidney_report"]):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This file appears to be a general medical report, not an X-ray / radiology report.",
+            )
 
     reports_dir = settings.upload_path / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -62,6 +89,7 @@ async def upload_report(
         file_name=Path(file.filename or "report").name,
         stored_name=stored_name,
         file_type=validation["file_type"],
+        report_category=category,
         extracted_text=extracted_text,
         structured_findings=combined_findings,
         reference_ranges={f["test_name"]: f.get("reference_range") for f in structured_findings if f.get("reference_range")},
@@ -84,6 +112,7 @@ async def upload_report(
         "status": "extracted" if extracted_text else "unreadable",
         "report_id": str(report.report_id),
         "file_name": report.file_name,
+        "report_category": report.report_category,
         "message": nlp_result.get("message") or ocr_result.get("message"),
         "structured_findings": combined_findings,
         "extracted_text_snippet": (extracted_text[:200] + "...") if extracted_text else None,
@@ -109,6 +138,7 @@ def list_reports(
                 "report_id": str(r.report_id),
                 "file_name": r.file_name,
                 "file_type": r.file_type,
+                "report_category": r.report_category,
                 "created_at": r.created_at.isoformat(),
                 "has_extracted_text": bool(r.extracted_text),
                 "structured_findings": r.structured_findings,

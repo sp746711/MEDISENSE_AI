@@ -84,6 +84,12 @@ export default function AssessmentResult() {
     : (evidence.report?.abnormal_findings || [])
         .concat(evidence.report?.normal_findings || [])
         .concat(evidence.report?.unknown_range_findings || []);
+  const medicalReportsList =
+    payload.feedback?.medical_reports || evidence.report?.medical_reports || [];
+  const xrayImagesList =
+    payload.feedback?.xray_images || evidence.xray?.images || [];
+  const xrayReportsList =
+    payload.feedback?.xray_reports || evidence.xray?.reports || [];
   const xrayData = evidence.xray;
 
   return (
@@ -171,53 +177,118 @@ export default function AssessmentResult() {
 
         {/* 2. MEDICAL REPORT */}
         <EvidenceCard title="MEDICAL REPORT FINDINGS">
-          {reportFindings.length === 0 ? (
+          {reportFindings.length === 0 && medicalReportsList.length === 0 ? (
             <p className="muted">{payload.feedback?.medical_report_message || 'Medical Report: Not provided.'}</p>
           ) : (
-            <table className="mini-table">
-              <thead>
-                <tr>
-                  <th>Test Name</th>
-                  <th>Value</th>
-                  <th>Reference</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reportFindings.map((f, idx) => (
-                  <tr key={idx}>
-                    <td>{f.test_name}</td>
-                    <td>{f.value} {f.unit || ''}</td>
-                    <td>{f.reference_range || '—'}</td>
-                    <td>
-                      <span className={`badge badge-${(f.interpretation || f.status || '').toLowerCase()}`}>
-                        {f.interpretation || f.status || 'RECORDED'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div>
+              {medicalReportsList.length > 0 ? (
+                <div style={{ marginBottom: '0.75rem' }}>
+                  <p style={{ margin: '0 0 0.35rem 0', fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
+                    Uploaded Reports ({medicalReportsList.length}):
+                  </p>
+                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
+                    {medicalReportsList.map((mr, idx) => (
+                      <li key={idx} style={{ marginBottom: '0.2rem' }}>
+                        <strong>{mr.file_name}</strong>
+                        {mr.is_historical ? ' (Historical / Contextual)' : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+
+              {reportFindings.length > 0 ? (
+                <table className="mini-table">
+                  <thead>
+                    <tr>
+                      <th>Test Name</th>
+                      <th>Value</th>
+                      <th>Reference</th>
+                      <th>Source</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reportFindings.map((f, idx) => (
+                      <tr key={idx}>
+                        <td>{f.test_name}</td>
+                        <td>{f.value} {f.unit || ''}</td>
+                        <td>{f.reference_range || '—'}</td>
+                        <td style={{ fontSize: '0.75rem', color: '#64748b' }}>{f.source_file || 'Report'}</td>
+                        <td>
+                          <span className={`badge badge-${(f.interpretation || f.status || '').toLowerCase()}`}>
+                            {f.interpretation || f.status || 'RECORDED'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : null}
+            </div>
           )}
         </EvidenceCard>
 
-        {/* 3. X-RAY ANALYSIS */}
-        <EvidenceCard title="X-RAY ANALYSIS">
-          {xrayData && xrayData.received ? (
+        {/* 3. X-RAY & RADIOLOGY EVIDENCE */}
+        <EvidenceCard title="X-RAY & RADIOLOGY EVIDENCE">
+          {(!xrayData || !xrayData.received) && xrayImagesList.length === 0 && xrayReportsList.length === 0 ? (
+            <p className="muted">X-Ray: Not provided.</p>
+          ) : (
             <div>
-              <p><strong>Region:</strong> {(xrayData.region || 'Not declared').toUpperCase()}</p>
-              <p><strong>Status:</strong> {(xrayData.status || '').toUpperCase()}</p>
-              {xrayData.prediction ? (
-                <p><strong>Finding:</strong> <span className="highlight">{xrayData.prediction}</span></p>
-              ) : (
-                <p className="muted">{xrayData.description || xrayData.message || 'Automated interpretation for this X-ray type is currently unavailable.'}</p>
-              )}
-              {xrayData.uncertainty ? (
-                <p className="small muted"><strong>Uncertainty:</strong> {xrayData.uncertainty}</p>
+              {/* Images */}
+              {xrayImagesList.length > 0 ? (
+                <div style={{ marginBottom: '1rem' }}>
+                  <h4 style={{ margin: '0 0 0.4rem 0', fontSize: '0.92rem', color: '#0369a1' }}>Images:</h4>
+                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.88rem' }}>
+                    {xrayImagesList.map((img, idx) => (
+                      <li key={idx} style={{ marginBottom: '0.45rem' }}>
+                        <strong>{img.file_name}</strong> ({img.region?.toUpperCase()})
+                        <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
+                          Status: <span className={`badge badge-${(img.status || '').toLowerCase()}`}>{(img.status || '').toUpperCase()}</span>
+                          {img.prediction ? (
+                            <span style={{ marginLeft: '0.5rem' }}>
+                              Finding: <span className="highlight">{img.prediction}</span>
+                            </span>
+                          ) : (
+                            <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>
+                              Reason: automated interpretation unavailable
+                            </span>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : xrayData?.received ? (
+                <div style={{ marginBottom: '1rem' }}>
+                  <p><strong>Region:</strong> {(xrayData.region || 'Not declared').toUpperCase()}</p>
+                  <p><strong>Status:</strong> {(xrayData.status || '').toUpperCase()}</p>
+                  {xrayData.prediction ? (
+                    <p><strong>Finding:</strong> <span className="highlight">{xrayData.prediction}</span></p>
+                  ) : (
+                    <p className="muted">{xrayData.description || xrayData.message || 'Automated interpretation for this X-ray type is currently unavailable.'}</p>
+                  )}
+                </div>
+              ) : null}
+
+              {/* Radiology Reports */}
+              {xrayReportsList.length > 0 ? (
+                <div>
+                  <h4 style={{ margin: '0 0 0.4rem 0', fontSize: '0.92rem', color: '#0369a1' }}>Radiology Reports:</h4>
+                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.88rem' }}>
+                    {xrayReportsList.map((rep, idx) => (
+                      <li key={idx} style={{ marginBottom: '0.45rem' }}>
+                        <strong>{rep.file_name}</strong>
+                        <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
+                          OCR / NLP: <span className="badge badge-extracted">{rep.status || 'EXTRACTED'}</span>
+                          {rep.is_historical ? <span style={{ marginLeft: '0.4rem', color: '#64748b' }}>(Historical report)</span> : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ) : null}
             </div>
-          ) : (
-            <p className="muted">X-Ray: Not provided.</p>
           )}
         </EvidenceCard>
 

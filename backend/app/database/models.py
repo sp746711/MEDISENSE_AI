@@ -145,6 +145,12 @@ class MedicalReport(Base):
     structured_findings: Mapped[Any] = mapped_column(JSONType, nullable=True)
     reference_ranges: Mapped[Any] = mapped_column(JSONType, nullable=True)
     ocr_metadata: Mapped[Any] = mapped_column(JSONType, nullable=True)
+    report_category: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="medical_report",
+        server_default="medical_report",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=utcnow,
@@ -168,6 +174,7 @@ class XrayResult(Base):
         nullable=False,
         index=True,
     )
+    file_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     region: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     model_version: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     prediction: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)

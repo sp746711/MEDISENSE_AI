@@ -307,25 +307,44 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             story.append(Paragraph("<i>Medical report provided.</i>", body_style))
     story.append(Spacer(1, 8))
 
-    # 4. X-Ray Imaging Analysis
-    story.append(Paragraph("4. X-Ray Imaging Analysis", section_heading))
+    # 4. X-Ray & Radiology Evidence
+    story.append(Paragraph("4. X-Ray & Radiology Evidence", section_heading))
     xray_info = feedback.get("xray_findings", {})
     if not xray_info and evidence_info:
         xray_info = evidence_info.get("xray", {})
-    if xray_info.get("received") or "xray" in (assessment.input_types or []):
-        x_status = xray_info.get("status", "UNAVAILABLE")
-        x_desc = xray_info.get("description") or xray_info.get("message") or "Automated interpretation unavailable."
-        raw_reg = (xray_info.get("region") or "").strip().lower()
-        x_reg = raw_reg.title() if raw_reg not in {"not declared", "unknown", ""} else "Not declared"
-        x_pred = xray_info.get("prediction") or "None"
-        x_block = (
-            f"<b>Region:</b> {x_reg} &nbsp;|&nbsp; <b>Status:</b> {x_status} &nbsp;|&nbsp; "
-            f"<b>Model Prediction:</b> {x_pred}<br/>"
-            f"<i>{x_desc}</i>"
-        )
-        story.append(Paragraph(x_block, body_style))
+    x_images = xray_info.get("images", []) or evidence_info.get("xray", {}).get("images", [])
+    x_reports = xray_info.get("reports", []) or evidence_info.get("xray", {}).get("reports", []) or feedback.get("xray_reports", [])
+
+    if x_images or x_reports or xray_info.get("received") or "xray" in (assessment.input_types or []):
+        if x_images:
+            story.append(Paragraph("<b>Radiographic Images Evaluated:</b>", body_style))
+            for img in x_images:
+                istat = (img.get("status") or "UNAVAILABLE").upper()
+                ireg = (img.get("region") or "Not declared").title()
+                ipred = img.get("prediction") or "None"
+                ifistat = f"<font color='#059669'><b>{ipred}</b></font>" if istat == "COMPLETED" and ipred != "None" else f"<font color='#d97706'><b>{istat}</b> (Automated interpretation unavailable)</font>"
+                story.append(Paragraph(f"• <b>{img.get('file_name', 'X-ray image')}</b> ({ireg}): {ifistat}", body_style))
+        elif xray_info.get("received"):
+            x_status = xray_info.get("status", "UNAVAILABLE")
+            x_desc = xray_info.get("description") or xray_info.get("message") or "Automated interpretation unavailable."
+            raw_reg = (xray_info.get("region") or "").strip().lower()
+            x_reg = raw_reg.title() if raw_reg not in {"not declared", "unknown", ""} else "Not declared"
+            x_pred = xray_info.get("prediction") or "None"
+            x_block = (
+                f"<b>Region:</b> {x_reg} &nbsp;|&nbsp; <b>Status:</b> {x_status} &nbsp;|&nbsp; "
+                f"<b>Model Prediction:</b> {x_pred}<br/>"
+                f"<i>{x_desc}</i>"
+            )
+            story.append(Paragraph(x_block, body_style))
+
+        if x_reports:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<b>Radiology Reports Extracted:</b>", body_style))
+            for rep in x_reports:
+                r_status = rep.get("status", "EXTRACTED")
+                story.append(Paragraph(f"• <b>{rep.get('file_name', 'Radiology report')}</b>: Status: {r_status}", body_style))
     else:
-        story.append(Paragraph("<i>X-Ray: Not provided.</i>", body_style))
+        story.append(Paragraph("<i>X-Ray & Radiology: Not provided.</i>", body_style))
     story.append(Spacer(1, 8))
 
     # 5. Supporting & Contradictory Evidence

@@ -291,22 +291,63 @@ function FloatingReportObjects() {
   );
 }
 
+import FilePreviewModal from '../components/FilePreviewModal';
+
 /* ============================================================
-   MAIN MEDICAL REPORT UPLOAD COMPONENT
+   MAIN MEDICAL REPORT UPLOAD COMPONENT (MULTI-FILE SUPPORT)
    ============================================================ */
 export default function MedicalReportUpload() {
   const navigate = useNavigate();
   const { assessmentId, inputTypes } = useAssessment();
-  const [file, setFile] = useState(null);
+  const [medicalReports, setMedicalReports] = useState([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [previewState, setPreviewState] = useState(null); // { id, file, name, size, previewUrl, previewType }
   const fileInputRef = useRef(null);
+  const previewUrlRef = useRef(null);
+
+  // Clean up object URL when component unmounts
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
+      }
+    };
+  }, []);
 
   const nextPath = () => {
     if (inputTypes.includes(INPUT_TYPES.XRAY)) return '/assessment/xray';
     return '/assessment/processing';
+  };
+
+  const addFiles = (fileList) => {
+    if (!fileList || fileList.length === 0) return;
+    const newItems = [];
+    for (let i = 0; i < fileList.length; i++) {
+      const f = fileList[i];
+      // Prevent exact duplicate selection by filename and size
+      const exists = medicalReports.some(
+        (existing) => existing.file.name === f.name && existing.file.size === f.size
+      );
+      if (!exists) {
+        newItems.push({
+          id: `${f.name}-${f.size}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          file: f,
+          name: f.name,
+          size: f.size,
+          type: f.type,
+          status: 'READY',
+          error: null,
+        });
+      }
+    }
+    if (newItems.length > 0) {
+      setMedicalReports((prev) => [...prev, ...newItems]);
+      setError('');
+    }
   };
 
   const handleDrag = (e) => {
@@ -323,15 +364,55 @@ export default function MedicalReportUpload() {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      setFile(e.dataTransfer.files[0]);
+    if (e.dataTransfer.files) {
+      addFiles(e.dataTransfer.files);
     }
   };
 
   const handleFileInputChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setFile(e.target.files[0]);
+    if (e.target.files) {
+      addFiles(e.target.files);
     }
+    e.target.value = ''; // Reset input to allow selecting same file again if re-added
+  };
+
+  const handleRemoveFile = (idToRemove) => {
+    // If removing currently previewed file, close preview
+    if (previewState && previewState.id === idToRemove) {
+      handleClosePreview();
+    }
+    setMedicalReports((prev) => prev.filter((item) => item.id !== idToRemove));
+  };
+
+  const handleOpenPreview = (item) => {
+    // Clean up any existing preview URL first
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    try {
+      const url = URL.createObjectURL(item.file);
+      previewUrlRef.current = url;
+      const isPdf = item.name.toLowerCase().endsWith('.pdf') || item.type === 'application/pdf';
+      setPreviewState({
+        id: item.id,
+        file: item.file,
+        name: item.name,
+        size: item.size,
+        previewUrl: url,
+        previewType: isPdf ? 'pdf' : 'image',
+      });
+    } catch {
+      setError(`Unable to generate preview for ${item.name}.`);
+    }
+  };
+
+  const handleClosePreview = () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setPreviewState(null);
   };
 
   const formatFileSize = (bytes) => {
@@ -344,16 +425,41 @@ export default function MedicalReportUpload() {
   const onContinue = async () => {
     setError('');
     if (!assessmentId) return setError('No assessment in progress. Start a new assessment.');
-    if (!file) return setError('Please select a medical report file.');
+    if (medicalReports.length === 0) return setError('Please select at least one medical report file.');
+
     setSubmitting(true);
-    try {
-      const result = await uploadReport(assessmentId, file);
-      setMessage(result.message || 'Report uploaded successfully.');
+    let anyFailed = false;
+    const updatedReports = [...medicalReports];
+
+    for (let i = 0; i < updatedReports.length; i++) {
+      const item = updatedReports[i];
+      if (item.status === 'COMPLETED') {
+        continue; // Don't duplicate successful uploads
+      }
+
+      // Mark uploading
+      item.status = 'UPLOADING';
+      setMedicalReports([...updatedReports]);
+
+      try {
+        await uploadReport(assessmentId, item.file, 'medical_report');
+        item.status = 'COMPLETED';
+        item.error = null;
+      } catch (err) {
+        anyFailed = true;
+        item.status = 'FAILED';
+        item.error = err.message || 'Upload failed';
+      }
+      setMedicalReports([...updatedReports]);
+    }
+
+    setSubmitting(false);
+
+    if (anyFailed) {
+      setError('Some medical reports failed to upload. You can retry failed files or remove them.');
+    } else {
+      setMessage(`All ${medicalReports.length} medical report(s) uploaded and extracted successfully.`);
       navigate(nextPath());
-    } catch (err) {
-      setError(err.message || 'Failed to upload report.');
-    } finally {
-      setSubmitting(false);
     }
   };
 
@@ -377,13 +483,13 @@ export default function MedicalReportUpload() {
         {/* Title & Description */}
         <div className="na-header-section">
           <h1 className="na-title">
-            Medical <span className="na-title-highlight">Report</span>
+            Medical <span className="na-title-highlight">Reports</span>
           </h1>
           <p className="na-description">
-            Upload PDF, JPG, JPEG, or PNG health reports.
+            Upload multiple laboratory blood reports, CBC, liver/kidney panels, or prior health summaries.
           </p>
           <p className="na-sub-description">
-            Supports laboratory blood work, metabolic panels, pathology notes, and radiology summaries. Our OCR extracts biomarker parameters and reference ranges.
+            You can select multiple reports, preview each one to verify its correctness, and remove any file before continuing.
           </p>
         </div>
 
@@ -434,7 +540,7 @@ export default function MedicalReportUpload() {
           onClick={() => fileInputRef.current?.click()}
           role="button"
           tabIndex={0}
-          aria-label="Upload medical report"
+          aria-label="Upload medical reports"
           onKeyDown={(e) => {
             if (e.key === ' ' || e.key === 'Enter') {
               e.preventDefault();
@@ -445,6 +551,7 @@ export default function MedicalReportUpload() {
           <input
             ref={fileInputRef}
             type="file"
+            multiple
             accept=".pdf,.jpg,.jpeg,.png"
             className="hidden-file-input"
             onChange={handleFileInputChange}
@@ -456,34 +563,76 @@ export default function MedicalReportUpload() {
           </div>
 
           <p className="upload-primary-text">
-            Drag &amp; drop your medical report here, or <span className="upload-browse-link">Browse files</span>
+            Drag &amp; drop medical reports here, or <span className="upload-browse-link">Browse files</span>
           </p>
           <p className="upload-hint-text">
-            Supports PDF, JPG, JPEG, and PNG formats (Max size configured by server). Executables are automatically rejected.
+            Supports PDF, JPG, JPEG, and PNG. Select multiple files at once or add more sequentially.
           </p>
         </div>
 
-        {/* Selected File State Display */}
-        {file ? (
-          <div className="file-selected-card">
-            <div className="file-selected-left">
-              <div className="file-badge-icon">
-                <FileCheckBadgeIcon size={22} color="#10b981" />
-              </div>
-              <div className="file-info-text">
-                <span className="file-name-label">{file.name}</span>
-                <span className="file-meta-label">
-                  {formatFileSize(file.size)} · Ready for extraction
-                </span>
-              </div>
+        {/* Multi-File Selected List Display */}
+        {medicalReports.length > 0 ? (
+          <div className="file-list-container" aria-label="Selected Medical Reports">
+            <div className="section-divider-title">
+              <h3>Selected Medical Reports ({medicalReports.length})</h3>
+              <button
+                type="button"
+                className="section-upload-btn"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                + Add More Reports
+              </button>
             </div>
-            <button
-              type="button"
-              className="file-change-btn"
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Change file
-            </button>
+
+            {medicalReports.map((item) => {
+              const isPdf = item.name.toLowerCase().endsWith('.pdf');
+              return (
+                <div key={item.id} className="file-card-item">
+                  <div className="file-card-left">
+                    <div className={`file-card-icon-badge ${isPdf ? 'badge-pdf' : 'badge-img'}`}>
+                      {isPdf ? 'PDF' : 'IMG'}
+                    </div>
+                    <div className="file-card-info">
+                      <span className="file-card-name" title={item.name}>
+                        {item.name}
+                      </span>
+                      <span className="file-card-meta">
+                        {formatFileSize(item.size)} ·{' '}
+                        {item.status === 'READY' ? (
+                          <span className="status-ready">Ready for upload</span>
+                        ) : item.status === 'UPLOADING' ? (
+                          <span className="status-uploading">Uploading &amp; Extracting...</span>
+                        ) : item.status === 'COMPLETED' ? (
+                          <span className="status-completed">✓ Uploaded</span>
+                        ) : (
+                          <span className="status-failed">✗ {item.error || 'Upload failed'}</span>
+                        )}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="file-card-actions">
+                    <button
+                      type="button"
+                      className="btn-card-view"
+                      onClick={() => handleOpenPreview(item)}
+                      aria-label={`View ${item.name}`}
+                    >
+                      View
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-card-remove"
+                      onClick={() => handleRemoveFile(item.id)}
+                      disabled={submitting}
+                      aria-label={`Remove ${item.name}`}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         ) : null}
 
@@ -493,7 +642,7 @@ export default function MedicalReportUpload() {
             type="button"
             className="na-continue-btn"
             onClick={onContinue}
-            disabled={submitting || !file}
+            disabled={submitting || medicalReports.length === 0}
           >
             <span>{submitting ? 'Uploading & Extracting...' : 'Continue'}</span>
             <span className="na-btn-arrow">
@@ -505,10 +654,20 @@ export default function MedicalReportUpload() {
             <span className="na-security-icon">
               <ShieldLockIcon size={15} color="#10b981" />
             </span>
-            <span>HIPAA-Compliant Document Encryption &amp; OCR</span>
+            <span>Independent Verification · HIPAA-Compliant Encryption &amp; OCR</span>
           </div>
         </div>
       </section>
+
+      {/* Independent Verification Preview Modal */}
+      {previewState ? (
+        <FilePreviewModal
+          file={previewState.file}
+          previewUrl={previewState.previewUrl}
+          previewType={previewState.previewType}
+          onClose={handleClosePreview}
+        />
+      ) : null}
     </div>
   );
 }

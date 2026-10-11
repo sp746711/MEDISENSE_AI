@@ -36,6 +36,8 @@ async def upload_xray(
     content = await file.read()
     validation = validate_image_file(file.filename or "", content, settings.max_upload_size_mb)
     if not validation["ok"]:
+        if validation.get("extension") not in {".png", ".jpg", ".jpeg"}:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="X-ray images must be PNG, JPG, or JPEG files.")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=validation["message"])
 
     xray_dir = settings.upload_path / "xrays"
@@ -54,6 +56,7 @@ async def upload_xray(
 
     result = XrayResult(
         assessment_id=assessment.assessment_id,
+        file_name=Path(file.filename or "xray").name,
         region=analysis.get("region") or resolved_region,
         model_version=analysis.get("model_version"),
         prediction=analysis.get("prediction"),
@@ -74,6 +77,7 @@ async def upload_xray(
     return {
         "status": result.status,
         "xray_result_id": str(result.xray_result_id),
+        "file_name": result.file_name,
         "message": result.message,
         "region": result.region,
         "model_version": result.model_version,
@@ -96,6 +100,7 @@ def get_xray(
         "results": [
             {
                 "xray_result_id": str(r.xray_result_id),
+                "file_name": r.file_name or "xray_image",
                 "region": r.region,
                 "model_version": r.model_version,
                 "prediction": r.prediction,

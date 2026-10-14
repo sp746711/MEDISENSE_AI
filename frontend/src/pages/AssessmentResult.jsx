@@ -91,6 +91,16 @@ export default function AssessmentResult() {
   const xrayReportsList =
     payload.feedback?.xray_reports || evidence.xray?.reports || [];
   const xrayData = evidence.xray;
+  const possibleConditions =
+    payload.feedback?.possible_conditions ||
+    payload.condition_predictions?.conditions ||
+    [];
+  const conditionStatus =
+    payload.condition_predictions?.status ||
+    payload.feedback?.condition_prediction_status;
+  const conditionMessage =
+    payload.condition_predictions?.message ||
+    payload.feedback?.condition_prediction_message;
 
   return (
     <div className="page">
@@ -299,6 +309,67 @@ export default function AssessmentResult() {
             <p className="small muted">Rules triggered: {triage.rules_triggered.join(', ')}</p>
           ) : null}
         </EvidenceCard>
+
+        {/* 4b. POSSIBLE CONDITIONS (ASSISTIVE ML DIFFERENTIAL) */}
+        {possibleConditions.length > 0 ? (
+          <EvidenceCard title="POSSIBLE CONDITIONS (ASSISTIVE ML DIFFERENTIAL)">
+            <p className="small muted" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+              Probabilistic disease pattern alignment based on verified clinical symptoms. This is an assistive tool for discussion with a doctor and does NOT constitute a diagnosis.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {possibleConditions.map((c, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    padding: '0.75rem',
+                    borderRadius: '8px',
+                    border: '1px solid #cbd5e1',
+                    background: idx === 0 ? '#eff6ff' : '#ffffff',
+                    borderLeft: idx === 0 ? '4px solid #2563eb' : '1px solid #cbd5e1',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
+                    <strong style={{ fontSize: '1rem', color: '#1e3a8a' }}>
+                      #{c.rank || idx + 1} {c.condition}
+                    </strong>
+                    <span className="badge" style={{ background: idx === 0 ? '#2563eb' : '#64748b', color: '#fff', fontSize: '0.75rem' }}>
+                      {c.confidence_tier || 'Possible Alignment'}
+                    </span>
+                  </div>
+                  {c.supporting_symptoms?.length ? (
+                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.85rem', color: '#334155' }}>
+                      <strong>Supporting Symptoms:</strong> {c.supporting_symptoms.join(', ')}
+                    </p>
+                  ) : null}
+                  {c.contradictory_findings?.length ? (
+                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.85rem', color: '#b91c1c' }}>
+                      <strong>Contradictory / Denied:</strong> {c.contradictory_findings.join(', ')}
+                    </p>
+                  ) : null}
+                  {c.unknown_or_missing_information?.length ? (
+                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.82rem', color: '#64748b' }}>
+                      <strong>Unassessed Factors:</strong> {c.unknown_or_missing_information.join(', ')}
+                    </p>
+                  ) : null}
+                  {c.suggested_specialty ? (
+                    <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#0369a1' }}>
+                      Relevant Specialty: <em>{c.suggested_specialty}</em>
+                    </p>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </EvidenceCard>
+        ) : conditionStatus === 'unsupported_condition' ? (
+          <EvidenceCard title="POSSIBLE CONDITIONS (ASSISTIVE ML DIFFERENTIAL)">
+            <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.88rem', color: '#475569', lineHeight: '1.5' }}>
+              {conditionMessage || 'Reported symptoms do not show strong alignment with the 24 disease patterns evaluated by this assistive model. A comprehensive clinical evaluation by a healthcare provider is recommended.'}
+            </p>
+            <p className="small muted" style={{ margin: 0, fontStyle: 'italic' }}>
+              Note: The assistive model refuses to guess diagnoses when clinical presentations fall outside its validated training domains.
+            </p>
+          </EvidenceCard>
+        ) : null}
 
         {/* 5. SUGGESTED SPECIALTY */}
         <EvidenceCard title="SUGGESTED SPECIALTY">

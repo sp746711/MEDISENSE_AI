@@ -135,36 +135,71 @@ class XRayModelService:
         """Run deep learning inference or return exact standard unavailable status."""
         raw_reg = (region or "").strip().lower()
         reg = raw_reg if raw_reg else "unknown"
-        if reg != "chest" or not self.is_available():
-            msg = (
-                f"X-ray received. Automated interpretation for the selected X-ray type is currently unavailable."
-                if reg != "chest"
-                else DEFAULT_UNAVAILABLE_MESSAGE
-            )
+
+        # 1. Check image file existence and readability
+        if not os.path.exists(image_path) or os.path.getsize(image_path) == 0:
+            logger.warning("X-ray image file missing or empty: %s", image_path)
             return {
                 "status": "unavailable",
+                "reason_code": "invalid_image",
                 "region": reg,
                 "model_version": None,
                 "prediction": None,
                 "confidence_if_valid": None,
-                "uncertainty": "Model not configured or region currently unsupported",
+                "uncertainty": "Image file is missing or corrupted",
                 "explainability_artifact": None,
-                "message": msg,
+                "message": "The uploaded X-ray file could not be read or is unavailable. Please upload a valid PNG or JPEG image.",
             }
 
-        # If checkpoint is loaded, execute PyTorch forward pass
+        # 2. Check anatomical region support
+        if reg != "chest":
+            logger.info("Unsupported X-ray anatomical region requested: %s", reg)
+            return {
+                "status": "unavailable",
+                "reason_code": "unsupported_region",
+                "region": reg,
+                "model_version": None,
+                "prediction": None,
+                "confidence_if_valid": None,
+                "uncertainty": f"Automated interpretation for {reg} radiography is currently unsupported (vision pipeline is specialized for chest radiography)",
+                "explainability_artifact": None,
+                "message": (
+                    f"X-ray received. Automated interpretation for {reg} X-ray is currently unavailable "
+                    f"as the diagnostic vision model is specialized for chest radiography. "
+                    f"If you have the associated radiology report, upload it for supported text-based analysis."
+                ),
+            }
+
+        # 3. Check model checkpoint availability
+        if not self.is_available():
+            logger.info("Chest X-ray model checkpoint not loaded or not configured.")
+            return {
+                "status": "unavailable",
+                "reason_code": "missing_checkpoint",
+                "region": "chest",
+                "model_version": None,
+                "prediction": None,
+                "confidence_if_valid": None,
+                "uncertainty": "Model checkpoint not configured on disk; place PyTorch weights in backend/models/xray/chest/model.pt or set XRAY_CHEST_CHECKPOINT",
+                "explainability_artifact": None,
+                "message": DEFAULT_UNAVAILABLE_MESSAGE,
+            }
+
+        # 4. If checkpoint is loaded, execute PyTorch forward pass
         try:
             tensor = self.preprocess_image(image_path)
             if tensor is None:
+                logger.warning("Image preprocessing failed for path: %s", image_path)
                 return {
                     "status": "unavailable",
+                    "reason_code": "preprocessing_failed",
                     "region": reg,
                     "model_version": self.model_version,
                     "prediction": None,
                     "confidence_if_valid": None,
-                    "uncertainty": "Unable to preprocess image",
+                    "uncertainty": "Unable to decode and preprocess image pixels",
                     "explainability_artifact": None,
-                    "message": "Image preprocessing failed.",
+                    "message": "Image preprocessing failed. Please verify the image file format.",
                 }
 
             with torch.no_grad():

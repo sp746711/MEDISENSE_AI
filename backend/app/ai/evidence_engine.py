@@ -135,19 +135,28 @@ def combine_evidence(
     has_fever = "fever" in present_names or "temperature" in present_names
 
     normal_lab_tests = {f.get("test_name", "").lower() for f in report_normal}
-    has_normal_wbc_or_crp = any(
-        k in t for t in normal_lab_tests for k in ["wbc", "white blood cell", "crp", "c-reactive"]
-    )
-    has_abnormal_wbc_or_crp = any(
+    has_normal_wbc = any(k in t for t in normal_lab_tests for k in ["wbc", "white blood cell"])
+    has_normal_crp = any(k in t for t in normal_lab_tests for k in ["crp", "c-reactive"])
+    has_abnormal_wbc = any(
         f.get("interpretation") in {"HIGH", "ABNORMAL"}
-        and any(k in f.get("test_name", "").lower() for k in ["wbc", "crp", "white blood cell", "c-reactive", "esr"])
+        and any(k in f.get("test_name", "").lower() for k in ["wbc", "white blood cell"])
+        for f in report_abnormal
+    )
+    has_abnormal_crp = any(
+        f.get("interpretation") in {"HIGH", "ABNORMAL"}
+        and any(k in f.get("test_name", "").lower() for k in ["crp", "c-reactive"])
         for f in report_abnormal
     )
 
     if has_respiratory_symptom:
-        if has_normal_wbc_or_crp:
-            reassuring.append("Available WBC and CRP values are within the supplied reference ranges.")
-        elif has_fever and not has_normal_wbc_or_crp:
+        reassuring_lab_parts = []
+        if has_normal_wbc:
+            reassuring_lab_parts.append("WBC")
+        if has_normal_crp:
+            reassuring_lab_parts.append("CRP")
+        if reassuring_lab_parts:
+            reassuring.append(f"Available {' and '.join(reassuring_lab_parts)} value(s) are within the supplied reference ranges.")
+        elif has_fever and not (has_normal_wbc or has_normal_crp):
             supporting.append("Respiratory symptoms correlate with systemic febrile presentation.")
 
     if "headache" in present_names:
@@ -236,10 +245,15 @@ def combine_evidence(
             elif f_state == "ABSENT":
                 reassuring.append(f"Medical report explicitly confirms absence of: {f_name}.")
 
+    import re
+    synthetic_instruction_re = re.compile(
+        r"\b(?:synthetic|demonstration|demo\s+only|sample\s+report|test\s+case|no\s+actual\s+clinical\s+findings|instructions?|placeholder|dummy\s+data|simulated|example\s+report)\b",
+        re.IGNORECASE,
+    )
     for nf in narrative_report_findings:
         sec = nf.get("section", "")
         cnt = nf.get("content", "")
-        if cnt:
+        if cnt and not synthetic_instruction_re.search(cnt) and not synthetic_instruction_re.search(sec):
             short_cnt = cnt[:100] + "..." if len(cnt) > 100 else cnt
             supporting.append(f"Report narrative ({sec}): {short_cnt}")
 
@@ -281,9 +295,26 @@ def combine_evidence(
             }
             processed_images.append(p_entry)
 
+            # Check anatomical alignment with primary complaints
+            is_anatomically_aligned = True
+            if has_respiratory_symptom and img_reg in {"wrist", "hand", "ankle", "knee", "extremity"}:
+                is_anatomically_aligned = False
+            elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present) and not has_respiratory_symptom and img_reg == "chest":
+                is_anatomically_aligned = False
+
             if img_status == "completed" and pred:
                 completed_preds.append(pred)
-                supporting.append(f"{img_label} deep learning model identified radiographic pattern: {pred}.")
+                if is_anatomically_aligned:
+                    supporting.append(f"{img_label} deep learning model identified radiographic pattern: {pred}.")
+                else:
+                    separate.append(f"{img_label} finding ({pred}) is separate from the primary clinical complaint.")
+                    evidence_relationships.append({
+                        "source_a": "symptoms",
+                        "source_b": "xray_image",
+                        "finding": f"{img_label}: {pred}",
+                        "relationship": "SEPARATE",
+                        "reason": f"Anatomical region ({img_reg}) does not directly explain the primary presenting symptoms."
+                    })
             elif img_status == "unavailable":
                 any_unavailable = True
                 unassessed.append(f"{img_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
@@ -497,7 +528,21 @@ def combine_evidence(
                 }
                 for s in symptoms_absent
             ],
-            "unknown": [s.get("symptom") for s in symptoms_unknown],
+            "unknown": [
+                {
+                    "finding": s.get("symptom") if isinstance(s, dict) else str(s),
+                    "symptom": s.get("symptom") if isinstance(s, dict) else str(s),
+                    "status": "UNKNOWN",
+                    "state": "UNKNOWN",
+                    "type": "UNCERTAIN",
+                    "body_area": s.get("body_area") if isinstance(s, dict) else None,
+                    "context": s.get("context") if isinstance(s, dict) else None,
+                    "domain": _lookup_symptom_domain(s.get("symptom") if isinstance(s, dict) else str(s)),
+                    "source": "user_input",
+                    "provenance": "symptom_nlp",
+                }
+                for s in symptoms_unknown
+            ],
         },
         "report": {
             "provided": is_report_provided,

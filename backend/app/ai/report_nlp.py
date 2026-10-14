@@ -133,6 +133,17 @@ RANGE_REGEX = re.compile(
 LESS_THAN_RANGE_REGEX = re.compile(r"<\s*([\d,]+(?:\.\d+)?)")
 GREATER_THAN_RANGE_REGEX = re.compile(r">\s*([\d,]+(?:\.\d+)?)")
 
+SYNTHETIC_INSTRUCTION_RE = re.compile(
+    r"\b(?:synthetic|demonstration|demo\s+only|sample\s+report|test\s+case|no\s+actual\s+clinical\s+findings|instructions?|placeholder|dummy\s+data|simulated|example\s+report)\b",
+    re.IGNORECASE,
+)
+
+
+def is_synthetic_text(text: str | None) -> bool:
+    if not text:
+        return False
+    return bool(SYNTHETIC_INSTRUCTION_RE.search(text))
+
 
 def _evaluate_range(val: float, low: Optional[float], high: Optional[float]) -> str:
     if low is not None and val < low:
@@ -402,18 +413,23 @@ def structure_report_text(
     qualitative_findings: list[dict[str, Any]] = []
     narrative_findings: list[dict[str, Any]] = []
 
+    is_synthetic_doc = is_synthetic_text(text)
+
     if text and text.strip():
-        lower_text = text.lower()
+        # Remove lines that contain synthetic demo markers, test instructions, or placeholders
+        valid_lines = [line for line in text.splitlines() if not is_synthetic_text(line)]
+        cleaned_text = "\n".join(valid_lines)
+        lower_text = cleaned_text.lower()
 
         # Section extraction (Clinical History, Examination, Impression, Findings)
         section_pattern = re.compile(
             r"(?:^|\n)\s*(Clinical History|History|Clinical Indication|Indication|Chief Complaint|Physical Examination|Clinical Examination|Examination|Impression|Conclusion|Diagnosis|Radiology Findings|Findings)\s*:\s*(.*?)(?=(?:\n\s*(?:Clinical History|History|Clinical Indication|Indication|Chief Complaint|Physical Examination|Clinical Examination|Examination|Impression|Conclusion|Diagnosis|Radiology Findings|Findings)\s*:)|$)",
             re.IGNORECASE | re.DOTALL,
         )
-        for smatch in section_pattern.finditer(text):
+        for smatch in section_pattern.finditer(cleaned_text):
             sec_name = smatch.group(1).strip()
             sec_content = smatch.group(2).strip()
-            if sec_content:
+            if sec_content and not is_synthetic_text(sec_content):
                 narrative_findings.append({
                     "section": sec_name,
                     "content": sec_content,
@@ -506,6 +522,7 @@ def structure_report_text(
 
     return {
         "status": status_str,
+        "is_synthetic": is_synthetic_doc,
         "findings": findings,
         "qualitative_findings": qualitative_findings,
         "narrative_findings": narrative_findings,

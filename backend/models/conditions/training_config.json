@@ -1,0 +1,11 @@
+{
+  "model_version": "condition_pred_v1.0",
+  "created_at": "2026-10-14T18:54:30.444658+00:00",
+  "random_seed": 42,
+  "vectorizer": "TfidfVectorizer(ngram_range=(1,2), min_df=2, max_df=0.9, sublinear_tf=True)",
+  "classifier": "CalibratedClassifierCV(LogisticRegression(C=1.5, class_weight='balanced'), cv=3, method='sigmoid')",
+  "target_count": 24,
+  "deduplicated": true,
+  "rejection_threshold": 0.25,
+  "license": "Apache 2.0 (curated research benchmark)"
+}

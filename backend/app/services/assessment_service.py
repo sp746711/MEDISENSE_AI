@@ -18,6 +18,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.ai.condition_prediction import get_condition_prediction_service
 from app.ai.evidence_engine import combine_evidence
 from app.ai.specialty_mapper import map_evidence_to_specialty
 from app.ai.triage_engine import apply_triage
@@ -32,6 +33,7 @@ def generate_assessment_feedback(
     evidence: dict[str, Any],
     triage_result: dict[str, Any],
     specialty: str | None,
+    condition_predictions: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Generate structured, evidence-grounded dynamic clinical assessment feedback.
 
@@ -162,6 +164,14 @@ def generate_assessment_feedback(
 
     if xray_reports_list:
         summary_sentences.append(f"Received {len(xray_reports_list)} radiology report(s) with extracted clinical documentation.")
+
+    conditions_list = condition_predictions.get("conditions", []) if condition_predictions else []
+    if conditions_list:
+        top_c = [c.get("condition") for c in conditions_list[:2] if c.get("condition")]
+        if top_c:
+            summary_sentences.append(
+                f"Assistive machine learning evaluation identified statistical pattern alignment with: {', '.join(top_c)} (probabilistic differential for physician correlation)."
+            )
 
     summary_sentences.append(
         f"Deterministic clinical safety evaluation assigned triage level: {triage_pathway}."
@@ -398,6 +408,10 @@ def generate_assessment_feedback(
         "why_this_triage_selected": why_this_pathway,
         "specialty_rationale": f"Specialty selection ({suggested_spec}) is aligned with the predominant clinical symptom pattern.",
         "recommended_next_step": recommended_next_step,
+        "possible_conditions": conditions_list,
+        "condition_predictions": condition_predictions or {},
+        "condition_prediction_status": (condition_predictions or {}).get("status"),
+        "condition_prediction_message": (condition_predictions or {}).get("message"),
         "safety_disclaimer": safety_disclaimer,
     }
 
@@ -716,6 +730,25 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
     specialty_result = map_evidence_to_specialty(evidence)
     suggested_specialty = specialty_result.get("suggested_specialty")
 
+    # 6b. Predict possible conditions using verified evidence (Non-diagnostic ML differential)
+    try:
+        condition_svc = get_condition_prediction_service()
+        condition_predictions = condition_svc.predict_conditions(
+            symptoms_present=evidence.get("symptoms", {}).get("present", []),
+            symptoms_absent=evidence.get("symptoms", {}).get("absent", []),
+            symptoms_unknown=evidence.get("symptoms", {}).get("unknown", []),
+            raw_text=evidence.get("raw_text"),
+        )
+    except Exception as exc:
+        logger.error("Condition prediction pipeline execution failed: %s", exc)
+        condition_predictions = {
+            "status": "unavailable",
+            "model_version": None,
+            "conditions": [],
+            "message": f"Assistive condition prediction currently unavailable: {exc}",
+            "is_experimental": True,
+        }
+
     # 7. Construct complete result payload with structured dynamic feedback
     final_status = "completed"
     if triage_result.get("status") in {"INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"}:
@@ -725,6 +758,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         evidence=evidence,
         triage_result=triage_result,
         specialty=suggested_specialty,
+        condition_predictions=condition_predictions,
     )
 
     result_payload = {
@@ -735,12 +769,14 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         "specialty_mapping": specialty_result,
         "evidence": evidence,
         "feedback": feedback,
+        "condition_predictions": condition_predictions,
         "summary": {
             "symptoms_count": len(symptoms_list),
             "reports_count": len(report_rows),
             "xray_present": bool(xray_rows),
             "triage_pathway": triage_result.get("pathway"),
             "suggested_specialty": suggested_specialty,
+            "possible_conditions_count": len(condition_predictions.get("conditions", [])),
         },
     }
 

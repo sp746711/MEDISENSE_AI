@@ -810,6 +810,22 @@ NEGATION_PATTERNS = [
     r"\b(?:no|not|don't|dont|doesn't|doesnt|didn't|didnt|never|without|denies|denied|free of|negative for|have not|haven't|havent|had not|hadn't|has not|hasn't|cannot|can't)\b",
 ]
 
+# Uncertainty indicators for symptoms
+UNCERTAINTY_PATTERNS = [
+    re.compile(
+        r"\b(?:not\s+sure|unsure|not\s+certain|uncertain|don't\s+know|dont\s+know|cannot\s+tell|can't\s+tell|hard\s+to\s+tell|wondering|no\s+idea)\s*(?:if|whether|that|about)?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:might\s+have|may\s+have|could\s+have|possibly\s+have|might\s+be|may\s+be|could\s+be|maybe\s+have)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:possible|possibly|perhaps|maybe|unconfirmed|suspected|questionable|potential)\b",
+        re.IGNORECASE,
+    ),
+]
+
 # Contrastive conjunction regex used to prevent negation leakage
 CONTRASTIVE_CONJUNCTIONS = re.compile(
     r"\b(?:but|however|although|though|except|whereas|yet)\b",
@@ -960,23 +976,43 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
 
                     occupied_spans.append((start, end))
 
-                    # Local negation check: only check text preceding the keyword in this specific subclause
+                    # Check uncertainty first: uncertain expressions ("not sure whether", "might have", "unsure")
                     preceding = clause[:start]
-                    is_negated = False
-                    for neg_pat in NEGATION_PATTERNS:
-                        for neg_m in re.finditer(neg_pat, preceding, re.IGNORECASE):
-                            between = preceding[neg_m.end():]
-                            # Check if an affirmative phrase or subject assertion resets the negation
-                            if AFFIRMATIVE_RESETS.search(between):
+                    post_text = clause[end:]
+                    is_uncertain = False
+                    for unc_re in UNCERTAINTY_PATTERNS:
+                        for unc_m in unc_re.finditer(preceding):
+                            between = preceding[unc_m.end():]
+                            if CONTRASTIVE_CONJUNCTIONS.search(between):
                                 continue
-                            if re.search(r",\s*(?:my\b|i\b|the\b|there\b|we\b)", between, re.IGNORECASE):
-                                continue
-                            is_negated = True
+                            is_uncertain = True
                             break
-                        if is_negated:
+                        if is_uncertain:
                             break
 
-                    state = "ABSENT" if is_negated else "PRESENT"
+                    if not is_uncertain:
+                        if re.match(r"^\s*[:\-]?\s*(?:is\s+|seems\s+|appears\s+)?(?:not\s+sure|unsure|uncertain|possible|unconfirmed|questionable)\b", post_text, re.IGNORECASE):
+                            is_uncertain = True
+
+                    if is_uncertain:
+                        state = "UNKNOWN"
+                    else:
+                        # Local negation check: only check text preceding the keyword in this specific subclause
+                        is_negated = False
+                        for neg_pat in NEGATION_PATTERNS:
+                            for neg_m in re.finditer(neg_pat, preceding, re.IGNORECASE):
+                                between = preceding[neg_m.end():]
+                                # Check if an affirmative phrase or subject assertion resets the negation
+                                if AFFIRMATIVE_RESETS.search(between):
+                                    continue
+                                if re.search(r",\s*(?:my\b|i\b|the\b|there\b|we\b)", between, re.IGNORECASE):
+                                    continue
+                                is_negated = True
+                                break
+                            if is_negated:
+                                break
+                        state = "ABSENT" if is_negated else "PRESENT"
+
                     seen_canonicals.add(canonical)
 
                     # Severity: NEVER globally inferred. Must directly modify the symptom.

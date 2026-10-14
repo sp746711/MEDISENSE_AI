@@ -377,10 +377,42 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         story.append(Spacer(1, 4))
         story.append(Paragraph("<b>Unknown / Unassessed Factors:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• {item}" for item in missing_items]), body_style))
-    story.append(Spacer(1, 8))
+    # 6. Possible Conditions (Assistive ML Differential)
+    possible_conditions = feedback.get("possible_conditions", [])
+    cond_status = feedback.get("condition_prediction_status")
+    if possible_conditions:
+        story.append(Paragraph("6. Possible Conditions (Assistive ML Differential)", section_heading))
+        cond_data = [["Rank", "Possible Condition", "Confidence Alignment", "Supporting Evidence", "Specialty"]]
+        for c in possible_conditions:
+            supp_str = ", ".join(c.get("supporting_symptoms", [])[:3])
+            cond_data.append([
+                f"#{c.get('rank', 1)}",
+                f"<b>{c.get('condition', '')}</b>",
+                f"{c.get('confidence_tier', 'Possible')}<br/><font size='7' color='#64748b'>Score: {c.get('probability_score', 0):.2f}</font>",
+                supp_str if supp_str else "—",
+                c.get("suggested_specialty", "General Medicine"),
+            ])
+        cond_table = Table([[Paragraph(cell, body_style) for cell in row] for row in cond_data], colWidths=[35, 145, 115, 125, 100])
+        cond_table.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e0e7ff")),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c7d2fe")),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ])
+        )
+        story.append(cond_table)
+        story.append(Spacer(1, 3))
+        story.append(Paragraph("<i>Note: Machine learning condition predictions are assistive statistical patterns for physician consultation; they do NOT constitute a medical diagnosis.</i>", subtitle_style))
+        story.append(Spacer(1, 8))
+    elif cond_status == "unsupported_condition":
+        story.append(Paragraph("6. Possible Conditions (Assistive ML Differential)", section_heading))
+        story.append(Paragraph("<i>Reported symptoms do not align with the 24 disease patterns evaluated by this assistive model. In-person clinical evaluation is recommended.</i>", subtitle_style))
+        story.append(Spacer(1, 8))
 
-    # 6. Safety Pathway & Clinical Navigation
-    story.append(Paragraph("6. Safety Pathway & Recommended Next Steps", section_heading))
+    # 7. Safety Pathway & Clinical Navigation
+    story.append(Paragraph("7. Safety Pathway & Recommended Next Steps", section_heading))
     why_path = feedback.get("why_this_triage_selected") or triage_info.get("why_this_pathway") or "Rule-based assessment."
     next_step_data = feedback.get("recommended_next_step", {})
     guidance = next_step_data.get("guidance") or triage_info.get("guidance") or "Consult a licensed healthcare professional."

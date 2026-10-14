@@ -186,6 +186,21 @@ def is_target_addressed(
         contexts.append(raw_text)
     combined_ctx = " ".join(contexts).lower()
 
+    # If any symptom explicitly has state UNKNOWN for this target, it is NOT addressed
+    for s in symptoms:
+        s_name = (s.get("symptom") or s.get("finding") or "").lower()
+        if (target in s_name or s_name in target) and (s.get("state") == "UNKNOWN" or s.get("status") == "UNKNOWN"):
+            return False
+
+    # Check for explicit uncertainty expressions around this target in combined text
+    if re.search(
+        r"\b(?:not\s+sure|unsure|not\s+certain|uncertain|don't\s+know|dont\s+know|might\s+have|may\s+have|could\s+have)\s*(?:whether|if|about)?\s*(?:i\s+have\s+)?(?:a\s+)?"
+        + re.escape(target)
+        + r"\b",
+        combined_ctx,
+    ):
+        return False
+
     if target in {"vomiting", "vomiting (red flag)"}:
         # Nausea does NOT answer vomiting; explicit vomiting information required
         if any("vomit" in n for n in known_names):
@@ -217,7 +232,7 @@ def is_target_addressed(
     if target == "fever":
         if any("fever" in n or "temperature" in n for n in known_names):
             return True
-        return bool(re.search(r"\b(?:mild fever|high fever|fever|no fever|do not have a fever)\b", combined_ctx))
+        return bool(re.search(r"\b(?:mild fever|high fever|have a fever|running a fever|no fever|do not have a fever)\b", combined_ctx))
 
     if target == "numbness":
         # Weakness / fatigue does NOT answer numbness

@@ -359,7 +359,7 @@ def combine_evidence(
     if has_respiratory_symptom:
         relevant_critical_checks.extend(["difficulty breathing", "chest pain", "high fever"])
     elif "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
-        relevant_critical_checks.extend(["sudden onset", "weakness", "speech difficulty", "fever"])
+        relevant_critical_checks.extend(["sudden onset", "weakness", "speech difficulty", "fever", "chest pain"])
     elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
         relevant_critical_checks.extend(["severe swelling/deformity", "numbness", "severe bleeding"])
     elif any(s.get("domain") in {"gi", "gastrointestinal", "abdominal"} for s in current_present) or any("abdominal" in s.get("symptom", "").lower() for s in current_present):

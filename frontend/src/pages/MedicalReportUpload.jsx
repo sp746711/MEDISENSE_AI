@@ -422,35 +422,109 @@ export default function MedicalReportUpload() {
     return `${(kb / 1024).toFixed(1)} MB`;
   };
 
+  const isUploadedStatus = (status) => {
+    return status === 'EXTRACTED' || status === 'EXTRACTION_INCOMPLETE' || status === 'UNREADABLE';
+  };
+
+  const handleRetryFile = async (idToRetry) => {
+    setError('');
+    const target = medicalReports.find((item) => item.id === idToRetry);
+    if (!target) return;
+
+    setSubmitting(true);
+    setMedicalReports((prev) =>
+      prev.map((item) => (item.id === idToRetry ? { ...item, status: 'UPLOADING', error: null } : item))
+    );
+
+    try {
+      const res = await uploadReport(assessmentId, target.file, 'medical_report');
+      let status = 'EXTRACTED';
+      if (res.status === 'unreadable' || res.extraction_status === 'unreadable') {
+        status = 'UNREADABLE';
+      } else if (res.status === 'extraction_incomplete' || res.extraction_status === 'incomplete') {
+        status = 'EXTRACTION_INCOMPLETE';
+      }
+
+      setMedicalReports((prev) =>
+        prev.map((item) =>
+          item.id === idToRetry
+            ? {
+                ...item,
+                status,
+                uploadStatus: 'uploaded',
+                extractionStatus: res.extraction_status,
+                message: res.message,
+                reportId: res.report_id,
+                error: null,
+              }
+            : item
+        )
+      );
+    } catch (err) {
+      setMedicalReports((prev) =>
+        prev.map((item) =>
+          item.id === idToRetry
+            ? { ...item, status: 'FAILED', error: err.message || 'Upload failed' }
+            : item
+        )
+      );
+      setError(`Retry failed for ${target.name}: ${err.message || 'Upload failed'}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const onContinue = async () => {
     setError('');
     if (!assessmentId) return setError('No assessment in progress. Start a new assessment.');
     if (medicalReports.length === 0) return setError('Please select at least one medical report file.');
 
+    // Check if all files have already been successfully uploaded
+    const allAlreadyUploaded = medicalReports.every((item) => isUploadedStatus(item.status));
+    if (allAlreadyUploaded) {
+      navigate(nextPath());
+      return;
+    }
+
     setSubmitting(true);
     let anyFailed = false;
-    const updatedReports = [...medicalReports];
+    let anyUnreadable = false;
+    const currentList = [...medicalReports];
 
-    for (let i = 0; i < updatedReports.length; i++) {
-      const item = updatedReports[i];
-      if (item.status === 'COMPLETED') {
+    for (let i = 0; i < currentList.length; i++) {
+      const item = currentList[i];
+      if (isUploadedStatus(item.status)) {
+        if (item.status === 'UNREADABLE') anyUnreadable = true;
         continue; // Don't duplicate successful uploads
       }
 
       // Mark uploading
       item.status = 'UPLOADING';
-      setMedicalReports([...updatedReports]);
+      item.error = null;
+      setMedicalReports([...currentList]);
 
       try {
-        await uploadReport(assessmentId, item.file, 'medical_report');
-        item.status = 'COMPLETED';
+        const res = await uploadReport(assessmentId, item.file, 'medical_report');
+        let status = 'EXTRACTED';
+        if (res.status === 'unreadable' || res.extraction_status === 'unreadable') {
+          status = 'UNREADABLE';
+          anyUnreadable = true;
+        } else if (res.status === 'extraction_incomplete' || res.extraction_status === 'incomplete') {
+          status = 'EXTRACTION_INCOMPLETE';
+        }
+
+        item.status = status;
+        item.uploadStatus = 'uploaded';
+        item.extractionStatus = res.extraction_status;
+        item.message = res.message;
+        item.reportId = res.report_id;
         item.error = null;
       } catch (err) {
         anyFailed = true;
         item.status = 'FAILED';
         item.error = err.message || 'Upload failed';
       }
-      setMedicalReports([...updatedReports]);
+      setMedicalReports([...currentList]);
     }
 
     setSubmitting(false);
@@ -458,7 +532,11 @@ export default function MedicalReportUpload() {
     if (anyFailed) {
       setError('Some medical reports failed to upload. You can retry failed files or remove them.');
     } else {
-      setMessage(`All ${medicalReports.length} medical report(s) uploaded and extracted successfully.`);
+      if (anyUnreadable) {
+        setMessage('Medical reports uploaded. Note: Some documents could not be fully read by OCR, but have been saved for assessment.');
+      } else {
+        setMessage(`All ${medicalReports.length} medical report(s) uploaded and extracted successfully.`);
+      }
       navigate(nextPath());
     }
   };
@@ -602,16 +680,42 @@ export default function MedicalReportUpload() {
                           <span className="status-ready">Ready for upload</span>
                         ) : item.status === 'UPLOADING' ? (
                           <span className="status-uploading">Uploading &amp; Extracting...</span>
-                        ) : item.status === 'COMPLETED' ? (
-                          <span className="status-completed">✓ Uploaded</span>
+                        ) : item.status === 'EXTRACTED' || item.status === 'COMPLETED' ? (
+                          <span className="status-completed">✓ Uploaded &amp; Extracted</span>
+                        ) : item.status === 'EXTRACTION_INCOMPLETE' ? (
+                          <span className="status-warning" title={item.message || 'Partial text recognized'}>
+                            ⚠ Uploaded (Partial text)
+                          </span>
+                        ) : item.status === 'UNREADABLE' ? (
+                          <span className="status-warning" title={item.message || 'No text recognized'}>
+                            ⚠ Uploaded (No text recognized)
+                          </span>
                         ) : (
-                          <span className="status-failed">✗ {item.error || 'Upload failed'}</span>
+                          <span className="status-failed" title={item.error || 'Upload failed'}>
+                            ✗ {item.error || 'Upload failed'}
+                          </span>
                         )}
                       </span>
+                      {item.message && (item.status === 'UNREADABLE' || item.status === 'EXTRACTION_INCOMPLETE') && (
+                        <span style={{ fontSize: '0.72rem', color: '#b45309', marginTop: '0.15rem', display: 'block', maxWidth: '340px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={item.message}>
+                          {item.message}
+                        </span>
+                      )}
                     </div>
                   </div>
 
                   <div className="file-card-actions">
+                    {item.status === 'FAILED' && (
+                      <button
+                        type="button"
+                        className="btn-card-retry"
+                        onClick={() => handleRetryFile(item.id)}
+                        disabled={submitting}
+                        aria-label={`Retry ${item.name}`}
+                      >
+                        Retry
+                      </button>
+                    )}
                     <button
                       type="button"
                       className="btn-card-view"

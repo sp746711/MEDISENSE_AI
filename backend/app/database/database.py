@@ -38,29 +38,24 @@ def _migrate_schema() -> None:
     """Safely apply non-destructive schema adjustments if columns are missing."""
     try:
         with engine.begin() as conn:
-            # Check for report_category in medical_reports
-            try:
-                conn.execute(text("SELECT report_category FROM medical_reports LIMIT 1"))
-            except Exception:
-                try:
-                    conn.execute(
-                        text("ALTER TABLE medical_reports ADD COLUMN report_category VARCHAR(50) DEFAULT 'medical_report' NOT NULL")
-                    )
-                except Exception:
-                    pass
-
-            # Check for file_name in xray_results
-            try:
-                conn.execute(text("SELECT file_name FROM xray_results LIMIT 1"))
-            except Exception:
-                try:
-                    conn.execute(
-                        text("ALTER TABLE xray_results ADD COLUMN file_name VARCHAR(255)")
-                    )
-                except Exception:
-                    pass
+            conn.execute(
+                text("ALTER TABLE medical_reports ADD COLUMN IF NOT EXISTS report_category VARCHAR(50) DEFAULT 'medical_report' NOT NULL")
+            )
+            conn.execute(
+                text("ALTER TABLE xray_results ADD COLUMN IF NOT EXISTS file_name VARCHAR(255)")
+            )
     except Exception:
-        pass
+        # Fallback for dialects like SQLite that do not support IF NOT EXISTS in ALTER TABLE
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE medical_reports ADD COLUMN report_category VARCHAR(50) DEFAULT 'medical_report'"))
+        except Exception:
+            pass
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE xray_results ADD COLUMN file_name VARCHAR(255)"))
+        except Exception:
+            pass
 
 
 def check_db_connection() -> bool:

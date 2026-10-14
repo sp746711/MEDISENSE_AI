@@ -738,7 +738,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         "summary": {
             "symptoms_count": len(symptoms_list),
             "reports_count": len(report_rows),
-            "xray_present": bool(xray_row),
+            "xray_present": bool(xray_rows),
             "triage_pathway": triage_result.get("pathway"),
             "suggested_specialty": suggested_specialty,
         },
@@ -750,7 +750,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         input_types=assessment.input_types or [],
         symptoms_list=symptoms_list,
         report_findings_list=report_findings_list,
-        xray_dict=xray_dict,
+        xray_dict=primary_xray_dict,
         evidence=evidence,
         triage_result=triage_result,
         specialty=suggested_specialty,

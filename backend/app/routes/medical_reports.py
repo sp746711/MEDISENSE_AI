@@ -41,15 +41,9 @@ async def upload_report(
                 detail="This assessment was not configured for medical report input.",
             )
 
-    settings = get_settings()
-    content = await file.read()
-    validation = validate_report_file(file.filename or "", content, settings.max_upload_size_mb)
-    if not validation["ok"]:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=validation["message"])
-
     fname_lower = (file.filename or "").lower()
     if category == "xray_report":
-        if validation["extension"] != ".pdf":
+        if not fname_lower.endswith(".pdf"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="X-ray reports must be PDF files.",
@@ -61,6 +55,12 @@ async def upload_report(
                 detail="This file appears to be a general medical report, not an X-ray / radiology report.",
             )
 
+    settings = get_settings()
+    content = await file.read()
+    validation = validate_report_file(file.filename or "", content, settings.max_upload_size_mb)
+    if not validation["ok"]:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=validation["message"])
+
     reports_dir = settings.upload_path / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}{validation['extension']}"
@@ -69,51 +69,126 @@ async def upload_report(
 
     from app.ai.report_ocr import extract_text_from_file
     from app.ai.report_nlp import structure_report_text
+    from app.database.models import utcnow
 
-    ocr_result = extract_text_from_file(str(dest))
+    try:
+        ocr_result = extract_text_from_file(str(dest))
+    except Exception as exc:
+        ocr_result = {
+            "status": "error",
+            "extracted_text": None,
+            "tables": [],
+            "message": f"OCR processing error: {exc}",
+            "ocr_version": "error",
+            "ocr_engine": "none",
+        }
+
     extracted_text = ocr_result.get("extracted_text")
 
-    nlp_result = structure_report_text(extracted_text, tables=ocr_result.get("tables", []))
+    try:
+        nlp_result = structure_report_text(extracted_text, tables=ocr_result.get("tables", []))
+    except Exception as exc:
+        nlp_result = {
+            "status": "error",
+            "findings": [],
+            "qualitative_findings": [],
+            "narrative_findings": [],
+            "message": f"NLP parsing error: {exc}",
+        }
+
     structured_findings = nlp_result.get("findings", [])
     qualitative_findings = nlp_result.get("qualitative_findings", [])
     narrative_findings = nlp_result.get("narrative_findings", [])
+    total_findings_count = len(structured_findings) + len(qualitative_findings) + len(narrative_findings)
     combined_findings = {
         "lab_parameters": structured_findings,
         "qualitative_findings": qualitative_findings,
         "narrative_findings": narrative_findings,
-        "total_extracted": len(structured_findings) + len(qualitative_findings) + len(narrative_findings),
+        "total_extracted": total_findings_count,
     }
 
-    report = MedicalReport(
-        assessment_id=assessment.assessment_id,
-        file_name=Path(file.filename or "report").name,
-        stored_name=stored_name,
-        file_type=validation["file_type"],
-        report_category=category,
-        extracted_text=extracted_text,
-        structured_findings=combined_findings,
-        reference_ranges={f["test_name"]: f.get("reference_range") for f in structured_findings if f.get("reference_range")},
-        ocr_metadata={
-            "ocr_status": ocr_result.get("status"),
-            "ocr_version": ocr_result.get("ocr_version"),
-            "nlp_status": nlp_result.get("status"),
-            "pages": ocr_result.get("pages", 1),
-            "message": ocr_result.get("message"),
-        },
+    clean_file_name = Path(validation.get("filename") or file.filename or "report").name
+
+    # Determine status model
+    if extracted_text and total_findings_count > 0:
+        overall_status = "extracted"
+        extraction_status = "successful"
+    elif extracted_text and total_findings_count == 0:
+        overall_status = "extraction_incomplete"
+        extraction_status = "incomplete"
+    else:
+        overall_status = "unreadable"
+        extraction_status = "unreadable"
+
+    ocr_metadata = {
+        "ocr_status": ocr_result.get("status"),
+        "ocr_version": ocr_result.get("ocr_version"),
+        "ocr_engine": ocr_result.get("ocr_engine"),
+        "nlp_status": nlp_result.get("status"),
+        "pages": ocr_result.get("pages", 1),
+        "message": ocr_result.get("message"),
+        "extraction_status": extraction_status,
+    }
+
+    # Deduplicate: if this exact filename was previously uploaded for this assessment (e.g. retry), update existing row
+    existing_report = (
+        db.query(MedicalReport)
+        .filter(
+            MedicalReport.assessment_id == assessment.assessment_id,
+            MedicalReport.file_name == clean_file_name,
+        )
+        .first()
     )
-    db.add(report)
+
+    if existing_report:
+        report = existing_report
+        report.stored_name = stored_name
+        report.file_type = validation["file_type"]
+        report.report_category = category
+        report.extracted_text = extracted_text
+        report.structured_findings = combined_findings
+        report.reference_ranges = {
+            f["test_name"]: f.get("reference_range")
+            for f in structured_findings
+            if f.get("reference_range")
+        }
+        report.ocr_metadata = ocr_metadata
+        report.created_at = utcnow()
+    else:
+        report = MedicalReport(
+            assessment_id=assessment.assessment_id,
+            file_name=clean_file_name,
+            stored_name=stored_name,
+            file_type=validation["file_type"],
+            report_category=category,
+            extracted_text=extracted_text,
+            structured_findings=combined_findings,
+            reference_ranges={
+                f["test_name"]: f.get("reference_range")
+                for f in structured_findings
+                if f.get("reference_range")
+            },
+            ocr_metadata=ocr_metadata,
+        )
+        db.add(report)
+
     if assessment.status == "draft":
         assessment.status = "inputs_received"
     db.add(assessment)
     db.commit()
     db.refresh(report)
 
+    msg = ocr_result.get("message") or nlp_result.get("message") or "Medical report successfully processed."
+
     return {
-        "status": "extracted" if extracted_text else "unreadable",
+        "status": overall_status,
+        "upload_status": "uploaded",
+        "extraction_status": extraction_status,
         "report_id": str(report.report_id),
         "file_name": report.file_name,
         "report_category": report.report_category,
-        "message": nlp_result.get("message") or ocr_result.get("message"),
+        "message": msg,
+        "ocr_metadata": ocr_metadata,
         "structured_findings": combined_findings,
         "extracted_text_snippet": (extracted_text[:200] + "...") if extracted_text else None,
     }

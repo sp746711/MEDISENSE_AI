@@ -33,8 +33,19 @@ def submit_symptoms(
     if payload.followup_answers:
         from app.ai.followup_engine import apply_followup_answer
         for q_id, ans in payload.followup_answers.items():
-            if ans and str(ans).strip():
-                extracted_symptoms = apply_followup_answer(extracted_symptoms, q_id, str(ans).strip())
+            if ans is not None:
+                if isinstance(ans, dict):
+                    ans_val = str(ans.get("answer") or ans.get("value") or "").strip()
+                    if ans_val:
+                        extracted_symptoms = apply_followup_answer(
+                            extracted_symptoms,
+                            q_id,
+                            ans_val,
+                            target_symptom=ans.get("target_symptom"),
+                            scope=ans.get("scope"),
+                        )
+                elif str(ans).strip():
+                    extracted_symptoms = apply_followup_answer(extracted_symptoms, q_id, str(ans).strip())
 
     # Clear prior symptoms for this assessment if re-submitting
     db.query(Symptom).filter(Symptom.assessment_id == assessment.assessment_id).delete()

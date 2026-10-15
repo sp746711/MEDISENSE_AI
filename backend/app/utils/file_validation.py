@@ -115,9 +115,18 @@ def _validate(
         try:
             with Image.open(io.BytesIO(content)) as img:
                 img.verify()
+            with Image.open(io.BytesIO(content)) as img:
+                w, h = img.size
+                if w < 10 or h < 10:
+                    return {
+                        "ok": False,
+                        "extension": detected_ext,
+                        "message": f"Image dimensions ({w}x{h}) are too small to be a valid radiograph. Minimum resolution is 10x10.",
+                    }
         except Exception:
             return {
                 "ok": False,
+                "extension": detected_ext,
                 "message": "Image file is corrupted, malformed, or cannot be decoded.",
             }
     elif detected_ext == ".pdf":
@@ -126,11 +135,12 @@ def _validate(
                 doc = fitz.open(stream=content, filetype="pdf")
                 if len(doc) == 0:
                     doc.close()
-                    return {"ok": False, "message": "PDF document contains 0 pages."}
+                    return {"ok": False, "extension": detected_ext, "message": "PDF document contains 0 pages."}
                 doc.close()
             except Exception:
                 return {
                     "ok": False,
+                    "extension": detected_ext,
                     "message": "PDF file is corrupted or cannot be read.",
                 }
 

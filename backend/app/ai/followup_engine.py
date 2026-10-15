@@ -308,12 +308,14 @@ def suggest_followups(
     if evidence and "symptoms" in evidence:
         symptoms_present = evidence["symptoms"].get("present", [])
         symptoms_absent = evidence["symptoms"].get("absent", [])
+        symptoms_unknown = evidence["symptoms"].get("unknown", [])
         raw_text = raw_text or evidence.get("raw_text")
     else:
         symptoms_present = [s for s in symptoms_list if s.get("state") == "PRESENT"]
         symptoms_absent = [s for s in symptoms_list if s.get("state") == "ABSENT"]
+        symptoms_unknown = [s for s in symptoms_list if s.get("state") == "UNKNOWN"]
 
-    all_symptoms = symptoms_present + symptoms_absent
+    all_symptoms = symptoms_present + symptoms_absent + symptoms_unknown
 
     # Track answered follow-up IDs
     answered_ids: set[str] = set()
@@ -430,25 +432,35 @@ def suggest_followups(
     # Candidate generation & ranking by clinical priority
     candidates: list[tuple[int, dict[str, Any]]] = []
 
-    def add_candidate(qid: str, priority: int) -> None:
+    def add_candidate(
+        qid: str,
+        priority: int,
+        target_symptom: str | None = None,
+        custom_question: str | None = None,
+    ) -> None:
         if qid in answered_ids:
             return
         item = next((d for d in CRITICAL_FOLLOWUP_DEFINITIONS if d["id"] == qid), None)
         if item and not is_target_addressed(item["target"], all_symptoms, raw_text=raw_text):
-            candidates.append((priority, item))
+            item_copy = dict(item)
+            if target_symptom:
+                item_copy["target_symptom"] = target_symptom
+            if custom_question:
+                item_copy["question"] = custom_question
+            candidates.append((priority, item_copy))
 
     if is_abdominal:
         # Abdominal presentation candidates
         if has_abdominal_pain and not is_target_addressed("abdominal location", all_symptoms, raw_text=raw_text):
-            add_candidate("q_abdominal_location", 100)
+            add_candidate("q_abdominal_location", 100, target_symptom="abdominal pain")
         if has_abdominal_pain and not is_target_addressed("sudden onset", all_symptoms, raw_text=raw_text):
-            add_candidate("q_abdominal_onset", 90)
+            add_candidate("q_abdominal_onset", 90, target_symptom="abdominal pain")
         if has_abdominal_pain and not is_target_addressed("severity", all_symptoms, raw_text=raw_text):
-            add_candidate("q_severity", 85)
+            add_candidate("q_severity", 85, target_symptom="abdominal pain", custom_question="How severe is the abdominal pain?")
         if not is_target_addressed("vomiting", all_symptoms, raw_text=raw_text):
             add_candidate("q_vomiting", 80)
         if not has_duration:
-            add_candidate("q_duration", 75)
+            add_candidate("q_duration", 75, target_symptom="abdominal pain", custom_question="Approximately how long have you had this abdominal pain?")
         if not is_target_addressed("fever", all_symptoms, raw_text=raw_text):
             add_candidate("q_fever", 70)
         if not is_target_addressed("diarrhea", all_symptoms, raw_text=raw_text):
@@ -458,8 +470,9 @@ def suggest_followups(
 
     elif is_neuro:
         # Headache / Neurological candidates
+        neuro_primary = "headache" if "headache" in present_names or "migraine" in present_names else "headache"
         if not is_target_addressed("sudden onset", all_symptoms, raw_text=raw_text):
-            add_candidate("q_sudden_onset", 100)
+            add_candidate("q_sudden_onset", 100, target_symptom=neuro_primary)
         if not is_target_addressed("numbness", all_symptoms, raw_text=raw_text):
             add_candidate("q_neuro_weakness", 95)
         if not is_target_addressed("speech difficulty", all_symptoms, raw_text=raw_text):
@@ -467,7 +480,7 @@ def suggest_followups(
         if not is_target_addressed("fainting", all_symptoms, raw_text=raw_text):
             add_candidate("q_fainting_seizure", 85)
         if not has_duration:
-            add_candidate("q_duration", 75)
+            add_candidate("q_duration", 75, target_symptom=neuro_primary, custom_question=f"Approximately how long have you had this {neuro_primary}?")
         if not is_target_addressed("vomiting", all_symptoms, raw_text=raw_text):
             add_candidate("q_vomiting", 70)
         if not is_target_addressed("fever", all_symptoms, raw_text=raw_text):
@@ -475,6 +488,7 @@ def suggest_followups(
 
     elif is_msk:
         # Musculoskeletal candidates
+        msk_primary = "wrist pain" if "wrist pain" in present_names else "joint pain"
         if not is_target_addressed("numbness", all_symptoms, raw_text=raw_text):
             add_candidate("q_numbness_tingling", 95)
         if not is_target_addressed("reduced movement", all_symptoms, raw_text=raw_text):
@@ -482,18 +496,19 @@ def suggest_followups(
         if not is_target_addressed("fall/trauma", all_symptoms, raw_text=raw_text):
             add_candidate("q_injury_mechanism", 85)
         if not has_duration:
-            add_candidate("q_duration", 80)
+            add_candidate("q_duration", 80, target_symptom=msk_primary)
         if not is_target_addressed("severe swelling/deformity", all_symptoms, raw_text=raw_text):
             add_candidate("q_severe_deformity", 70)
 
     elif is_respiratory:
         # Respiratory candidates
+        resp_primary = "cough" if "cough" in present_names or "dry cough" in present_names else "shortness of breath"
         if not is_target_addressed("difficulty breathing", all_symptoms, raw_text=raw_text):
             add_candidate("q_breathing_difficulty", 100)
         if not is_target_addressed("chest pain", all_symptoms, raw_text=raw_text):
             add_candidate("q_chest_pain", 90)
         if not has_duration:
-            add_candidate("q_duration", 80)
+            add_candidate("q_duration", 80, target_symptom=resp_primary)
         if not is_target_addressed("fever", all_symptoms, raw_text=raw_text):
             add_candidate("q_fever", 70)
 
@@ -532,40 +547,172 @@ def suggest_followups(
     }
 
 
+def parse_binary_answer(
+    ans_str: str,
+    question_id: str,
+    target_name: str,
+    options: list[str] | None = None,
+) -> str:
+    """Parse follow-up binary/red-flag answer with strict negation precedence."""
+    ans_clean = str(ans_str or "").strip()
+    if not ans_clean:
+        return "UNKNOWN"
+    ans_lower = ans_clean.lower()
+
+    # 1. Uncertainty check (must not be treated as YES or NO)
+    if re.search(
+        r"\b(?:not\s+sure|unsure|don't\s+know|dont\s+know|cannot\s+tell|can't\s+tell|not\s+certain|uncertain|unknown|hard\s+to\s+say|unclear|maybe|possibly)\b",
+        ans_lower,
+    ):
+        return "UNKNOWN"
+
+    # 2. Specific question patterns
+    if question_id == "q_limb_movement" or target_name == "reduced movement":
+        if re.search(r"\b(?:normal\s+movement|normal|can\s+move\s+(?:normally|fine|well)|no\s+problem\s+moving|no\s+reduction|without\s+restriction)\b", ans_lower):
+            return "ABSENT"
+        if re.search(r"\b(?:reduced\s+movement|cannot\s+move|can't\s+move|unable\s+to\s+move|difficulty\s+moving|limited\s+movement|can't\s+move\s+limb|cannot\s+move\s+limb)\b", ans_lower):
+            return "PRESENT"
+
+    if question_id == "q_injury_mechanism" or target_name == "fall/trauma":
+        # Strict negation check first!
+        if re.search(
+            r"\b(?:no\s+fall\s+or\s+trauma|no\s+fall|no\s+trauma|no\s+injury|did\s+not\s+fall|didn't\s+fall|not\s+fallen|without\s+(?:any\s+)?(?:fall|trauma|injury)|have\s+not\s+fallen|haven't\s+fallen|no)\b",
+            ans_lower,
+        ):
+            return "ABSENT"
+        if re.search(
+            r"\b(?:yes|fell|fallen|did\s+fall|i\s+fell|direct\s+trauma|after\s+a\s+fall|fall\s+or\s+trauma|impact)\b",
+            ans_lower,
+        ):
+            return "PRESENT"
+
+    # 3. Whole-answer negation precedence (handles "No", "No fall or trauma", "I did not fall", "I have not experienced this", etc.)
+    if ans_lower in {"no", "false", "absent", "none", "denied", "denies", "nope", "negative", "not really", "not at all"}:
+        return "ABSENT"
+    if re.match(r"^(?:no\b|never\b|not\s+at\s+all\b|none\b|nope\b)", ans_lower):
+        return "ABSENT"
+    if re.search(
+        r"\b(?:i\s+did\s+not|i\s+didn't|did\s+not|didn't|have\s+not|haven't|had\s+not|hadn't|do\s+not|don't|no\s+history\s+of|without\s+(?:any\s+)?|never\s+had|never\s+experienced|not\s+experienced|i\s+have\s+not\s+experienced|denies|denied)\b",
+        ans_lower,
+    ):
+        return "ABSENT"
+
+    # 4. Whole-answer affirmation (handles "Yes", "Yes, fall or trauma", "Yes, I fell", "I experienced the symptom", etc.)
+    if ans_lower in {"yes", "true", "present", "yep", "yeah", "positive"}:
+        return "PRESENT"
+    if re.match(r"^(?:yes\b|yep\b|yeah\b|sure\b|definitely\b)", ans_lower):
+        return "PRESENT"
+    if re.search(
+        r"\b(?:i\s+(?:did\s+)?experience(?:d)?|experienced\s+(?:the\s+symptom|this)|i\s+have\s+(?:this|it)|suffering\s+from|present)\b",
+        ans_lower,
+    ):
+        return "PRESENT"
+
+    # 5. Fallback for unhandled / ambiguous natural language: UNKNOWN
+    return "UNKNOWN"
+
+
 def apply_followup_answer(
     symptoms: list[dict[str, Any]],
     question_id: str,
-    answer: str,
+    answer: str | dict[str, Any],
+    target_symptom: str | None = None,
+    scope: str | None = None,
 ) -> list[dict[str, Any]]:
     """Update symptoms evidence list based on user's follow-up answer."""
     updated = [dict(s) for s in symptoms]
+
+    # Handle rich answer dictionary
+    if isinstance(answer, dict):
+        target_symptom = target_symptom or answer.get("target_symptom")
+        scope = scope or answer.get("scope")
+        ans_str = str(answer.get("answer") or answer.get("value") or "").strip()
+    else:
+        ans_str = str(answer or "").strip()
+
+    # Parse encoded target or base question ID (e.g. q_duration:headache, q_duration_headache)
+    base_qid = question_id
+    if ":" in question_id:
+        parts = question_id.split(":", 1)
+        base_qid = parts[0]
+        if not target_symptom:
+            target_symptom = parts[1]
+    elif question_id.startswith("q_duration_") and question_id != "q_duration":
+        base_qid = "q_duration"
+        if not target_symptom:
+            target_symptom = question_id[len("q_duration_"):]
+    elif question_id.startswith("q_severity_") and question_id != "q_severity":
+        base_qid = "q_severity"
+        if not target_symptom:
+            target_symptom = question_id[len("q_severity_"):]
+
     q_map = {q["id"]: q for q in CRITICAL_FOLLOWUP_DEFINITIONS}
-    target_def = q_map.get(question_id)
+    target_def = q_map.get(base_qid)
 
     if not target_def:
         return updated
 
-    ans_str = str(answer or "").strip()
     if not ans_str:
         # Unanswered remains UNKNOWN (no default answers)
         return updated
 
     ans_lower = ans_str.lower()
-    is_unknown = any(u in ans_lower for u in ["not sure", "unsure", "unknown", "don't know", "dont know"])
+    is_unknown = bool(
+        re.search(
+            r"\b(?:not\s+sure|unsure|unknown|don't\s+know|dont\s+know|cannot\s+tell|can't\s+tell|hard\s+to\s+say)\b",
+            ans_lower,
+        )
+    )
 
     target_name = target_def["target"]
 
     # 1. Duration mapping
-    if target_name == "duration" or question_id == "q_duration":
-        if not is_unknown:
+    if target_name == "duration" or base_qid == "q_duration":
+        if is_unknown:
+            return updated
+
+        # Case A: Explicit group scope ("all")
+        if scope == "all":
             for s in updated:
                 if s.get("state") == "PRESENT" and not s.get("duration"):
                     s["duration"] = ans_str
+                    s["duration_scope"] = "all"
                     s.setdefault("answered_followups", []).append(question_id)
+            return updated
+
+        # Case B: Explicit target_symptom specified
+        if target_symptom:
+            t_clean = target_symptom.strip().lower()
+            for s in updated:
+                s_name = (s.get("symptom") or s.get("finding") or "").lower()
+                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and s.get("state") == "PRESENT":
+                    s["duration"] = ans_str
+                    s.setdefault("answered_followups", []).append(question_id)
+                    return updated
+
+        # Case C: Unspecified target -> safely target primary chief/pain complaint without contaminating associated symptoms
+        primary_candidates = []
+        for s in updated:
+            if s.get("state") == "PRESENT" and not s.get("duration"):
+                s_name = (s.get("symptom") or s.get("finding") or "").lower()
+                if any(p in s_name for p in ["pain", "ache", "migraine", "cough", "breath", "injury"]):
+                    primary_candidates.append(s)
+
+        if primary_candidates:
+            primary_candidates[0]["duration"] = ans_str
+            primary_candidates[0].setdefault("answered_followups", []).append(question_id)
+            return updated
+
+        present_s = [s for s in updated if s.get("state") == "PRESENT"]
+        if len(present_s) == 1:
+            present_s[0]["duration"] = ans_str
+            present_s[0].setdefault("answered_followups", []).append(question_id)
+            return updated
+
         return updated
 
     # 2. Onset mapping (q_sudden_onset, q_abdominal_onset)
-    if question_id in {"q_sudden_onset", "q_abdominal_onset"} or target_name == "sudden onset":
+    if base_qid in {"q_sudden_onset", "q_abdominal_onset"} or target_name == "sudden onset":
         if is_unknown:
             onset_val = "UNKNOWN"
         elif "gradual" in ans_lower or re.search(r"\bno\b", ans_lower):
@@ -574,6 +721,15 @@ def apply_followup_answer(
             onset_val = "SUDDEN"
         else:
             onset_val = "UNKNOWN"
+
+        if target_symptom:
+            t_clean = target_symptom.strip().lower()
+            for s in updated:
+                s_name = (s.get("symptom") or s.get("finding") or "").lower()
+                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and s.get("state") == "PRESENT":
+                    s["onset"] = onset_val
+                    s.setdefault("answered_followups", []).append(question_id)
+                    return updated
 
         matched = False
         for s in updated:
@@ -592,7 +748,7 @@ def apply_followup_answer(
         return updated
 
     # 3. Abdominal location mapping
-    if question_id == "q_abdominal_location" or target_name == "abdominal location":
+    if base_qid == "q_abdominal_location" or target_name == "abdominal location":
         if is_unknown:
             loc_val = "UNKNOWN"
             lat_val = None
@@ -637,47 +793,46 @@ def apply_followup_answer(
         return updated
 
     # 4. Severity mapping (q_severity)
-    if question_id == "q_severity" or target_name == "severity":
+    if base_qid == "q_severity" or target_name == "severity":
         if is_unknown:
             sev_val = "UNKNOWN"
-        elif "severe" in ans_lower:
+        elif re.search(r"\bsevere\b", ans_lower):
             sev_val = "SEVERE"
-        elif "moderate" in ans_lower:
+        elif re.search(r"\bmoderate\b", ans_lower):
             sev_val = "MODERATE"
-        elif "mild" in ans_lower:
+        elif re.search(r"\bmild\b", ans_lower):
             sev_val = "MILD"
         else:
             sev_val = "UNKNOWN"
 
-        matched = False
+        # Case A: Explicit target_symptom specified
+        if target_symptom:
+            t_clean = target_symptom.strip().lower()
+            for s in updated:
+                s_name = (s.get("symptom") or s.get("finding") or "").lower()
+                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and s.get("state") == "PRESENT":
+                    s["severity"] = sev_val
+                    s.setdefault("answered_followups", []).append(question_id)
+                    return updated
+
+        # Case B: Target relevant pain complaint (never assign pain severity to nausea, vomiting, dizziness, etc.)
+        pain_candidates = []
         for s in updated:
             if s.get("state") == "PRESENT":
-                s["severity"] = sev_val
-                s.setdefault("answered_followups", []).append(question_id)
-                matched = True
-        if not matched:
-            updated.append({
-                "finding": "severity",
-                "symptom": "severity",
-                "severity": sev_val,
-                "state": "PRESENT" if not is_unknown else "UNKNOWN",
-                "status": "PRESENT" if not is_unknown else "UNKNOWN",
-                "body_area": "unspecified",
-                "source": "followup_answer",
-                "question_id": question_id,
-                "answered_followups": [question_id],
-            })
+                s_name = (s.get("symptom") or s.get("finding") or "").lower()
+                if any(p in s_name for p in ["pain", "ache", "migraine", "cramp", "soreness"]):
+                    pain_candidates.append(s)
+
+        if pain_candidates:
+            pain_candidates[0]["severity"] = sev_val
+            pain_candidates[0].setdefault("answered_followups", []).append(question_id)
+            return updated
+
+        # No applicable symptom exists: do NOT create a misleading generic severity finding!
         return updated
 
     # 5. General / Red-flag binary symptoms mapping
-    if is_unknown:
-        state = "UNKNOWN"
-    elif any(pos in ans_lower for pos in ["yes", "true", "present", "reduced", "cannot", "sudden", "fall or trauma"]):
-        state = "PRESENT"
-    elif any(neg in ans_lower for neg in ["no", "false", "absent", "normal", "no fall or trauma"]):
-        state = "ABSENT"
-    else:
-        state = "UNKNOWN"
+    state = parse_binary_answer(ans_str, base_qid, target_name, target_def.get("options"))
 
     for s in updated:
         if s.get("symptom", "").lower() == target_name:

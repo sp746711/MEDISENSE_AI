@@ -90,13 +90,13 @@ def combine_evidence(
     symptoms_unknown = [s for s in symptoms if s.get("state") == "UNKNOWN"]
 
     report_abnormal = [
-        f for f in report_findings if f.get("interpretation") in {"HIGH", "LOW", "ABNORMAL"}
+        f for f in report_findings if (f.get("status") or f.get("interpretation")) in {"HIGH", "LOW", "ABNORMAL"}
     ]
     report_normal = [
-        f for f in report_findings if f.get("interpretation") == "NORMAL"
+        f for f in report_findings if (f.get("status") or f.get("interpretation")) == "NORMAL"
     ]
     report_unknown_range = [
-        f for f in report_findings if f.get("interpretation") in {"UNKNOWN", "RECORDED"}
+        f for f in report_findings if (f.get("status") or f.get("interpretation")) in {"UNKNOWN", "RECORDED"}
     ]
 
     supporting: list[str] = []
@@ -127,6 +127,26 @@ def combine_evidence(
                         )
                 except ValueError:
                     pass
+
+    # Laboratory explicit flag vs reference range conflict detection
+    for item in report_findings:
+        if item.get("conflict"):
+            fname = item.get("test_name", "Laboratory parameter")
+            ex_flag = item.get("explicit_flag")
+            calc_st = item.get("calculated_status")
+            val = item.get("value")
+            unit = item.get("unit") or ""
+            ref = item.get("reference_range") or "unspecified"
+            contradictory.append(
+                f"Contradictory laboratory evidence for {fname}: Explicit report flag is '{ex_flag}', but measured value {val} {unit} evaluates to '{calc_st}' against reference range ({ref})."
+            )
+            evidence_relationships.append({
+                "source_a": "report_flag",
+                "source_b": "report_reference_range",
+                "finding": fname,
+                "relationship": "CONFLICTING",
+                "reason": f"Explicit flag '{ex_flag}' conflicts with calculated status '{calc_st}' for {fname}.",
+            })
 
     # 2. Supporting Clinical Correlations & Reassuring Evidence
     has_respiratory_symptom = bool(

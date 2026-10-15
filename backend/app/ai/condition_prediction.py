@@ -230,8 +230,38 @@ class ConditionPredictionService:
                 "is_experimental": True,
             }
 
-        # Validate input: require active present symptoms or clinical text
-        if not symptoms_present and not (raw_text and raw_text.strip()):
+        # 1. Filter out historical, absent, and unknown symptoms; deduplicate active present symptoms
+        active_present: list[dict[str, Any]] = []
+        seen_syms: set[tuple[str, str, str]] = set()
+
+        for s in (symptoms_present or []):
+            if not isinstance(s, dict):
+                s_name = str(s).strip().lower()
+                if s_name and (s_name, "", "") not in seen_syms:
+                    seen_syms.add((s_name, "", ""))
+                    active_present.append({"symptom": s_name, "state": "PRESENT"})
+                continue
+
+            # Historical symptoms are contextual, not active presentation
+            if s.get("type") == "HISTORICAL":
+                continue
+            # Unknown or absent symptoms mistakenly in present list
+            if s.get("state") in {"ABSENT", "UNKNOWN"}:
+                continue
+
+            sym_name = str(s.get("symptom") or s.get("finding") or "").strip().lower()
+            if not sym_name:
+                continue
+
+            area = str(s.get("body_area") or "").strip().lower()
+            qual = str(s.get("quality") or "").strip().lower()
+            dedup_key = (sym_name, area, qual)
+            if dedup_key not in seen_syms:
+                seen_syms.add(dedup_key)
+                active_present.append(s)
+
+        # Validate input: require active acute present symptoms
+        if not active_present:
             return {
                 "status": "insufficient_evidence",
                 "model_version": self.model_version,
@@ -240,9 +270,9 @@ class ConditionPredictionService:
                 "is_experimental": True,
             }
 
-        # Build feature text exclusively from active present symptoms and positive context
+        # Build feature text strictly and exclusively from active present symptoms
         feature_parts = []
-        for s in symptoms_present:
+        for s in active_present:
             sym_name = s.get("symptom", "")
             if s.get("body_area") and s.get("body_area") not in {"whole body", "unspecified"}:
                 feature_parts.append(f"{sym_name} in {s['body_area']}")
@@ -251,12 +281,8 @@ class ConditionPredictionService:
             if s.get("quality"):
                 feature_parts.append(f"{s['quality']} {sym_name}")
 
-        query_text = " ".join(feature_parts)
-        if raw_text and len(feature_parts) < 3:
-            # Augment with raw text if few tokens extracted
-            query_text = f"{query_text} {raw_text}".strip()
-
-        if not query_text.strip():
+        query_text = " ".join(feature_parts).strip()
+        if not query_text:
             return {
                 "status": "insufficient_evidence",
                 "model_version": self.model_version,
@@ -278,17 +304,17 @@ class ConditionPredictionService:
                     return str(item.get("symptom") or item.get("finding") or "").strip().lower()
                 return str(item).strip().lower()
 
-            present_sym_names = {_extract_symptom_name(s) for s in symptoms_present if _extract_symptom_name(s)}
+            present_sym_names = {_extract_symptom_name(s) for s in active_present if _extract_symptom_name(s)}
             absent_sym_names = {_extract_symptom_name(s) for s in symptoms_absent if _extract_symptom_name(s)}
             unknown_sym_names = {_extract_symptom_name(s) for s in symptoms_unknown if _extract_symptom_name(s)}
 
             conditions: list[dict[str, Any]] = []
 
-            for rank, idx in enumerate(ranked_indices, start=1):
+            for idx in ranked_indices:
                 cond_name = classes[idx]
                 score = float(probs[idx])
                 # Only include candidates with meaningful non-trivial likelihood
-                if score < 0.04 and rank > 1:
+                if score < 0.04 and len(conditions) >= 1:
                     continue
 
                 meta = CONDITION_SYMPTOM_MAP.get(cond_name, {})
@@ -301,11 +327,19 @@ class ConditionPredictionService:
                     if any(s in p or p in s for p in present_sym_names)
                 ]
 
+                # Evidence integrity: Every candidate MUST have at least 1 verified supporting symptom
+                if not supporting:
+                    continue
+
                 # 2. Contradictory: which absent symptoms conflict with typical presentation
                 contradictory = [
                     s for s in typical
                     if any(s in a or a in s for a in absent_sym_names)
                 ]
+
+                # If contradictory symptoms strictly outweigh supporting symptoms and >= 2 contradictory cardinal features, disqualify
+                if len(contradictory) > len(supporting) and len(contradictory) >= 2:
+                    continue
 
                 # 3. Unknown / Unassessed: typical features that remain unknown or missing
                 missing_relevant = [
@@ -323,7 +357,7 @@ class ConditionPredictionService:
                     confidence_tier = "Low Alignment / Differential"
 
                 conditions.append({
-                    "rank": rank,
+                    "rank": len(conditions) + 1,
                     "condition": cond_name,
                     "probability_score": round(score, 4),
                     "confidence_tier": confidence_tier,
@@ -334,8 +368,6 @@ class ConditionPredictionService:
                     "clinical_rationale": (
                         f"Active symptoms ({', '.join(supporting)}) show statistical concordance with "
                         f"the clinical profile of {cond_name} in community dataset benchmarks."
-                        if supporting
-                        else f"Limited statistical concordance with the clinical profile of {cond_name}."
                     ),
                     "disclaimer": (
                         "Statistical pattern alignment for discussion with your healthcare provider; "
@@ -349,7 +381,7 @@ class ConditionPredictionService:
             # are explicitly rejected rather than forcing differential guesses.
             REJECTION_THRESHOLD = 0.25
 
-            if not conditions or conditions[0]["probability_score"] < REJECTION_THRESHOLD or not conditions[0]["supporting_symptoms"]:
+            if not conditions or conditions[0]["probability_score"] < REJECTION_THRESHOLD:
                 return {
                     "status": "unsupported_condition",
                     "model_version": self.model_version,

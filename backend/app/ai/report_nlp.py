@@ -39,6 +39,17 @@ TARGET_TESTS: list[dict[str, Any]] = [
         "domain": "hematology",
     },
     {
+        "canonical": "Hematocrit",
+        "synonyms": [
+            r"hematocrit",
+            r"haematocrit",
+            r"\bhct\b",
+            r"packed cell volume",
+            r"\bpcv\b",
+        ],
+        "domain": "hematology",
+    },
+    {
         "canonical": "Fasting Blood Glucose",
         "synonyms": [
             r"fasting blood sugar",
@@ -122,8 +133,48 @@ TARGET_TESTS: list[dict[str, Any]] = [
     },
 ]
 
-# Common unit patterns
-UNIT_REGEX = r"(g\/dL|mg\/dL|mcL|\/uL|\/cumm|U\/L|uIU\/mL|%|fl|pg|mmol\/L|mEq\/L|mg\/L|lakh\/[u\u00b5\u03bc]L|\/[u\u00b5\u03bc]L)"
+# Comprehensive clinical unit patterns ordered from most specific/compound to least specific
+UNIT_PATTERNS = [
+    # RBC and cell count compound units with multiplier phrases and volume
+    r"(?:million\s+cells?|mil(?:lion)?|cells?|lakh)\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
+    r"(?:x\s*10\^?6|10\^?6|x\s*10\*6|10\*6)\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
+    r"(?:x\s*10\^?12|10\^?12|x\s*10\*12|10\*12)\s*\/\s*L",
+    r"mil\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
+    r"M\s*\/\s*(?:[u\u00b5\u03bc]L|mcL)",
+    r"(?:million\s+cells?|mil(?:lion)?)\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
+    # Standard mass concentration units
+    r"g\/dL",
+    r"mg\/dL",
+    r"g\/L",
+    r"mg\/L",
+    r"mcg\/dL",
+    r"ug\/dL",
+    r"[\u00b5\u03bc]g\/dL",
+    r"mmol\/L",
+    r"mEq\/L",
+    r"[\u00b5\u03bc]mol\/L",
+    r"umol\/L",
+    r"uIU\/mL",
+    r"[\u00b5\u03bc]IU\/mL",
+    r"mIU\/L",
+    r"U\/L",
+    r"IU\/L",
+    r"ng\/mL",
+    r"ng\/dL",
+    # Percentage (Hematocrit, differential counts)
+    r"%",
+    # Cell volume and hemoglobin weight indices
+    r"fl|fL",
+    r"pg",
+    # Base cell counts per volume
+    r"cells\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
+    r"lakh\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
+    r"\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
+    r"\/uL",
+    r"\/cumm",
+    r"mcL",
+]
+UNIT_REGEX = r"(" + "|".join(UNIT_PATTERNS) + r")"
 
 # Reference range patterns supporting hyphens, en-dashes, em-dashes, and unicode dashes
 RANGE_REGEX = re.compile(
@@ -155,6 +206,45 @@ def _evaluate_range(val: float, low: Optional[float], high: Optional[float]) -> 
     return "UNKNOWN"
 
 
+def _is_new_test_or_section(line_text: str) -> bool:
+    """Determine if a line begins a new test record or section header to prevent cross-row contamination."""
+    clean = line_text.strip()
+    if not clean:
+        return False
+
+    # 1. Any synonym of target tests
+    for td in TARGET_TESTS:
+        for s in td["synonyms"]:
+            if re.search(r"\b" + s + r"\b", clean, re.IGNORECASE):
+                return True
+
+    # 2. Recognized section header
+    if re.match(
+        r"^(?:clinical history|history|impression|conclusion|diagnosis|findings|examination|radiology|comments?|notes?|method|department|sample|specimen|patient|doctor|dr\.|reported\s+on|collected\s+on)\s*[:\-]",
+        clean,
+        re.IGNORECASE,
+    ):
+        return True
+
+    # 3. Another clinical parameter line with separator (e.g., "ESR: 25", "MCV = 85", "Sodium: 140")
+    if re.match(
+        r"^(?!(?:ref(?:erence)?|normal|flag|status|remark|interpretation|result|observed|units?)\b)[A-Za-z][A-Za-z0-9\s\(\)\/\-\,\.]{1,35}\s*[:=\t|]\s*[\d<>]",
+        clean,
+        re.IGNORECASE,
+    ):
+        return True
+
+    # 4. Another clinical parameter line with direct value and unit
+    if re.match(
+        r"^(?!(?:ref(?:erence)?|normal|flag|status|remark|interpretation|result|observed|units?)\b)[A-Za-z][A-Za-z0-9\s\(\)\/\-\,\.]{2,30}\s+[\d\.]+\s*(?:%|g\/|mg\/|cells|\/|fl|pg|mmol|mil|million)",
+        clean,
+        re.IGNORECASE,
+    ):
+        return True
+
+    return False
+
+
 def structure_report_text(
     text: str | None,
     tables: list[list[list[str]]] | None = None,
@@ -184,14 +274,17 @@ def structure_report_text(
             header = [str(cell or "").strip().lower() for cell in table[0]]
             col_test = 0
             col_val = 1
-            col_ref = 2 if len(header) > 2 else None
-            col_flag = 3 if len(header) > 3 else None
+            col_unit = None
+            col_ref = None
+            col_flag = None
 
             for i, h in enumerate(header):
                 if any(k in h for k in ["test", "parameter", "investigation"]):
                     col_test = i
                 elif any(k in h for k in ["result", "value", "observed"]):
                     col_val = i
+                elif any(k in h for k in ["unit", "units"]):
+                    col_unit = i
                 elif any(k in h for k in ["reference", "range", "interval", "normal"]):
                     col_ref = i
                 elif any(k in h for k in ["flag", "status", "remark", "interpretation"]):
@@ -203,6 +296,7 @@ def structure_report_text(
 
                 test_raw = str(row[col_test] or "").strip()
                 val_raw = str(row[col_val] or "").strip()
+                unit_raw = str(row[col_unit] or "").strip() if (col_unit is not None and len(row) > col_unit) else ""
                 ref_raw = str(row[col_ref] or "").strip() if (col_ref is not None and len(row) > col_ref) else ""
                 flag_raw = str(row[col_flag] or "").strip() if (col_flag is not None and len(row) > col_flag) else ""
 
@@ -229,9 +323,14 @@ def structure_report_text(
                     except ValueError:
                         continue
 
-                    # Extract unit
-                    unit_m = re.search(UNIT_REGEX, val_raw, re.IGNORECASE)
-                    unit_str = unit_m.group(1) if unit_m else None
+                    # Extract unit (from unit column if present, else from val_raw)
+                    unit_str = None
+                    if unit_raw:
+                        um = re.search(UNIT_REGEX, unit_raw, re.IGNORECASE)
+                        unit_str = um.group(1).strip() if um else unit_raw
+                    if not unit_str:
+                        um = re.search(UNIT_REGEX, val_raw, re.IGNORECASE)
+                        unit_str = um.group(1).strip() if um else None
 
                     # Extract reference range
                     ref_low = None
@@ -264,33 +363,69 @@ def structure_report_text(
                                     except ValueError:
                                         pass
 
-                    # Determine interpretation
-                    interp = None
-                    flag_lower = flag_raw.lower()
+                    # Determine interpretation & detect explicit flag conflict
+                    calculated_status = _evaluate_range(val_float, ref_low, ref_high)
+                    explicit_flag = None
+                    flag_lower = flag_raw.lower().strip()
                     if "high" in flag_lower:
-                        interp = "HIGH"
+                        explicit_flag = "HIGH"
                     elif "low" in flag_lower:
-                        interp = "LOW"
+                        explicit_flag = "LOW"
                     elif "normal" in flag_lower:
-                        interp = "NORMAL"
+                        explicit_flag = "NORMAL"
+                    elif "abnormal" in flag_lower:
+                        explicit_flag = "ABNORMAL"
+
+                    conflict = False
+                    conflict_detail = None
+                    if explicit_flag and calculated_status != "UNKNOWN":
+                        if explicit_flag == "NORMAL" and calculated_status in {"HIGH", "LOW"}:
+                            conflict = True
+                        elif explicit_flag in {"HIGH", "LOW"} and calculated_status == "NORMAL":
+                            conflict = True
+                        elif explicit_flag == "HIGH" and calculated_status == "LOW":
+                            conflict = True
+                        elif explicit_flag == "LOW" and calculated_status == "HIGH":
+                            conflict = True
+
+                    if conflict:
+                        conflict_detail = f"Explicit flag '{explicit_flag}' conflicts with calculated status '{calculated_status}'"
+                        final_status = explicit_flag
+                    elif explicit_flag:
+                        final_status = explicit_flag
                     else:
-                        interp = _evaluate_range(val_float, ref_low, ref_high)
+                        final_status = calculated_status
 
                     seen_tests.add(canonical)
+                    raw_parts = [test_raw, val_raw]
+                    if unit_raw:
+                        raw_parts.append(unit_raw)
+                    if ref_raw:
+                        raw_parts.append(ref_raw)
+                    if flag_raw:
+                        raw_parts.append(flag_raw)
+
                     findings.append({
                         "test_name": canonical,
+                        "original_test_name": test_raw,
                         "value": val_float,
                         "unit": unit_str,
                         "reference_range": ref_str,
-                        "status": interp,
-                        "interpretation": interp,
+                        "reference_low": ref_low,
+                        "reference_high": ref_high,
+                        "explicit_flag": explicit_flag,
+                        "calculated_status": calculated_status,
+                        "conflict": conflict,
+                        "conflict_detail": conflict_detail,
+                        "status": final_status,
+                        "interpretation": final_status,
                         "domain": test_def["domain"],
                         "source_report": "uploaded_report",
-                        "raw_line": f"{test_raw} | {val_raw} | {ref_raw} | {flag_raw}".strip(),
+                        "raw_line": " | ".join(raw_parts).strip(),
                     })
                     break
 
-    # 2. Text line-by-line fallback with multi-line sliding window for any unextracted tests
+    # 2. Text line-by-line fallback with tightly bounded candidate blocks
     if text and text.strip():
         lines = [line.strip() for line in text.splitlines() if line.strip()]
         for idx, line in enumerate(lines):
@@ -300,46 +435,83 @@ def structure_report_text(
                     continue
 
                 matched = False
+                matched_syn = None
                 for syn in test_def["synonyms"]:
-                    if re.search(r"\b" + syn + r"\b", line, re.IGNORECASE):
+                    m_syn = re.search(r"\b" + syn + r"\b", line, re.IGNORECASE)
+                    if m_syn:
                         matched = True
+                        matched_syn = m_syn.group(0)
                         break
 
                 if not matched:
                     continue
 
-                # Build candidate text block (current line + up to 4 following lines, stopping at next test)
+                # Build candidate text block strictly bounded to this test
                 block = [line]
+
+                # Check if current line already contains a value
+                line_has_val = bool(
+                    re.search(r"[:=\t|]\s*[\d<>]", line)
+                    or re.search(r"[\d,]+(?:\.\d+)?\s*" + UNIT_REGEX, line, re.IGNORECASE)
+                )
+
+                # Look forward up to 4 lines only if the current line does NOT already form a complete test line
                 for forward in range(idx + 1, min(idx + 5, len(lines))):
                     fline = lines[forward]
-                    if any(
-                        re.search(r"\b" + s + r"\b", fline, re.IGNORECASE)
-                        for td in TARGET_TESTS
-                        for s in td["synonyms"]
-                    ):
+                    # Stop if next line is another test or section header
+                    if _is_new_test_or_section(fline):
+                        break
+                    # If current line already had value, range, and flag, do NOT greedily swallow next line
+                    if line_has_val and RANGE_REGEX.search(line) and re.search(r"\b(HIGH|LOW|NORMAL)\b", line, re.IGNORECASE):
+                        break
+                    # If fline looks like an unrelated line when current line already had value and range
+                    if line_has_val and RANGE_REGEX.search(line) and not re.search(r"^(?:flag|status|remark|interpretation|result)\b", fline, re.IGNORECASE) and fline.upper() not in {"HIGH", "LOW", "NORMAL", "ABNORMAL"}:
                         break
                     block.append(fline)
+                    # If this line was an explicit flag or completed the record, stop extending
+                    if re.search(r"^(?:flag|status|remark|interpretation)\b", fline, re.IGNORECASE) or fline.upper() in {"HIGH", "LOW", "NORMAL", "ABNORMAL"}:
+                        break
+
                 combined = " ".join(block)
 
-                # Look for numeric value
+                # 1. Look for numeric value
                 val_float = None
-                # Check if a line in block is value + unit
+                val_line = None
+
+                # First check: value immediately preceding a unit on the same line
                 for b_line in block:
-                    m = re.search(r"^([\d,]+(?:\.\d+)?)\s*" + UNIT_REGEX, b_line, re.IGNORECASE)
-                    if m:
+                    m_val_unit = re.search(r"([\d,]+(?:\.\d+)?)\s*" + UNIT_REGEX, b_line, re.IGNORECASE)
+                    if m_val_unit:
                         try:
-                            val_float = float(m.group(1).replace(",", ""))
-                            break
+                            vf = float(m_val_unit.group(1).replace(",", ""))
+                            if vf < 1900 or vf > 2100:
+                                val_float = vf
+                                val_line = b_line
+                                break
                         except ValueError:
                             pass
+
+                # Second check: number after colon, equal sign, or tab
                 if val_float is None:
-                    # Look for first number in combined text that is not in the test name
+                    for b_line in block:
+                        m_sep = re.search(r"[:=\t|]\s*([\d,]+(?:\.\d+)?)", b_line)
+                        if m_sep:
+                            try:
+                                vf = float(m_sep.group(1).replace(",", ""))
+                                if vf < 1900 or vf > 2100:
+                                    val_float = vf
+                                    val_line = b_line
+                                    break
+                            except ValueError:
+                                pass
+
+                # Third check: first number in combined text avoiding year
+                if val_float is None:
                     num_matches = list(re.finditer(r"\b([\d,]+(?:\.\d+)?)\b", combined))
                     for nm in num_matches:
                         num_str = nm.group(1).replace(",", "")
                         try:
                             vf = float(num_str)
-                            # Avoid matching year like 2026
                             if vf < 1900 or vf > 2100:
                                 val_float = vf
                                 break
@@ -349,16 +521,32 @@ def structure_report_text(
                 if val_float is None:
                     continue
 
-                # Unit
-                unit_match = re.search(UNIT_REGEX, combined, re.IGNORECASE)
-                unit_str = unit_match.group(1) if unit_match else None
+                # 2. Extract unit (preferring the line where the value was found)
+                unit_str = None
+                if val_line:
+                    um = re.search(UNIT_REGEX, val_line, re.IGNORECASE)
+                    if um:
+                        unit_str = um.group(1).strip()
+                if not unit_str:
+                    um = re.search(UNIT_REGEX, combined, re.IGNORECASE)
+                    if um:
+                        unit_str = um.group(1).strip()
 
-                # Reference range
+                # 3. Extract reference range
                 ref_low = None
                 ref_high = None
                 ref_str = None
 
-                range_m = RANGE_REGEX.search(combined)
+                range_m = None
+                for b_line in block:
+                    if re.search(r"\b(?:ref|range|interval|normal)\b", b_line, re.IGNORECASE):
+                        rm = RANGE_REGEX.search(b_line)
+                        if rm:
+                            range_m = rm
+                            break
+                if not range_m:
+                    range_m = RANGE_REGEX.search(combined)
+
                 if range_m:
                     try:
                         ref_low = float(range_m.group(1).replace(",", "").replace("<", "").replace(">", "").strip())
@@ -383,26 +571,81 @@ def structure_report_text(
                             except ValueError:
                                 pass
 
-                # Interpretation / flag
-                interp = None
-                comb_lower = combined.lower()
-                if re.search(r"\bhigh\*?\b", comb_lower):
-                    interp = "HIGH"
-                elif re.search(r"\blow\*?\b", comb_lower):
-                    interp = "LOW"
-                elif re.search(r"\bnormal\b", comb_lower):
-                    interp = "NORMAL"
+                # 4. Explicit Flag & Interpretation
+                calculated_status = _evaluate_range(val_float, ref_low, ref_high)
+                explicit_flag = None
+
+                # Look for explicit flag labeled: "flag: HIGH", "status: LOW", "interpretation: NORMAL"
+                flag_hdr_m = re.search(
+                    r"\b(?:flag|status|remark|interpretation)\s*[:\s]\s*(\*?\s*(?:HIGH|LOW|NORMAL|ABNORMAL)\*?)\b",
+                    combined,
+                    re.IGNORECASE,
+                )
+                if flag_hdr_m:
+                    f_val = flag_hdr_m.group(1).replace("*", "").strip().upper()
+                    if f_val in {"HIGH", "LOW", "NORMAL", "ABNORMAL"}:
+                        explicit_flag = f_val
+
+                if not explicit_flag:
+                    # Look for flag immediately following reference range or at end of line: e.g. ", LOW" or ", NORMAL" or ") HIGH"
+                    for b_line in block:
+                        eol_m = re.search(r"[,|\t\)]\s*(HIGH|LOW|NORMAL|ABNORMAL)\*?\s*$", b_line, re.IGNORECASE)
+                        if eol_m:
+                            explicit_flag = eol_m.group(1).upper()
+                            break
+                        if b_line.strip().upper() in {"HIGH", "LOW", "NORMAL", "ABNORMAL"}:
+                            explicit_flag = b_line.strip().upper()
+                            break
+
+                if not explicit_flag:
+                    comb_eol_m = re.search(r"[,|\t\)]\s*(HIGH|LOW|NORMAL|ABNORMAL)\*?\s*$", combined.strip(), re.IGNORECASE)
+                    if comb_eol_m:
+                        explicit_flag = comb_eol_m.group(1).upper()
+
+                if not explicit_flag:
+                    # Look for standalone HIGH or LOW keyword (avoiding HPF, risk, grade, etc.)
+                    high_m = re.search(r"\b(HIGH\*?)\b(?!\s*(?:power|risk|grade|density))", combined, re.IGNORECASE)
+                    low_m = re.search(r"\b(LOW\*?)\b(?!\s*(?:power|risk|grade|density))", combined, re.IGNORECASE)
+                    if high_m and not low_m:
+                        explicit_flag = "HIGH"
+                    elif low_m and not high_m:
+                        explicit_flag = "LOW"
+
+                conflict = False
+                conflict_detail = None
+                if explicit_flag and calculated_status != "UNKNOWN":
+                    if explicit_flag == "NORMAL" and calculated_status in {"HIGH", "LOW"}:
+                        conflict = True
+                    elif explicit_flag in {"HIGH", "LOW"} and calculated_status == "NORMAL":
+                        conflict = True
+                    elif explicit_flag == "HIGH" and calculated_status == "LOW":
+                        conflict = True
+                    elif explicit_flag == "LOW" and calculated_status == "HIGH":
+                        conflict = True
+
+                if conflict:
+                    conflict_detail = f"Explicit flag '{explicit_flag}' conflicts with calculated status '{calculated_status}'"
+                    final_status = explicit_flag
+                elif explicit_flag:
+                    final_status = explicit_flag
                 else:
-                    interp = _evaluate_range(val_float, ref_low, ref_high)
+                    final_status = calculated_status
 
                 seen_tests.add(canonical)
                 findings.append({
                     "test_name": canonical,
+                    "original_test_name": matched_syn or canonical,
                     "value": val_float,
                     "unit": unit_str,
                     "reference_range": ref_str,
-                    "status": interp,
-                    "interpretation": interp,
+                    "reference_low": ref_low,
+                    "reference_high": ref_high,
+                    "explicit_flag": explicit_flag,
+                    "calculated_status": calculated_status,
+                    "conflict": conflict,
+                    "conflict_detail": conflict_detail,
+                    "status": final_status,
+                    "interpretation": final_status,
                     "domain": test_def["domain"],
                     "source_report": "uploaded_report",
                     "raw_line": line if len(line) < 140 else line[:137] + "...",

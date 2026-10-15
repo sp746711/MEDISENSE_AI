@@ -255,6 +255,13 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     # 3. Medical Report Findings
     story.append(Paragraph("3. Medical Report Findings", section_heading))
     report_findings = feedback.get("medical_report_findings", [])
+    if not report_findings and evidence_info:
+        rep_meta = evidence_info.get("report", {})
+        report_findings = (
+            rep_meta.get("abnormal_findings", [])
+            + rep_meta.get("normal_findings", [])
+            + rep_meta.get("unknown_range_findings", [])
+        )
     report_status = feedback.get("medical_report_status", "NOT_PROVIDED")
     qualitative_rep = feedback.get("qualitative_findings", []) or evidence_info.get("report", {}).get("qualitative_findings", [])
     narrative_rep = feedback.get("narrative_findings", []) or evidence_info.get("report", {}).get("narrative_findings", [])
@@ -265,12 +272,25 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         for p in report_findings:
             interp = p.get("status") or p.get("interpretation") or "RECORDED"
             interp_color = "#dc2626" if interp in {"HIGH", "LOW"} else ("#059669" if interp == "NORMAL" else "#4b5563")
+
+            raw_val = p.get("value", "")
+            unit = p.get("unit") or ""
+            val_str = str(raw_val).strip()
+            if unit and unit not in val_str:
+                val_display = f"{val_str} {unit}".strip()
+            else:
+                val_display = val_str
+
+            status_display = f"<font color='{interp_color}'><b>{interp}</b></font>"
+            if p.get("conflict"):
+                status_display += "<br/><font size='6' color='#dc2626'><i>(Flag conflict)</i></font>"
+
             rep_data.append(
                 [
                     p.get("test_name", "Test"),
-                    p.get("value", ""),
+                    val_display,
                     p.get("reference_range") or "Not provided",
-                    f"<font color='{interp_color}'><b>{interp}</b></font>",
+                    status_display,
                 ]
             )
         rep_table = Table([[Paragraph(c, body_style) for c in row] for row in rep_data], colWidths=[160, 120, 140, 100])
@@ -385,11 +405,15 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         cond_data = [["Rank", "Possible Condition", "Confidence Alignment", "Supporting Evidence", "Specialty"]]
         for c in possible_conditions:
             supp_str = ", ".join(c.get("supporting_symptoms", [])[:3])
+            contra_list = c.get("contradictory_findings", [])
+            evidence_cell = supp_str if supp_str else "—"
+            if contra_list:
+                evidence_cell += f"<br/><font color='#dc2626' size='7'>Denied: {', '.join(contra_list[:2])}</font>"
             cond_data.append([
                 f"#{c.get('rank', 1)}",
                 f"<b>{c.get('condition', '')}</b>",
                 f"{c.get('confidence_tier', 'Possible')}<br/><font size='7' color='#64748b'>Score: {c.get('probability_score', 0):.2f}</font>",
-                supp_str if supp_str else "—",
+                evidence_cell,
                 c.get("suggested_specialty", "General Medicine"),
             ])
         cond_table = Table([[Paragraph(cell, body_style) for cell in row] for row in cond_data], colWidths=[35, 145, 115, 125, 100])

@@ -41,6 +41,73 @@ CHEST_CLASSES = [
 ]
 
 
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, inplanes: int, planes: int, stride: int = 1, downsample: Optional[nn.Module] = None) -> None:
+        super().__init__()
+        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=3, stride=stride, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(planes)
+        self.relu = nn.ReLU(inplace=True)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.downsample = downsample
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        identity = x
+        out = self.relu(self.bn1(self.conv1(x)))
+        out = self.bn2(self.conv2(out))
+        if self.downsample is not None:
+            identity = self.downsample(x)
+        out += identity
+        return self.relu(out)
+
+
+class ResNet(nn.Module):
+    def __init__(self, block: type[BasicBlock], layers: list[int], num_classes: int = 5) -> None:
+        super().__init__()
+        self.inplanes = 64
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.fc = nn.Linear(512 * block.expansion, num_classes)
+
+    def _make_layer(self, block: type[BasicBlock], planes: int, blocks: int, stride: int = 1) -> nn.Sequential:
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+        layers = [block(self.inplanes, planes, stride, downsample)]
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+        return nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.relu(self.bn1(self.conv1(x)))
+        x = self.maxpool(x)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.avgpool(x)
+        x = torch.flatten(x, 1)
+        return self.fc(x)
+
+
+def build_resnet18(num_classes: int = len(CHEST_CLASSES)) -> nn.Module:
+    """Instantiate a standard ResNet-18 architecture in pure PyTorch."""
+    return ResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes)
+
+
 class XRayModelService:
     """Interface for region-specific deep learning X-ray models (PyTorch ResNet)."""
 
@@ -81,10 +148,13 @@ class XRayModelService:
             if isinstance(loaded, nn.Module):
                 self._model = loaded
             else:
-                import torchvision.models as models
+                try:
+                    import torchvision.models as models
+                    resnet = models.resnet18(weights=None)
+                    resnet.fc = nn.Linear(resnet.fc.in_features, len(CHEST_CLASSES))
+                except Exception:
+                    resnet = build_resnet18(num_classes=len(CHEST_CLASSES))
 
-                resnet = models.resnet18(weights=None)
-                resnet.fc = nn.Linear(resnet.fc.in_features, len(CHEST_CLASSES))
                 if isinstance(loaded, dict) and "state_dict" in loaded:
                     resnet.load_state_dict(loaded["state_dict"])
                 elif isinstance(loaded, dict):
@@ -110,14 +180,20 @@ class XRayModelService:
     def preprocess_image(self, image_path: str) -> Optional[torch.Tensor]:
         """Preprocess X-ray image using OpenCV and standard normalization."""
         try:
-            img = cv2.imread(image_path)
-            if img is None:
-                pil_img = Image.open(image_path).convert("RGB")
-                img = np.array(pil_img)
+            from PIL import ImageOps
 
-            img_resized = cv2.resize(img, (224, 224))
-            img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-            img_norm = img_rgb.astype(np.float32) / 255.0
+            # Robust loading: try OpenCV first
+            img_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
+            if img_bgr is not None:
+                img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+            else:
+                # Fallback to PIL for non-standard paths or formats
+                pil_img = Image.open(image_path)
+                pil_img = ImageOps.exif_transpose(pil_img).convert("RGB")
+                img_rgb = np.array(pil_img)
+
+            img_resized = cv2.resize(img_rgb, (224, 224), interpolation=cv2.INTER_LINEAR)
+            img_norm = img_resized.astype(np.float32) / 255.0
 
             # Normalize with ImageNet standard mean & std
             mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -146,7 +222,7 @@ class XRayModelService:
                 "model_version": None,
                 "prediction": None,
                 "confidence_if_valid": None,
-                "uncertainty": "Image file is missing or corrupted",
+                "uncertainty": "Image file is missing or empty",
                 "explainability_artifact": None,
                 "message": "The uploaded X-ray file could not be read or is unavailable. Please upload a valid PNG or JPEG image.",
             }

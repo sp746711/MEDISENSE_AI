@@ -206,8 +206,17 @@ def generate_assessment_feedback(
         medical_report_findings = [
             {
                 "test_name": f.get("test_name"),
+                "original_test_name": f.get("original_test_name") or f.get("test_name"),
                 "value": f"{f.get('value')} {f.get('unit') or ''}".strip(),
+                "numeric_value": f.get("value"),
+                "unit": f.get("unit"),
                 "reference_range": f.get("reference_range") or "Not provided",
+                "reference_low": f.get("reference_low"),
+                "reference_high": f.get("reference_high"),
+                "explicit_flag": f.get("explicit_flag"),
+                "calculated_status": f.get("calculated_status"),
+                "conflict": bool(f.get("conflict")),
+                "conflict_detail": f.get("conflict_detail"),
                 "status": f.get("status") or f.get("interpretation") or "UNKNOWN",
                 "interpretation": f.get("interpretation") or "UNKNOWN",
                 "domain": f.get("domain"),
@@ -285,6 +294,14 @@ def generate_assessment_feedback(
 
     # 6. Contradictory Evidence
     contradictory_evidence = list(evidence.get("contradictory", []))
+    for c in conditions_list:
+        contra_findings = c.get("contradictory_findings", [])
+        if contra_findings:
+            c_name = c.get("condition")
+            denied_str = ", ".join(contra_findings)
+            contra_msg = f"Confirmed absence of '{denied_str}' conflicts with typical presentation of {c_name}."
+            if contra_msg not in contradictory_evidence:
+                contradictory_evidence.append(contra_msg)
 
     # 7. Important Negative Findings (Negative Red Flags)
     negative_red_flags = [

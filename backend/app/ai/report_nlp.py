@@ -25,7 +25,7 @@ TARGET_TESTS: list[dict[str, Any]] = [
     },
     {
         "canonical": "White Blood Cell Count (WBC)",
-        "synonyms": [r"white blood cell(?: count)?", r"total leukocyte count", r"\btlc\b", r"\bwbc(?: count)?\b"],
+        "synonyms": [r"white blood cell(?:s)?(?: count)?", r"total leukocyte(?:s)?(?: count)?", r"\btlc\b", r"\bwbc(?: count)?\b"],
         "domain": "hematology",
     },
     {
@@ -35,7 +35,7 @@ TARGET_TESTS: list[dict[str, Any]] = [
     },
     {
         "canonical": "Red Blood Cell Count (RBC)",
-        "synonyms": [r"red blood cell(?: count)?", r"total erythrocyte count", r"\brbc\b"],
+        "synonyms": [r"red blood cell(?:s)?(?: count)?", r"total erythrocyte(?:s)?(?: count)?", r"\brbc\b"],
         "domain": "hematology",
     },
     {

@@ -8,10 +8,14 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture(scope="module")
 def client():
-    # Skip if database is not configured for tests
-    db_url = os.getenv("DATABASE_URL", "")
-    if not db_url or "CHANGE_ME" in db_url:
-        pytest.skip("DATABASE_URL not configured for tests")
+    # Use established project configuration from settings
+    from app.core.config import get_settings
+    from app.database.database import check_db_connection
+
+    settings = get_settings()
+    db_url = settings.database_url or os.getenv("DATABASE_URL", "")
+    if not db_url or "CHANGE_ME" in db_url or not check_db_connection():
+        pytest.skip("Database is not configured or unreachable for auth tests")
 
     from app.main import app
 

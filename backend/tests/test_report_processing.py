@@ -38,3 +38,38 @@ def test_extract_text_nonexistent_file():
     res = extract_text_from_file("nonexistent_report_file.pdf")
     assert res["status"] == "unavailable"
     assert res["extracted_text"] is None
+
+
+def test_structure_report_text_wbc_rbc_singular_and_plural():
+    # Test plural forms
+    plural_sample = """
+    COMPLETE BLOOD COUNT
+    White Blood Cells: 14,500 /uL (Reference: 4000 - 11000)
+    Red Blood Cells: 3.20 mil/uL (Reference: 4.5 - 5.5)
+    Platelets: 85,000 /uL (Reference: 150000 - 450000)
+    """
+    res_plural = structure_report_text(plural_sample)
+    assert res_plural["status"] == "structured"
+    plural_findings = {f["test_name"]: f for f in res_plural["findings"]}
+    assert "White Blood Cell Count (WBC)" in plural_findings
+    assert plural_findings["White Blood Cell Count (WBC)"]["value"] == 14500.0
+    assert plural_findings["White Blood Cell Count (WBC)"]["interpretation"] == "HIGH"
+    assert "Red Blood Cell Count (RBC)" in plural_findings
+    assert plural_findings["Red Blood Cell Count (RBC)"]["value"] == 3.2
+    assert plural_findings["Red Blood Cell Count (RBC)"]["interpretation"] == "LOW"
+
+    # Test singular forms
+    singular_sample = """
+    COMPLETE BLOOD COUNT
+    White Blood Cell Count: 6,800 /uL (Reference: 4000 - 11000)
+    Red Blood Cell Count: 4.90 mil/uL (Reference: 4.5 - 5.5)
+    """
+    res_singular = structure_report_text(singular_sample)
+    assert res_singular["status"] == "structured"
+    singular_findings = {f["test_name"]: f for f in res_singular["findings"]}
+    assert "White Blood Cell Count (WBC)" in singular_findings
+    assert singular_findings["White Blood Cell Count (WBC)"]["value"] == 6800.0
+    assert singular_findings["White Blood Cell Count (WBC)"]["interpretation"] == "NORMAL"
+    assert "Red Blood Cell Count (RBC)" in singular_findings
+    assert singular_findings["Red Blood Cell Count (RBC)"]["value"] == 4.9
+    assert singular_findings["Red Blood Cell Count (RBC)"]["interpretation"] == "NORMAL"

@@ -94,6 +94,11 @@ def _validate(
 
     # Verify that the detected format is in the allowed set
     if detected_ext not in allowed:
+        if allowed == ALLOWED_IMAGE_EXTENSIONS:
+            return {
+                "ok": False,
+                "message": f"Unsupported file type '{detected_ext}'. X-ray images must be PNG, JPG, or JPEG files. Allowed: {', '.join(sorted(allowed))}",
+            }
         return {
             "ok": False,
             "message": f"Unsupported file type '{detected_ext}'. Allowed: {', '.join(sorted(allowed))}",

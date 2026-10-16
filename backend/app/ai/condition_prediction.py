@@ -39,17 +39,17 @@ MODEL_VERSION = "condition_pred_v1.0"
 # Key characteristic symptoms mapped to conditions for explainability
 CONDITION_SYMPTOM_MAP: dict[str, dict[str, Any]] = {
     "Common Cold": {
-        "typical_symptoms": ["cough", "runny nose", "rhinorrhea", "nasal congestion", "sore throat", "sneezing", "mild fever"],
+        "typical_symptoms": ["cough", "runny nose", "rhinorrhea", "nasal congestion", "sore throat", "sneezing", "mild fever", "fever", "fatigue", "tiredness", "headache"],
         "red_flags": ["severe breathing difficulty", "stridor"],
         "specialty": "General Physician / Pulmonology",
     },
     "Pneumonia": {
-        "typical_symptoms": ["cough", "productive cough", "fever", "high fever", "chills", "shortness of breath", "chest pain", "difficulty breathing"],
+        "typical_symptoms": ["cough", "productive cough", "fever", "high fever", "chills", "shortness of breath", "chest pain", "difficulty breathing", "fatigue", "chest discomfort"],
         "red_flags": ["severe shortness of breath", "cyanosis", "altered mental status"],
         "specialty": "Pulmonology / Internal Medicine",
     },
     "Bronchial Asthma": {
-        "typical_symptoms": ["wheezing", "shortness of breath", "cough", "chest tightness", "difficulty breathing"],
+        "typical_symptoms": ["wheezing", "shortness of breath", "cough", "chest tightness", "difficulty breathing", "chest discomfort"],
         "red_flags": ["severe breathing difficulty", "silent chest", "inability to speak full sentences"],
         "specialty": "Pulmonology / Allergy & Immunology",
     },
@@ -124,7 +124,7 @@ CONDITION_SYMPTOM_MAP: dict[str, dict[str, Any]] = {
         "specialty": "Dermatology",
     },
     "allergy": {
-        "typical_symptoms": ["sneezing", "runny nose", "itching", "skin rash", "watery eyes"],
+        "typical_symptoms": ["sneezing", "runny nose", "itching", "skin rash", "watery eyes", "cough", "shortness of breath", "difficulty breathing", "wheezing", "sore throat", "fatigue", "fever"],
         "red_flags": ["facial swelling", "stridor", "breathing difficulty"],
         "specialty": "Allergy & Immunology / General Physician",
     },
@@ -273,11 +273,10 @@ class ConditionPredictionService:
         # Build feature text strictly and exclusively from active present symptoms
         feature_parts = []
         for s in active_present:
-            sym_name = s.get("symptom", "")
-            if s.get("body_area") and s.get("body_area") not in {"whole body", "unspecified"}:
-                feature_parts.append(f"{sym_name} in {s['body_area']}")
-            else:
-                feature_parts.append(sym_name)
+            sym_name = (s.get("symptom") or s.get("finding") or "").strip()
+            if not sym_name or sym_name.lower() in {"temperature"}:
+                continue
+            feature_parts.append(sym_name)
             if s.get("quality"):
                 feature_parts.append(f"{s['quality']} {sym_name}")
 

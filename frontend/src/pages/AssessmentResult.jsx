@@ -269,7 +269,7 @@ export default function AssessmentResult() {
                     ))}
                   </ul>
                 </div>
-              ) : xrayData?.received ? (
+              ) : xrayData?.images_received && xrayData?.status !== 'NOT_PROVIDED' ? (
                 <div style={{ marginBottom: '1rem' }}>
                   <p><strong>Region:</strong> {(xrayData.region || 'Not declared').toUpperCase()}</p>
                   <p><strong>Status:</strong> {(xrayData.status || '').toUpperCase()}</p>
@@ -279,7 +279,13 @@ export default function AssessmentResult() {
                     <p className="muted">{xrayData.description || xrayData.message || 'Automated interpretation for this X-ray type is currently unavailable.'}</p>
                   )}
                 </div>
-              ) : null}
+              ) : (
+                <div style={{ marginBottom: '0.8rem' }}>
+                  <p className="muted" style={{ margin: 0, fontSize: '0.86rem', fontStyle: 'italic' }}>
+                    Radiographic Images: None uploaded (no image file submitted for automated inference).
+                  </p>
+                </div>
+              )}
 
               {/* Radiology Reports */}
               {xrayReportsList.length > 0 ? (

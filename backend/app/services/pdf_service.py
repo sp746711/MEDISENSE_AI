@@ -128,7 +128,19 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     }.get((assessment.pathway or "").upper(), "#4b5563")
 
     date_str = assessment.created_at.strftime("%B %d, %Y at %H:%M UTC")
-    inputs_str = ", ".join(assessment.input_types or []).title()
+    input_labels = []
+    has_sym = bool(feedback.get("symptoms_identified") or feedback.get("current_symptoms") or getattr(assessment, "symptoms_text", None) or "symptoms" in (assessment.input_types or []))
+    if has_sym:
+        input_labels.append("Symptoms")
+    if feedback.get("medical_report_findings") or feedback.get("medical_reports") or "medical_report" in (assessment.input_types or []):
+        input_labels.append("Medical Report")
+    if feedback.get("xray_findings", {}).get("images_received") or feedback.get("xray_images"):
+        input_labels.append("X-ray Image")
+    if feedback.get("xray_findings", {}).get("reports_received") or feedback.get("xray_reports"):
+        input_labels.append("Radiology Report")
+    if not input_labels:
+        input_labels = [it.replace("_", " ").title() for it in (assessment.input_types or [])]
+    inputs_str = ", ".join(input_labels)
 
     meta_data = [
         [Paragraph("<b>Patient Name:</b>", body_style), Paragraph(user_name, body_style),
@@ -285,9 +297,15 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             if p.get("conflict"):
                 status_display += "<br/><font size='6' color='#dc2626'><i>(Flag conflict)</i></font>"
 
+            test_name = p.get("test_name", "Test")
+            src_file = p.get("source_file")
+            test_cell = f"<b>{test_name}</b>"
+            if src_file:
+                test_cell += f"<br/><font size='6' color='#64748b'>Source: {src_file}</font>"
+
             rep_data.append(
                 [
-                    p.get("test_name", "Test"),
+                    test_cell,
                     val_display,
                     p.get("reference_range") or "Not provided",
                     status_display,
@@ -334,28 +352,33 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         xray_info = evidence_info.get("xray", {})
     x_images = xray_info.get("images", []) or evidence_info.get("xray", {}).get("images", [])
     x_reports = xray_info.get("reports", []) or evidence_info.get("xray", {}).get("reports", []) or feedback.get("xray_reports", [])
+    has_images = bool(x_images) or (bool(xray_info.get("images_received")) and xray_info.get("status") not in {"NOT_PROVIDED", None})
+    has_reports = bool(x_reports)
 
-    if x_images or x_reports or xray_info.get("received") or "xray" in (assessment.input_types or []):
-        if x_images:
-            story.append(Paragraph("<b>Radiographic Images Evaluated:</b>", body_style))
-            for img in x_images:
-                istat = (img.get("status") or "UNAVAILABLE").upper()
-                ireg = (img.get("region") or "Not declared").title()
-                ipred = img.get("prediction") or "None"
-                ifistat = f"<font color='#059669'><b>{ipred}</b></font>" if istat == "COMPLETED" and ipred != "None" else f"<font color='#d97706'><b>{istat}</b> (Automated interpretation unavailable)</font>"
-                story.append(Paragraph(f"• <b>{img.get('file_name', 'X-ray image')}</b> ({ireg}): {ifistat}", body_style))
-        elif xray_info.get("received"):
-            x_status = xray_info.get("status", "UNAVAILABLE")
-            x_desc = xray_info.get("description") or xray_info.get("message") or "Automated interpretation unavailable."
-            raw_reg = (xray_info.get("region") or "").strip().lower()
-            x_reg = raw_reg.title() if raw_reg not in {"not declared", "unknown", ""} else "Not declared"
-            x_pred = xray_info.get("prediction") or "None"
-            x_block = (
-                f"<b>Region:</b> {x_reg} &nbsp;|&nbsp; <b>Status:</b> {x_status} &nbsp;|&nbsp; "
-                f"<b>Model Prediction:</b> {x_pred}<br/>"
-                f"<i>{x_desc}</i>"
-            )
-            story.append(Paragraph(x_block, body_style))
+    if has_images or has_reports or xray_info.get("received") or "xray" in (assessment.input_types or []):
+        if has_images:
+            if x_images:
+                story.append(Paragraph("<b>Radiographic Images Evaluated:</b>", body_style))
+                for img in x_images:
+                    istat = (img.get("status") or "UNAVAILABLE").upper()
+                    ireg = (img.get("region") or "Not declared").title()
+                    ipred = img.get("prediction") or "None"
+                    ifistat = f"<font color='#059669'><b>{ipred}</b></font>" if istat == "COMPLETED" and ipred != "None" else f"<font color='#d97706'><b>{istat}</b> (Automated interpretation unavailable)</font>"
+                    story.append(Paragraph(f"• <b>{img.get('file_name', 'X-ray image')}</b> ({ireg}): {ifistat}", body_style))
+            else:
+                x_status = xray_info.get("status", "UNAVAILABLE")
+                x_desc = xray_info.get("description") or xray_info.get("message") or "Automated interpretation unavailable."
+                raw_reg = (xray_info.get("region") or "").strip().lower()
+                x_reg = raw_reg.title() if raw_reg not in {"not declared", "unknown", ""} else "Not declared"
+                x_pred = xray_info.get("prediction") or "None"
+                x_block = (
+                    f"<b>Region:</b> {x_reg} &nbsp;|&nbsp; <b>Status:</b> {x_status} &nbsp;|&nbsp; "
+                    f"<b>Model Prediction:</b> {x_pred}<br/>"
+                    f"<i>{x_desc}</i>"
+                )
+                story.append(Paragraph(x_block, body_style))
+        else:
+            story.append(Paragraph("<b>Radiographic Images:</b> None uploaded (no image file submitted for automated inference).", body_style))
 
         if x_reports:
             story.append(Spacer(1, 4))
@@ -426,10 +449,12 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         story.append(Paragraph("<b>Unknown / Unassessed Factors:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• {item}" for item in missing_items]), body_style))
     # 6. Possible Conditions (Assistive ML Differential)
+    story.append(Paragraph("6. Possible Conditions (Assistive ML Differential)", section_heading))
     possible_conditions = feedback.get("possible_conditions", [])
-    cond_status = feedback.get("condition_prediction_status")
+    cond_status = feedback.get("condition_prediction_status") or feedback.get("condition_predictions", {}).get("status")
+    cond_message = feedback.get("condition_prediction_message") or feedback.get("condition_predictions", {}).get("message")
+
     if possible_conditions:
-        story.append(Paragraph("6. Possible Conditions (Assistive ML Differential)", section_heading))
         cond_data = [["Rank", "Possible Condition", "Confidence Alignment", "Supporting Evidence", "Specialty"]]
         for c in possible_conditions:
             supp_str = ", ".join(c.get("supporting_symptoms", [])[:3])
@@ -459,8 +484,31 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         story.append(Paragraph("<i>Note: Machine learning condition predictions are assistive statistical patterns for physician consultation; they do NOT constitute a medical diagnosis.</i>", subtitle_style))
         story.append(Spacer(1, 8))
     elif cond_status == "unsupported_condition":
-        story.append(Paragraph("6. Possible Conditions (Assistive ML Differential)", section_heading))
-        story.append(Paragraph("<i>Reported symptoms do not align with the 24 disease patterns evaluated by this assistive model. In-person clinical evaluation is recommended.</i>", subtitle_style))
+        story.append(Paragraph(
+            "<b>Status:</b> Unsupported Condition Pattern<br/>"
+            f"<i>{cond_message or 'Reported symptoms do not show strong alignment with the 24 disease patterns evaluated by this assistive model. All statistical probabilities fell below the calibration rejection threshold (0.25). A comprehensive clinical evaluation by a healthcare provider is recommended.'}</i>",
+            body_style,
+        ))
+        story.append(Spacer(1, 8))
+    elif cond_status == "insufficient_evidence":
+        story.append(Paragraph(
+            "<b>Status:</b> Insufficient Symptom Evidence<br/>"
+            f"<i>{cond_message or 'No active clinical symptom keywords found for condition prediction.'}</i>",
+            body_style,
+        ))
+        story.append(Spacer(1, 8))
+    elif cond_status == "unavailable":
+        story.append(Paragraph(
+            "<b>Status:</b> Model Unavailable<br/>"
+            "<i>Trained condition prediction model checkpoint is currently unavailable.</i>",
+            body_style,
+        ))
+        story.append(Spacer(1, 8))
+    else:
+        story.append(Paragraph(
+            "<i>Condition prediction: No differential candidates generated.</i>",
+            body_style,
+        ))
         story.append(Spacer(1, 8))
 
     # 7. Safety Pathway & Clinical Navigation

@@ -813,7 +813,7 @@ NEGATION_PATTERNS = [
 # Uncertainty indicators for symptoms
 UNCERTAINTY_PATTERNS = [
     re.compile(
-        r"\b(?:not\s+sure|unsure|not\s+certain|uncertain|don't\s+know|dont\s+know|cannot\s+tell|can't\s+tell|hard\s+to\s+tell|wondering|no\s+idea)\s*(?:if|whether|that|about)?\b",
+        r"\b(?:not\s+sure|unsure|not\s+certain|uncertain|don't\s+know|dont\s+know|cannot\s+tell|can't\s+tell|hard\s+to\s+tell|wondering|no\s+idea|unknown|unreported|not\s+reported|not\s+assessed|unspecified)\s*(?:if|whether|that|about)?\b",
         re.IGNORECASE,
     ),
     re.compile(
@@ -880,7 +880,7 @@ DURATION_REGEX = re.compile(
 )
 
 TEMP_REGEX = re.compile(
-    r"(?:temperature|temp)[^.\n,]*?(\d{2,3}(?:\.\d+)?)\s*(?:[°\u00b0]?\s*[FC]|degrees?\s*[FC])?",
+    r"(?:temperature|temp)[^.\n,:]*?[:\-]?\s*(\d{2,3}(?:\.\d+)?)\s*(?:[°\u00b0]?\s*([cf]|celsius|fahrenheit)|degrees?\s*([cf]|celsius|fahrenheit))?\b",
     re.IGNORECASE,
 )
 
@@ -910,7 +910,25 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
     temp_match = TEMP_REGEX.search(cleaned)
     temp_val = None
     if temp_match:
-        temp_val = f"{temp_match.group(1)}°F"
+        try:
+            num = float(temp_match.group(1))
+            unit_str = (temp_match.group(2) or temp_match.group(3) or "").lower()
+            if unit_str.startswith("c"):
+                f_equiv = num * 9.0 / 5.0 + 32.0
+                temp_val = f"{num:.1f}°C ({f_equiv:.1f}°F)"
+            elif unit_str.startswith("f"):
+                temp_val = f"{num:.1f}°F"
+            else:
+                # Infer biological temperature scale
+                if 35.0 <= num <= 44.0:
+                    f_equiv = num * 9.0 / 5.0 + 32.0
+                    temp_val = f"{num:.1f}°C ({f_equiv:.1f}°F)"
+                elif 94.0 <= num <= 110.0:
+                    temp_val = f"{num:.1f}°F"
+                else:
+                    temp_val = f"{num:.1f}°F"
+        except (ValueError, TypeError):
+            temp_val = f"{temp_match.group(1)}°F"
 
     # Contextual qualifiers from entire text for complex presentations
     full_text_lower = cleaned.lower()
@@ -991,7 +1009,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                             break
 
                     if not is_uncertain:
-                        if re.match(r"^\s*[:\-]?\s*(?:is\s+|seems\s+|appears\s+)?(?:not\s+sure|unsure|uncertain|possible|unconfirmed|questionable)\b", post_text, re.IGNORECASE):
+                        if re.match(r"^\s*[:\-]?\s*(?:is\s+|seems\s+|appears\s+)?(?:not\s+sure|unsure|uncertain|possible|unconfirmed|questionable|unknown|unreported|not\s+reported|not\s+assessed|unspecified)\b", post_text, re.IGNORECASE):
                             is_uncertain = True
 
                     if is_uncertain:
@@ -1271,22 +1289,34 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                 s["context"] = "; ".join(quals)
 
     # Temperature objective finding
-    if temp_val and "temperature" not in seen_canonicals:
-        extracted.append({
-            "finding": "temperature",
-            "symptom": "temperature",
-            "status": "PRESENT",
-            "state": "PRESENT",
-            "duration": None,
-            "severity": "UNKNOWN",
-            "body_area": "whole body",
-            "laterality": None,
-            "quality": None,
-            "trigger": None,
-            "domain": "systemic",
-            "context": temp_val,
-            "source": "user_input",
-        })
+    if temp_val:
+        fever_symptom = next(
+            (s for s in extracted if s.get("symptom") in {"fever", "high fever"}),
+            None,
+        )
+        if fever_symptom:
+            existing_ctx = fever_symptom.get("context")
+            fever_symptom["context"] = f"{existing_ctx}; {temp_val}" if existing_ctx else temp_val
+            fever_symptom["measurement"] = temp_val
+
+        if "temperature" not in seen_canonicals:
+            extracted.append({
+                "finding": "temperature",
+                "symptom": "temperature",
+                "status": "PRESENT",
+                "state": "PRESENT",
+                "duration": None,
+                "severity": "UNKNOWN",
+                "body_area": "whole body",
+                "laterality": None,
+                "quality": None,
+                "trigger": None,
+                "domain": "systemic",
+                "context": temp_val,
+                "measurement": temp_val,
+                "source": "user_input",
+            })
+            seen_canonicals.add("temperature")
 
     # If no symptoms from lexicon were detected, capture user input as general finding
     if not extracted and cleaned:

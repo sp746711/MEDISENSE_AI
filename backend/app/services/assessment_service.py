@@ -239,8 +239,11 @@ def generate_assessment_feedback(
         medical_report_message = "Medical Report: Not provided."
 
     # 4. X-Ray Findings / Availability
-    if xray_received or xray_reports_list:
-        if xray_images_list:
+    has_xray_images = bool(xray_images_list)
+    has_xray_reports = bool(xray_reports_list)
+
+    if has_xray_images or has_xray_reports or xray_received:
+        if has_xray_images:
             completed_imgs = [img for img in xray_images_list if (img.get("status") or "").lower() == "completed" and img.get("prediction")]
             if completed_imgs:
                 pred_labels = []
@@ -256,27 +259,33 @@ def generate_assessment_feedback(
                 )
         elif xray_status == "COMPLETED" and xray_pred:
             xray_findings_text = f"Radiographic pattern identified: {xray_pred}. Clinical correlation and verification by a radiologist required."
-        elif xray_status == "UNAVAILABLE":
+        elif xray_status == "UNAVAILABLE" and has_xray_images:
             xray_findings_text = (
                 f"Automated interpretation for this X-ray type ({xray_region}) is currently unavailable (no trained model checkpoint configured). "
                 "No disease finding is generated or assumed."
             )
         else:
-            xray_findings_text = f"Radiology documentation received: {len(xray_reports_list)} report(s)."
+            xray_findings_text = f"Radiology documentation received: {len(xray_reports_list)} report(s). No radiographic image submitted for automated inference."
+
+        effective_status = xray_status if has_xray_images else "NOT_PROVIDED"
         xray_findings_data = {
-            "received": True,
-            "status": xray_status,
-            "region": xray_region.title() if xray_region not in {"not declared", "unknown"} else "Not declared",
-            "model": xray_meta.get("model_version") or "N/A",
-            "prediction": xray_pred,
+            "received": bool(has_xray_images or has_xray_reports),
+            "images_received": has_xray_images,
+            "reports_received": has_xray_reports,
+            "status": effective_status,
+            "region": xray_region.title() if (has_xray_images and xray_region not in {"not declared", "unknown"}) else "Not declared",
+            "model": xray_meta.get("model_version") or "N/A" if has_xray_images else "N/A",
+            "prediction": xray_pred if has_xray_images else None,
             "description": xray_findings_text,
-            "uncertainty": xray_meta.get("uncertainty"),
+            "uncertainty": xray_meta.get("uncertainty") if has_xray_images else None,
             "images": xray_images_list,
             "reports": xray_reports_list,
         }
     else:
         xray_findings_data = {
             "received": False,
+            "images_received": False,
+            "reports_received": False,
             "status": "NOT_PROVIDED",
             "region": "Not declared",
             "model": "N/A",

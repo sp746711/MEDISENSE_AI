@@ -17,9 +17,28 @@ import pytest
 import torch
 import torch.nn as nn
 
-from app.ai.xray_model import XRayModelService, CHEST_CLASSES, DEFAULT_UNAVAILABLE_MESSAGE
+from app.ai.xray_model import (
+    XRayModelService,
+    CHEST_CLASSES,
+    DEFAULT_UNAVAILABLE_MESSAGE,
+    reset_xray_model_service,
+)
 from app.ai.gradcam import generate_gradcam
+from app.core.config import get_settings
 from app.utils.file_validation import validate_image_file
+
+
+@pytest.fixture(autouse=True)
+def isolate_test_environment():
+    """Ensure shared settings and X-ray model singleton are reset before and after every test."""
+    settings = get_settings()
+    orig_checkpoint = settings.xray_chest_checkpoint
+    reset_xray_model_service()
+    try:
+        yield
+    finally:
+        settings.xray_chest_checkpoint = orig_checkpoint
+        reset_xray_model_service()
 
 
 def _create_sample_image(width=224, height=224, color=(128, 128, 128)):
@@ -103,7 +122,7 @@ def test_defect_4_gradcam_no_fake_simulation_without_model(tmp_path):
     assert "unavailable" in res["message"].lower() or "not configured" in res["message"].lower()
 
 
-def test_defect_5_resnet_state_dict_loading_without_torchvision(tmp_path):
+def test_defect_5_resnet_state_dict_loading_without_torchvision(tmp_path, monkeypatch):
     """PyTorch state_dict must load cleanly into ResNet18 even without torchvision installed."""
     service = XRayModelService()
     # Build standard state dict
@@ -112,8 +131,8 @@ def test_defect_5_resnet_state_dict_loading_without_torchvision(tmp_path):
     ckpt_path = str(tmp_path / "model.pt")
     torch.save(net.state_dict(), ckpt_path)
 
-    # Set service to load this checkpoint
-    service.settings.xray_chest_checkpoint = ckpt_path
+    # Set service to load this checkpoint safely via monkeypatch
+    monkeypatch.setattr(service.settings, "xray_chest_checkpoint", ckpt_path)
     loaded = service.load_model()
 
     assert loaded is True
@@ -121,14 +140,14 @@ def test_defect_5_resnet_state_dict_loading_without_torchvision(tmp_path):
     assert service._model is not None
 
 
-def test_audit_missing_checkpoint_honest_unavailable_disclosure(tmp_path):
+def test_audit_missing_checkpoint_honest_unavailable_disclosure(tmp_path, monkeypatch):
     """Chest X-ray without checkpoint returns exact honest unavailable disclaimer."""
     valid_img = str(tmp_path / "chest_xray.png")
     Image.new("RGB", (224, 224), (120, 120, 120)).save(valid_img)
 
     service = XRayModelService()
-    # Ensure no checkpoint
-    service.settings.xray_chest_checkpoint = ""
+    # Ensure no checkpoint via monkeypatch
+    monkeypatch.setattr(service.settings, "xray_chest_checkpoint", "")
     service._loaded = False
     service._model = None
 
@@ -199,13 +218,13 @@ def test_audit_a2_oversized_file_rejected():
     assert "exceeds maximum size" in val["message"].lower()
 
 
-def test_audit_c3_incompatible_checkpoint_handled_gracefully(tmp_path):
+def test_audit_c3_incompatible_checkpoint_handled_gracefully(tmp_path, monkeypatch):
     """Corrupted checkpoint file does not crash the service and returns available=False."""
     corrupt_ckpt = tmp_path / "bad_model.pt"
     corrupt_ckpt.write_bytes(b"NOT_A_VALID_PYTORCH_CHECKPOINT")
 
     service = XRayModelService()
-    service.settings.xray_chest_checkpoint = str(corrupt_ckpt)
+    monkeypatch.setattr(service.settings, "xray_chest_checkpoint", str(corrupt_ckpt))
     loaded = service.load_model()
 
     assert loaded is False

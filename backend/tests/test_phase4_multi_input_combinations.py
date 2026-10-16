@@ -33,7 +33,25 @@ from app.ai.xray_router import (
     normalize_region_name,
     route_xray,
 )
-from app.ai.xray_model import XRayModelService, DEFAULT_UNAVAILABLE_MESSAGE
+from app.ai.xray_model import (
+    XRayModelService,
+    DEFAULT_UNAVAILABLE_MESSAGE,
+    reset_xray_model_service,
+)
+from app.core.config import get_settings
+
+
+@pytest.fixture(autouse=True)
+def isolate_test_environment():
+    """Ensure shared settings and X-ray model singleton are reset before and after every test."""
+    settings = get_settings()
+    orig_checkpoint = settings.xray_chest_checkpoint
+    reset_xray_model_service()
+    try:
+        yield
+    finally:
+        settings.xray_chest_checkpoint = orig_checkpoint
+        reset_xray_model_service()
 
 
 def _make_dummy_image_bytes(width=224, height=224) -> bytes:

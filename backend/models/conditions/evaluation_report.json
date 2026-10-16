@@ -1,6 +1,6 @@
 {
   "model_version": "condition_pred_v1.0",
-  "evaluation_timestamp": "2026-10-16T03:58:23.481771+00:00",
+  "evaluation_timestamp": "2026-10-14T18:54:30.441181+00:00",
   "dataset_source": "D:\\projects\\MEDISENSE_AI\\backend\\data\\symptom_to_disease\\Symptom2Disease.csv",
   "deduplication": {
     "raw_samples": 1200,

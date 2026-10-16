@@ -29,6 +29,71 @@ CHEST_CLASSES = [
 ]
 
 
+def verify_checkpoint_integrity(
+    checkpoint_path: Path, expected_classes: int = len(CHEST_CLASSES)
+) -> tuple[bool, str]:
+    """Verify that a checkpoint file is a valid, deserializable PyTorch model/state_dict with matching class architecture."""
+    if not checkpoint_path.exists():
+        return False, f"Checkpoint file missing: {checkpoint_path}"
+    if not checkpoint_path.is_file() or checkpoint_path.stat().st_size == 0:
+        return False, f"Checkpoint file is empty: {checkpoint_path}"
+
+    try:
+        import torch
+        import torch.nn as nn
+
+        # 1. Attempt deserialization
+        try:
+            loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=True)
+        except Exception:
+            try:
+                loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
+            except Exception as load_exc:
+                return False, f"Checkpoint loading failed (corrupted or invalid PyTorch file): {load_exc}"
+
+        # 2. Check architecture compatibility if nn.Module
+        if isinstance(loaded, nn.Module):
+            if hasattr(loaded, "fc") and hasattr(loaded.fc, "out_features"):
+                if loaded.fc.out_features != expected_classes:
+                    return (
+                        False,
+                        f"Checkpoint output dimension mismatch: model has {loaded.fc.out_features} classes, expected {expected_classes}.",
+                    )
+            return True, f"Trained checkpoint module verified at: {checkpoint_path}"
+
+        # 3. Check architecture compatibility if state_dict
+        if isinstance(loaded, dict):
+            sd = loaded.get("state_dict", loaded)
+            if not isinstance(sd, dict) or not sd:
+                return False, f"Checkpoint dictionary does not contain valid state_dict tensor mapping."
+
+            # Verify classification head weight shape
+            if "fc.weight" in sd:
+                out_classes = sd["fc.weight"].shape[0]
+                if out_classes != expected_classes:
+                    return (
+                        False,
+                        f"Checkpoint output dimension mismatch: fc.weight has {out_classes} classes, expected {expected_classes}.",
+                    )
+            elif "fc.bias" in sd:
+                out_classes = sd["fc.bias"].shape[0]
+                if out_classes != expected_classes:
+                    return (
+                        False,
+                        f"Checkpoint output dimension mismatch: fc.bias has {out_classes} classes, expected {expected_classes}.",
+                    )
+            else:
+                has_weights = any(k.endswith(".weight") for k in sd.keys())
+                if not has_weights:
+                    return False, "Checkpoint state_dict contains no tensor weights."
+
+            return True, f"Trained checkpoint weights verified at: {checkpoint_path}"
+
+        return False, f"Unsupported checkpoint object type: {type(loaded).__name__} (expected nn.Module or dict state_dict)."
+    except Exception as exc:
+        return False, f"Checkpoint integrity check failed: {exc}"
+
+
 @dataclass(frozen=True)
 class XRayModelRegistryEntry:
     canonical_region: str
@@ -45,7 +110,7 @@ class XRayModelRegistryEntry:
     validation_status: str
 
     def check_availability(self) -> tuple[bool, str]:
-        """Verify whether the configured checkpoint file physically exists on disk."""
+        """Verify whether the configured checkpoint exists on disk and contains verified compatible weights."""
         if not self.is_supported:
             return (
                 False,
@@ -63,12 +128,14 @@ class XRayModelRegistryEntry:
         else:
             p = settings.xray_model_path / self.checkpoint_location
 
-        if p.exists() and p.is_file() and p.stat().st_size > 0:
-            return True, f"Trained checkpoint verified at: {p}"
-        return (
-            False,
-            f"Model checkpoint not configured on disk; place PyTorch weights in {p} or set XRAY_CHEST_CHECKPOINT in .env.",
-        )
+        if not p.exists() or not p.is_file() or p.stat().st_size == 0:
+            return (
+                False,
+                f"Model checkpoint not configured on disk; place PyTorch weights in {p} or set XRAY_CHEST_CHECKPOINT in .env.",
+            )
+
+        # Deep verification of deserialization, architecture, and class mapping
+        return verify_checkpoint_integrity(p, expected_classes=len(self.class_label_mapping))
 
     def to_dict(self) -> dict[str, Any]:
         available, avail_msg = self.check_availability()

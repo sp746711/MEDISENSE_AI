@@ -25,6 +25,7 @@ from app.ai.xray_router import (
     CHEST_CLASSES,
     get_model_registry_entry,
     normalize_region_name,
+    verify_checkpoint_integrity,
 )
 from app.core.config import get_settings
 from app.utils.logging import get_logger
@@ -136,12 +137,25 @@ class XRayModelService:
         if not path.exists():
             logger.warning("X-ray checkpoint path does not exist: %s", path)
             self._loaded = False
+            self._model = None
+            return False
+
+        # Verify checkpoint integrity (deserialization, architecture, and class mapping)
+        valid, reason = verify_checkpoint_integrity(path, expected_classes=len(CHEST_CLASSES))
+        if not valid:
+            logger.warning("Checkpoint integrity verification failed for %s: %s", path, reason)
+            self._loaded = False
+            self._model = None
             return False
 
         try:
             # Load weights into ResNet architecture
             logger.info("Loading PyTorch model weights from: %s", path)
-            loaded = torch.load(str(path), map_location=self.device)
+            try:
+                loaded = torch.load(str(path), map_location=self.device, weights_only=True)
+            except Exception:
+                loaded = torch.load(str(path), map_location=self.device, weights_only=False)
+
             if isinstance(loaded, nn.Module):
                 self._model = loaded
             else:
@@ -167,6 +181,7 @@ class XRayModelService:
         except Exception as exc:
             logger.error("Failed to load X-ray model checkpoint: %s", exc)
             self._loaded = False
+            self._model = None
             return False
 
     def is_available(self) -> bool:
@@ -326,4 +341,11 @@ def get_xray_model_service() -> XRayModelService:
     if _xray_model_service is None:
         _xray_model_service = XRayModelService()
     return _xray_model_service
+
+
+def reset_xray_model_service() -> None:
+    """Reset singleton instance of XRayModelService for test isolation."""
+    global _xray_model_service
+    _xray_model_service = None
+
 

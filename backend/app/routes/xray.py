@@ -7,7 +7,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
-from app.ai.xray_model import XRayModelService
+from app.ai.xray_model import get_xray_model_service
 from app.ai.xray_router import route_xray
 from app.core.config import get_settings
 from app.core.dependencies import CurrentUser, DbSession
@@ -49,7 +49,7 @@ async def upload_xray(
     resolved_region = routing.get("region") or (region.strip().lower() if region else "unknown")
 
     # Adapter: never invent findings if model unavailable
-    model_service = XRayModelService()
+    model_service = get_xray_model_service()
     analysis = model_service.analyze(str(dest), region=resolved_region)
 
     clean_file_name = validation.get("filename") or Path(file.filename or "xray").name

@@ -21,6 +21,11 @@ import torch
 import torch.nn as nn
 from PIL import Image
 
+from app.ai.xray_router import (
+    CHEST_CLASSES,
+    get_model_registry_entry,
+    normalize_region_name,
+)
 from app.core.config import get_settings
 from app.utils.logging import get_logger
 
@@ -31,14 +36,6 @@ DEFAULT_UNAVAILABLE_MESSAGE = (
     "X-ray type is currently unavailable. If you have the associated "
     "radiology report, upload it for supported text-based analysis."
 )
-
-CHEST_CLASSES = [
-    "Normal / Clear",
-    "Consolidation / Opacity",
-    "Pneumothorax",
-    "Pleural Effusion",
-    "Cardiomegaly",
-]
 
 
 class BasicBlock(nn.Module):
@@ -210,7 +207,11 @@ class XRayModelService:
     def analyze(self, image_path: str, region: Optional[str] = None) -> dict[str, Any]:
         """Run deep learning inference or return exact standard unavailable status."""
         raw_reg = (region or "").strip().lower()
-        reg = raw_reg if raw_reg else "unknown"
+        canonical_reg, _ = normalize_region_name(raw_reg)
+        reg_entry = get_model_registry_entry(canonical_reg)
+        display_region = (
+            reg_entry.display_name if reg_entry else (canonical_reg if canonical_reg != "unknown" else "unknown")
+        )
 
         # 1. Check image file existence and readability
         if not os.path.exists(image_path) or os.path.getsize(image_path) == 0:
@@ -218,7 +219,7 @@ class XRayModelService:
             return {
                 "status": "unavailable",
                 "reason_code": "invalid_image",
-                "region": reg,
+                "region": canonical_reg,
                 "model_version": None,
                 "prediction": None,
                 "confidence_if_valid": None,
@@ -228,19 +229,20 @@ class XRayModelService:
             }
 
         # 2. Check anatomical region support
-        if reg != "chest":
-            logger.info("Unsupported X-ray anatomical region requested: %s", reg)
+        if not reg_entry or not reg_entry.is_supported:
+            logger.info("Unsupported X-ray anatomical region requested: %s (canonical: %s)", raw_reg, canonical_reg)
+            reg_name = display_region if display_region != "unknown" else "this anatomical region"
             return {
                 "status": "unavailable",
                 "reason_code": "unsupported_region",
-                "region": reg,
+                "region": canonical_reg,
                 "model_version": None,
                 "prediction": None,
                 "confidence_if_valid": None,
-                "uncertainty": f"Automated interpretation for {reg} radiography is currently unsupported (vision pipeline is specialized for chest radiography)",
+                "uncertainty": f"Automated interpretation for {reg_name} radiography is currently unsupported (vision pipeline is specialized for chest radiography)",
                 "explainability_artifact": None,
                 "message": (
-                    f"X-ray received. Automated interpretation for {reg} X-ray is currently unavailable "
+                    f"X-ray received. Automated interpretation for {reg_name} X-ray is currently unavailable "
                     f"as the diagnostic vision model is specialized for chest radiography. "
                     f"If you have the associated radiology report, upload it for supported text-based analysis."
                 ),
@@ -269,7 +271,7 @@ class XRayModelService:
                 return {
                     "status": "unavailable",
                     "reason_code": "preprocessing_failed",
-                    "region": reg,
+                    "region": canonical_reg,
                     "model_version": self.model_version,
                     "prediction": None,
                     "confidence_if_valid": None,
@@ -305,7 +307,7 @@ class XRayModelService:
             logger.warning("Inference execution failed: %s", exc)
             return {
                 "status": "unavailable",
-                "region": reg,
+                "region": canonical_reg,
                 "model_version": self.model_version,
                 "prediction": None,
                 "confidence_if_valid": None,
@@ -313,3 +315,15 @@ class XRayModelService:
                 "explainability_artifact": None,
                 "message": DEFAULT_UNAVAILABLE_MESSAGE,
             }
+
+
+_xray_model_service: Optional[XRayModelService] = None
+
+
+def get_xray_model_service() -> XRayModelService:
+    """Return singleton instance of XRayModelService to avoid redundant model reloads."""
+    global _xray_model_service
+    if _xray_model_service is None:
+        _xray_model_service = XRayModelService()
+    return _xray_model_service
+

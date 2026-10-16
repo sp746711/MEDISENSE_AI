@@ -362,7 +362,35 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             story.append(Paragraph("<b>Radiology Reports Extracted:</b>", body_style))
             for rep in x_reports:
                 r_status = rep.get("status", "EXTRACTED")
-                story.append(Paragraph(f"• <b>{rep.get('file_name', 'Radiology report')}</b>: Status: {r_status}", body_style))
+                rep_title = f"• <b>{rep.get('file_name', 'Radiology report')}</b>: Status: {r_status}"
+                story.append(Paragraph(rep_title, body_style))
+
+                # Render qualitative findings
+                q_findings = rep.get("qualitative_findings") or rep.get("structured_findings", {}).get("qualitative_findings", [])
+                if q_findings:
+                    for q in q_findings:
+                        q_name = q.get("finding", "")
+                        q_st = q.get("state", "PRESENT")
+                        story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;- <i>Finding:</i> {q_name} ({q_st})", body_style))
+
+                # Render narrative sections / impressions
+                n_findings = rep.get("narrative_findings") or rep.get("structured_findings", {}).get("narrative_findings", [])
+                if n_findings:
+                    for n in n_findings:
+                        sec = n.get("section", "Impression")
+                        cnt = n.get("content", "")
+                        story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;- <i>{sec}:</i> {cnt}", body_style))
+
+        # Cross-modal concordance display
+        concordance_list = xray_info.get("cross_modal_concordance", [])
+        if concordance_list:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<b>Cross-Modal Concordance (Image Model vs. Radiology Report):</b>", body_style))
+            for conc in concordance_list:
+                c_status = conc.get("concordance_status", "INDEPENDENT")
+                c_detail = conc.get("details", "")
+                c_color = "#059669" if c_status == "CONCORDANT" else ("#dc2626" if c_status == "DISCORDANT" else "#64748b")
+                story.append(Paragraph(f"• <font color='{c_color}'><b>[{c_status}]</b></font> {c_detail}", body_style))
     else:
         story.append(Paragraph("<i>X-Ray & Radiology: Not provided.</i>", body_style))
     story.append(Spacer(1, 8))

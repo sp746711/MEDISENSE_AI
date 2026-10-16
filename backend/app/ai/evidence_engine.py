@@ -293,7 +293,10 @@ def combine_evidence(
 
         for idx, img in enumerate(xray_images):
             img_status = (img.get("status") or "unavailable").lower()
-            img_reg = (img.get("region") or "").strip().lower() or "not declared"
+            reg_raw = img.get("region")
+            if isinstance(reg_raw, (list, tuple)):
+                reg_raw = reg_raw[0] if reg_raw else ""
+            img_reg = str(reg_raw or "").strip().lower() or "not declared"
             all_regions.add(img_reg)
             img_fname = img.get("file_name") or img.get("source_file") or f"xray_image_{idx+1}"
             img_label = f"{img_reg.capitalize()} X-ray ({img_fname})" if img_reg not in {"not declared", "unknown"} else f"X-ray ({img_fname})"
@@ -363,13 +366,16 @@ def combine_evidence(
         xr_fname = xr.get("file_name") or f"xray_report_{idx+1}.pdf"
         struct = xr.get("structured_findings") or {}
         xr_qual = struct.get("qualitative_findings", []) if isinstance(struct, dict) else []
+        xr_narr = struct.get("narrative_findings", []) if isinstance(struct, dict) else []
         xr_entry = {
             "id": xr.get("id") or xr.get("report_id"),
             "file_name": xr_fname,
             "source_type": "XRAY_REPORT",
             "source_file": xr_fname,
-            "status": "EXTRACTED" if xr.get("extracted_text") else "UNREADABLE",
+            "status": "EXTRACTED" if (xr.get("extracted_text") or struct) else "UNREADABLE",
             "structured_findings": struct,
+            "qualitative_findings": xr_qual,
+            "narrative_findings": xr_narr,
             "created_at": xr.get("created_at"),
             "is_historical": xr.get("is_historical", False),
         }
@@ -379,7 +385,7 @@ def combine_evidence(
             q_name = qf.get("finding", "")
             q_lower = q_name.lower()
             q_state = qf.get("state", "PRESENT")
-            if any(neg in q_lower for neg in ["no fracture", "no acute fracture", "no dislocation", "intact", "unremarkable", "normal"]):
+            if q_state == "ABSENT" or any(neg in q_lower for neg in ["no fracture", "no acute fracture", "no dislocation", "intact", "unremarkable", "normal", "clear"]):
                 reassuring.append(f"Radiology report ({xr_fname}) explicitly confirms: {q_name}.")
             else:
                 supporting.append(f"Radiology report ({xr_fname}) clinical finding: {q_name} ({q_state}).")
@@ -404,6 +410,48 @@ def combine_evidence(
                                 "reason": f"Image anatomical region '{img_reg}' differs from radiology report '{other_r}'.",
                             })
                             break
+
+    # Cross-modal concordance between image models and radiology reports
+    cross_modal_concordance: list[dict[str, Any]] = []
+    if processed_images and processed_xray_reports:
+        for img in processed_images:
+            img_pred = img.get("prediction")
+            img_status = (img.get("status") or "").lower()
+            img_file = img.get("file_name") or "xray_image"
+            for rep in processed_xray_reports:
+                rep_file = rep.get("file_name") or "radiology_report.pdf"
+                rep_findings = [q.get("finding", "").lower() for q in rep.get("qualitative_findings", [])]
+                rep_narrative = " ".join([n.get("content", "").lower() for n in rep.get("narrative_findings", [])])
+
+                if img_status == "completed" and img_pred:
+                    pred_lower = img_pred.lower()
+                    if any(pred_lower in rf for rf in rep_findings) or pred_lower in rep_narrative:
+                        status_str = "CONCORDANT"
+                        reason = f"Image prediction '{img_pred}' is corroborated by findings in radiology report '{rep_file}'."
+                        supporting.append(f"Cross-modal concordance: Image finding '{img_pred}' is corroborated by radiology report '{rep_file}'.")
+                    elif any(f"no {pred_lower}" in rf or f"without {pred_lower}" in rf for rf in rep_findings) or f"no {pred_lower}" in rep_narrative:
+                        status_str = "DISCORDANT"
+                        reason = f"Image prediction '{img_pred}' contrasts with negative/absent finding in radiology report '{rep_file}'."
+                        contradictory.append(f"Cross-modal discordance: Image model detected '{img_pred}', but radiology report '{rep_file}' notes absence of this finding.")
+                    else:
+                        status_str = "INDEPENDENT"
+                        reason = f"Image model detected '{img_pred}'; radiology report '{rep_file}' does not explicitly confirm or rule out this specific finding."
+
+                    cross_modal_concordance.append({
+                        "image_file": img_file,
+                        "report_file": rep_file,
+                        "image_prediction": img_pred,
+                        "concordance_status": status_str,
+                        "details": reason,
+                    })
+                else:
+                    cross_modal_concordance.append({
+                        "image_file": img_file,
+                        "report_file": rep_file,
+                        "image_prediction": None,
+                        "concordance_status": "NOT_APPLICABLE",
+                        "details": f"Automated image model interpretation is unavailable for '{img_file}'. Relying on extracted radiology report findings from '{rep_file}'.",
+                    })
 
     # 4. Missing critical information (context-sensitive, never generic across unrelated domains)
     relevant_critical_checks: list[str] = []
@@ -603,6 +651,7 @@ def combine_evidence(
             "prediction": xray_finding_str,
             "images": processed_images,
             "reports": processed_xray_reports,
+            "cross_modal_concordance": cross_modal_concordance,
             "model_version": (xray_images[0] if xray_images else (xray_result or {})).get("model_version") or "N/A",
             "uncertainty": (xray_images[0] if xray_images else (xray_result or {})).get("uncertainty"),
             "explainability_artifact": (xray_images[0] if xray_images else (xray_result or {})).get("explainability_artifact"),

@@ -286,18 +286,60 @@ export default function AssessmentResult() {
                 <div>
                   <h4 style={{ margin: '0 0 0.4rem 0', fontSize: '0.92rem', color: '#0369a1' }}>Radiology Reports:</h4>
                   <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.88rem' }}>
-                    {xrayReportsList.map((rep, idx) => (
-                      <li key={idx} style={{ marginBottom: '0.45rem' }}>
-                        <strong>{rep.file_name}</strong>
-                        <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
-                          OCR / NLP: <span className="badge badge-extracted">{rep.status || 'EXTRACTED'}</span>
-                          {rep.is_historical ? <span style={{ marginLeft: '0.4rem', color: '#64748b' }}>(Historical report)</span> : null}
-                        </div>
+                    {xrayReportsList.map((rep, idx) => {
+                      const qualFindings = rep.qualitative_findings || rep.structured_findings?.qualitative_findings || [];
+                      const narrFindings = rep.narrative_findings || rep.structured_findings?.narrative_findings || [];
+                      return (
+                        <li key={idx} style={{ marginBottom: '0.65rem' }}>
+                          <strong>{rep.file_name}</strong>
+                          <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
+                            OCR / NLP: <span className="badge badge-extracted">{rep.status || 'EXTRACTED'}</span>
+                            {rep.is_historical ? <span style={{ marginLeft: '0.4rem', color: '#64748b' }}>(Historical report)</span> : null}
+                          </div>
+                          {qualFindings.length > 0 && (
+                            <div style={{ marginTop: '0.3rem', fontSize: '0.84rem' }}>
+                              <strong>Extracted Findings:</strong>{' '}
+                              {qualFindings.map((q, qIdx) => (
+                                <span key={qIdx} style={{ marginRight: '0.4rem', color: q.state === 'ABSENT' ? '#059669' : '#0284c7' }}>
+                                  • {q.finding} ({q.state || 'PRESENT'})
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {narrFindings.length > 0 && (
+                            <div style={{ marginTop: '0.2rem', fontSize: '0.82rem', color: '#475569' }}>
+                              {narrFindings.map((n, nIdx) => (
+                                <div key={nIdx}>
+                                  <em>{n.section || 'Impression'}:</em> {n.content}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ) : null}
+
+              {/* Cross-Modal Concordance */}
+              {evidence.xray?.cross_modal_concordance?.length > 0 && (
+                <div style={{ marginTop: '0.8rem', padding: '0.6rem', background: '#f8fafc', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
+                  <h5 style={{ margin: '0 0 0.3rem 0', fontSize: '0.85rem', color: '#334155' }}>
+                    Cross-Modal Comparison (Image Model vs. Radiology Report):
+                  </h5>
+                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
+                    {evidence.xray.cross_modal_concordance.map((c, cIdx) => (
+                      <li key={cIdx} style={{ marginBottom: '0.25rem' }}>
+                        <span style={{ fontWeight: 600, color: c.concordance_status === 'CONCORDANT' ? '#059669' : c.concordance_status === 'DISCORDANT' ? '#dc2626' : '#64748b' }}>
+                          [{c.concordance_status}]
+                        </span>{' '}
+                        {c.details}
                       </li>
                     ))}
                   </ul>
                 </div>
-              ) : null}
+              )}
             </div>
           )}
         </EvidenceCard>

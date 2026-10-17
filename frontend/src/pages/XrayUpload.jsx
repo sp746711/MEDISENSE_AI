@@ -1,7 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ErrorMessage from '../components/ErrorMessage';
+import FilePreviewModal from '../components/FilePreviewModal';
+import XrayRegionSelector from '../components/XrayRegionSelector';
 import { uploadXray } from '../services/xrayService';
+import { uploadReport } from '../services/reportService';
 import { useAssessment } from '../hooks/useAssessment';
 import './NewAssessment.css';
 
@@ -249,29 +252,6 @@ function FloatingXrayObjects() {
     </div>
   );
 }
-
-const REGION_OPTIONS = [
-  { value: '', label: '-- Select Body Region / Type --' },
-  { value: 'chest', label: 'Chest' },
-  { value: 'wrist', label: 'Wrist' },
-  { value: 'hand', label: 'Hand' },
-  { value: 'forearm', label: 'Forearm' },
-  { value: 'elbow', label: 'Elbow' },
-  { value: 'shoulder', label: 'Shoulder' },
-  { value: 'humerus', label: 'Humerus' },
-  { value: 'clavicle', label: 'Clavicle' },
-  { value: 'knee', label: 'Knee' },
-  { value: 'lower leg', label: 'Lower Leg' },
-  { value: 'ankle', label: 'Ankle' },
-  { value: 'foot', label: 'Foot' },
-  { value: 'pelvis', label: 'Pelvis' },
-  { value: 'hip', label: 'Hip' },
-  { value: 'femur', label: 'Femur' },
-  { value: 'spine', label: 'Spine' },
-];
-
-import { uploadReport } from '../services/reportService';
-import FilePreviewModal from '../components/FilePreviewModal';
 
 /* ============================================================
    MAIN X-RAY & RADIOLOGY UPLOAD COMPONENT (MULTI-FILE)
@@ -600,51 +580,16 @@ export default function XrayUpload() {
           </div>
         ) : null}
 
-        {/* 1. Required X-Ray Body Region Selector */}
-        <div className="xray-region-selection-box" style={{ width: '100%', marginBottom: '1.25rem' }}>
-          <label
-            htmlFor="xray-region-select"
-            style={{
-              display: 'block',
-              fontSize: '0.9rem',
-              fontWeight: 700,
-              color: '#0369a1',
-              marginBottom: '0.45rem',
-              textTransform: 'uppercase',
-              letterSpacing: '0.03em',
-            }}
-          >
-            Select Body Region / X-Ray Type <span style={{ color: '#ef4444' }}>*</span>
-          </label>
-          <select
-            id="xray-region-select"
-            value={region}
-            onChange={(e) => {
-              setRegion(e.target.value);
-              if (error) setError('');
-            }}
-            style={{
-              width: '100%',
-              padding: '0.75rem 1rem',
-              backgroundColor: '#ffffff',
-              border: '1.5px solid #0284c7',
-              borderRadius: '10px',
-              color: '#0f172a',
-              fontSize: '0.95rem',
-              fontWeight: 600,
-              outline: 'none',
-              cursor: 'pointer',
-              boxShadow: '0 2px 6px rgba(2, 132, 199, 0.08)',
-            }}
-          >
-            <option value="">-- Select Body Region / X-Ray Type --</option>
-            {REGION_OPTIONS.filter((o) => o.value !== '').map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* 1. Dynamic, Searchable Anatomical Region & X-Ray Type Selector */}
+        <XrayRegionSelector
+          selectedRegion={region}
+          onSelectRegion={(newRegion) => {
+            setRegion(newRegion);
+            if (error) setError('');
+          }}
+          required={xrayImages.length > 0}
+        />
+
 
         {/* 2. X-RAY IMAGES SECTION */}
         <div className="section-divider-title">

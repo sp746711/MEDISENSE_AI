@@ -16,3 +16,8 @@ export async function uploadXray(assessmentId, file, region) {
 export async function getXrayResults(assessmentId) {
   return apiRequest(`/assessments/${assessmentId}/xray`);
 }
+
+export async function getXrayCatalogue() {
+  return apiRequest('/assessments/xray/catalogue');
+}
+

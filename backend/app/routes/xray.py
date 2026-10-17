@@ -12,9 +12,25 @@ from app.ai.xray_router import route_xray
 from app.core.config import get_settings
 from app.core.dependencies import CurrentUser, DbSession
 from app.database.models import Assessment, XrayResult
+from app.ai.xray_catalogue import get_xray_catalogue_with_model_status
 from app.utils.file_validation import validate_image_file
 
 router = APIRouter(prefix="/assessments", tags=["X-Ray"])
+
+
+@router.get("/xray/catalogue")
+def get_xray_catalogue() -> dict:
+    """Return the anatomical body-region catalogue enriched with real-time model statuses."""
+    from app.ai.xray_catalogue import get_backend_body_regions, get_xray_catalogue_with_model_status
+
+    regions = get_backend_body_regions()
+    catalogue = get_xray_catalogue_with_model_status()
+    return {
+        "regions": regions,
+        "total_regions": len(regions),
+        "catalogue": catalogue,
+    }
+
 
 
 @router.post("/{assessment_id}/xray")

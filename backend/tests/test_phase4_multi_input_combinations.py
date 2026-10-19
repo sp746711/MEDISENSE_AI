@@ -151,7 +151,8 @@ def test_combination_a_xray_image_only():
     assert evidence["report"]["provided"] is False
 
     triage = apply_triage(evidence)
-    assert triage["pathway"] in {"ROUTINE", "SELF_CARE", "MILD"}
+    assert triage["pathway"] is None
+    assert triage["status"] == "INSUFFICIENT_EVIDENCE"
 
 
 def test_combination_b_radiology_report_only():

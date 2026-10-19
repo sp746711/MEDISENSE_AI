@@ -33,7 +33,7 @@ def generate_assessment_feedback(
     evidence: dict[str, Any],
     triage_result: dict[str, Any],
     specialty: str | None,
-    condition_predictions: Optional[dict[str, Any]] = None,
+    condition_predictions: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate structured, evidence-grounded dynamic clinical assessment feedback.
 
@@ -64,7 +64,7 @@ def generate_assessment_feedback(
         else "X-ray"
     )
 
-    triage_pathway = triage_result.get("pathway") or "MILD"
+    triage_pathway = triage_result.get("pathway") or "NOT_DETERMINED"
 
     # 1. Assessment Summary (dynamically assembled from current evidence)
     summary_sentences = []
@@ -348,7 +348,31 @@ def generate_assessment_feedback(
     is_neuro = any(s.get("domain") == "neurological" or s.get("symptom") in {"headache", "migraine", "photophobia", "phonophobia"} for s in present)
     is_msk = any(s.get("domain") in {"musculoskeletal", "injury/trauma"} or s.get("body_area") in {"wrist", "hand", "knee", "ankle"} for s in present)
 
-    if is_resp:
+    # Safety priority: specialty-specific wording must never replace an emergency
+    # pathway or downgrade an unresolved triage result to MILD.
+    pathway_normalized = str(triage_pathway).strip().upper()
+    triage_status_normalized = str(triage_result.get("status") or "").strip().upper()
+    is_emergency = pathway_normalized in {"EMERGENCY", "RED"} or triage_status_normalized == "EMERGENCY"
+
+    if is_emergency:
+        dynamic_guidance = (
+            triage_result.get("guidance")
+            or "Emergency-level findings were identified by the safety rules. Seek emergency medical care now."
+        )
+        dynamic_action = (
+            triage_result.get("next_steps")
+            or "Seek emergency medical care now. Do not delay care while waiting for an AI interpretation."
+        )
+    elif pathway_normalized in {"NOT_DETERMINED", "UNKNOWN", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"}:
+        dynamic_guidance = (
+            triage_result.get("guidance")
+            or "The available information is not sufficient to assign a reliable triage pathway. More clinical information and professional assessment are needed."
+        )
+        dynamic_action = (
+            triage_result.get("next_steps")
+            or "Provide the requested missing information and contact a healthcare professional for assessment. If symptoms are severe or rapidly worsening, seek urgent medical care."
+        )
+    elif is_resp:
         dynamic_guidance = "Clinical consultation is advised for professional evaluation of persistent respiratory symptoms. Provided laboratory and imaging reports should be reviewed by your clinician."
         if abnormal_rep:
             abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
@@ -628,7 +652,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
     xray_reports_list: list[dict[str, Any]] = []
 
     for r in report_rows:
-        cat = getattr(r, "report_category", "medical_report") or "medical_report"
+        cat = str(getattr(r, "report_category", "medical_report") or "medical_report").strip().lower()
         r_entry = {
             "id": str(r.report_id),
             "report_id": str(r.report_id),
@@ -646,28 +670,32 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         else:
             medical_reports_list.append(r_entry)
 
-        struct = r.structured_findings or {}
-        if isinstance(struct, dict):
-            for l in struct.get("lab_parameters", []):
-                l_copy = dict(l)
-                l_copy["source_file"] = r.file_name
-                l_copy["source_id"] = str(r.report_id)
-                l_copy["source_type"] = "XRAY_REPORT" if cat == "xray_report" else "MEDICAL_REPORT"
-                raw_lab_list.append(l_copy)
+        # Keep radiology-report content in its own channel. It must never be
+        # interpreted as a laboratory/medical report simply because its OCR
+        # output happens to contain similarly named structured fields.
+        if cat != "xray_report":
+            struct = r.structured_findings or {}
+            if isinstance(struct, dict):
+                for l in struct.get("lab_parameters", []):
+                    l_copy = dict(l)
+                    l_copy["source_file"] = r.file_name
+                    l_copy["source_id"] = str(r.report_id)
+                    l_copy["source_type"] = "MEDICAL_REPORT"
+                    raw_lab_list.append(l_copy)
 
-            for q in struct.get("qualitative_findings", []):
-                q_copy = dict(q)
-                q_copy["source_file"] = r.file_name
-                q_copy["source_id"] = str(r.report_id)
-                q_copy["source_type"] = "XRAY_REPORT" if cat == "xray_report" else "MEDICAL_REPORT"
-                raw_qual_list.append(q_copy)
+                for q in struct.get("qualitative_findings", []):
+                    q_copy = dict(q)
+                    q_copy["source_file"] = r.file_name
+                    q_copy["source_id"] = str(r.report_id)
+                    q_copy["source_type"] = "MEDICAL_REPORT"
+                    raw_qual_list.append(q_copy)
 
-            for n in struct.get("narrative_findings", []):
-                n_copy = dict(n)
-                n_copy["source_file"] = r.file_name
-                n_copy["source_id"] = str(r.report_id)
-                n_copy["source_type"] = "XRAY_REPORT" if cat == "xray_report" else "MEDICAL_REPORT"
-                raw_narr_list.append(n_copy)
+                for n in struct.get("narrative_findings", []):
+                    n_copy = dict(n)
+                    n_copy["source_file"] = r.file_name
+                    n_copy["source_id"] = str(r.report_id)
+                    n_copy["source_type"] = "MEDICAL_REPORT"
+                    raw_narr_list.append(n_copy)
 
     # Exact duplicate deduplication (preserves distinct test values/states)
     report_findings_list: list[dict[str, Any]] = []
@@ -744,7 +772,11 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         xray_results=xray_results_list,
         xray_reports=xray_reports_list,
         medical_reports=medical_reports_list,
-        report_provided=len(report_rows) > 0,
+        # Availability is tracked independently: a radiology PDF is not a
+        # laboratory report, and an X-ray image is not a radiology report.
+        report_provided=bool(medical_reports_list),
+        medical_report_provided=bool(medical_reports_list),
+        radiology_report_provided=bool(xray_reports_list),
         qualitative_report_findings=qualitative_findings_list,
         narrative_report_findings=narrative_findings_list,
     )
@@ -771,7 +803,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "status": "unavailable",
             "model_version": None,
             "conditions": [],
-            "message": f"Assistive condition prediction currently unavailable: {exc}",
+            "message": "Assistive condition prediction is currently unavailable. The safety triage result is independent and remains in effect.",
             "is_experimental": True,
         }
 

@@ -1,31 +1,22 @@
+
 """Machine Learning Possible-Condition Prediction Service for MediSense AI.
 
-Predicts potential clinical conditions from validated, present patient symptoms
-using a trained, calibrated classification pipeline (TfidfVectorizer + Calibrated Logistic Regression).
-
-CRITICAL CLINICAL SAFETY PRINCIPLES:
-1. NON-DIAGNOSTIC: Outputs ranked possible conditions for clinical navigation, NOT a definitive diagnosis.
-2. EVIDENCE SEPARATION:
-   - Present symptoms -> Supporting features for candidate conditions.
-   - Absent symptoms -> Never converted to present; tracked as potential contradictory/exclusionary evidence.
-   - Unknown symptoms -> Kept distinct as missing/unknown; never assumed absent.
-3. INDEPENDENT SAFETY TRIAGE:
-   - Machine learning condition rankings NEVER override or suppress deterministic red-flag emergency triage.
-4. UNVERIFIED / UNAVAILABLE HANDLING:
-   - Returns explicit status when evidence is insufficient or model is not loaded.
-   - Never fabricates condition probabilities or hallucinations.
+This service returns possible condition candidates, not a diagnosis.
+Only active, present symptoms are used as positive model features.
+Absent, unknown, and historical findings remain separate.
+Emergency triage must run independently of this service.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Optional
 
 import joblib
 import numpy as np
 
-from app.core.config import get_settings
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -36,75 +27,130 @@ MODEL_PIPELINE_FILE = "condition_pipeline.joblib"
 MODEL_CLASSES_FILE = "condition_classes.json"
 MODEL_VERSION = "condition_pred_v1.0"
 
-# Key characteristic symptoms mapped to conditions for explainability
+REJECTION_THRESHOLD = 0.25
+MIN_CANDIDATE_SCORE = 0.04
+
+# Explainability metadata. These profiles are not diagnostic criteria.
 CONDITION_SYMPTOM_MAP: dict[str, dict[str, Any]] = {
     "Common Cold": {
-        "typical_symptoms": ["cough", "runny nose", "rhinorrhea", "nasal congestion", "sore throat", "sneezing", "mild fever", "fever", "fatigue", "tiredness", "headache"],
+        "typical_symptoms": [
+            "cough", "runny nose", "rhinorrhea", "nasal congestion",
+            "sore throat", "sneezing", "mild fever", "fever",
+            "fatigue", "tiredness", "headache",
+        ],
         "red_flags": ["severe breathing difficulty", "stridor"],
         "specialty": "General Physician / Pulmonology",
     },
     "Pneumonia": {
-        "typical_symptoms": ["cough", "productive cough", "fever", "high fever", "chills", "shortness of breath", "chest pain", "difficulty breathing", "fatigue", "chest discomfort"],
-        "red_flags": ["severe shortness of breath", "cyanosis", "altered mental status"],
+        "typical_symptoms": [
+            "cough", "productive cough", "fever", "high fever", "chills",
+            "shortness of breath", "chest pain", "difficulty breathing",
+            "fatigue", "chest discomfort",
+        ],
+        "red_flags": [
+            "severe shortness of breath", "cyanosis", "altered mental status",
+        ],
         "specialty": "Pulmonology / Internal Medicine",
     },
     "Bronchial Asthma": {
-        "typical_symptoms": ["wheezing", "shortness of breath", "cough", "chest tightness", "difficulty breathing", "chest discomfort"],
-        "red_flags": ["severe breathing difficulty", "silent chest", "inability to speak full sentences"],
+        "typical_symptoms": [
+            "wheezing", "shortness of breath", "cough", "chest tightness",
+            "difficulty breathing", "chest discomfort",
+        ],
+        "red_flags": [
+            "severe breathing difficulty", "silent chest",
+            "inability to speak full sentences",
+        ],
         "specialty": "Pulmonology / Allergy & Immunology",
     },
     "Migraine": {
-        "typical_symptoms": ["headache", "throbbing headache", "nausea", "photophobia", "phonophobia", "vomiting"],
-        "red_flags": ["sudden onset", "worst headache of life", "weakness", "fainting"],
+        "typical_symptoms": [
+            "headache", "throbbing headache", "nausea", "photophobia",
+            "phonophobia", "vomiting",
+        ],
+        "red_flags": [
+            "sudden onset", "worst headache of life", "weakness", "fainting",
+        ],
         "specialty": "Neurology",
     },
     "Arthritis": {
-        "typical_symptoms": ["joint pain", "stiffness", "swelling", "reduced movement", "tenderness"],
+        "typical_symptoms": [
+            "joint pain", "stiffness", "swelling", "reduced movement",
+            "tenderness",
+        ],
         "red_flags": ["hot swollen joint with fever", "inability to bear weight"],
         "specialty": "Orthopedics / Rheumatology",
     },
     "Cervical spondylosis": {
-        "typical_symptoms": ["neck pain", "stiffness", "numbness in fingers", "tingling", "shoulder pain"],
-        "red_flags": ["progressive limb weakness", "loss of bowel or bladder control"],
+        "typical_symptoms": [
+            "neck pain", "stiffness", "numbness in fingers", "tingling",
+            "shoulder pain",
+        ],
+        "red_flags": [
+            "progressive limb weakness", "loss of bowel or bladder control",
+        ],
         "specialty": "Orthopedics / Neurology",
     },
     "gastroesophageal reflux disease": {
-        "typical_symptoms": ["heartburn", "acid reflux", "chest discomfort", "nausea", "stomach pain"],
+        "typical_symptoms": [
+            "heartburn", "acid reflux", "chest discomfort", "nausea",
+            "stomach pain",
+        ],
         "red_flags": ["difficulty swallowing", "vomiting blood", "black stool"],
         "specialty": "Gastroenterology",
     },
     "peptic ulcer disease": {
-        "typical_symptoms": ["abdominal pain", "stomach pain", "nausea", "indigestion", "burning pain"],
-        "red_flags": ["blood in stool", "vomiting blood", "sudden severe abdominal pain"],
+        "typical_symptoms": [
+            "abdominal pain", "stomach pain", "nausea", "indigestion",
+            "burning pain",
+        ],
+        "red_flags": [
+            "blood in stool", "vomiting blood", "sudden severe abdominal pain",
+        ],
         "specialty": "Gastroenterology",
     },
     "urinary tract infection": {
-        "typical_symptoms": ["burning urination", "frequent urination", "pelvic pain", "cloudy urine", "fever"],
+        "typical_symptoms": [
+            "burning urination", "frequent urination", "pelvic pain",
+            "cloudy urine", "fever",
+        ],
         "red_flags": ["high fever with flank pain", "rigors"],
         "specialty": "Urology / Nephrology",
     },
     "Dengue": {
-        "typical_symptoms": ["high fever", "severe headache", "joint pain", "muscle ache", "rash", "eye pain"],
+        "typical_symptoms": [
+            "high fever", "severe headache", "joint pain", "muscle ache",
+            "rash", "eye pain",
+        ],
         "red_flags": ["bleeding gums", "severe abdominal pain", "persistent vomiting"],
         "specialty": "Infectious Disease / Internal Medicine",
     },
     "Typhoid": {
-        "typical_symptoms": ["high fever", "headache", "abdominal pain", "fatigue", "diarrhea", "constipation"],
+        "typical_symptoms": [
+            "high fever", "headache", "abdominal pain", "fatigue",
+            "diarrhea", "constipation",
+        ],
         "red_flags": ["intestinal perforation signs", "severe confusion"],
         "specialty": "Infectious Disease / General Physician",
     },
     "Malaria": {
         "typical_symptoms": ["fever", "chills", "sweating", "headache", "nausea"],
-        "red_flags": ["impaired consciousness", "severe anemia", "jaundice with fever"],
+        "red_flags": [
+            "impaired consciousness", "severe anemia", "jaundice with fever",
+        ],
         "specialty": "Infectious Disease",
     },
     "Chicken pox": {
-        "typical_symptoms": ["itchy rash", "skin rash", "fever", "fatigue", "blisters"],
+        "typical_symptoms": [
+            "itchy rash", "skin rash", "fever", "fatigue", "blisters",
+        ],
         "red_flags": ["infected blisters", "shortness of breath"],
         "specialty": "Dermatology / Pediatrics / General Physician",
     },
     "Psoriasis": {
-        "typical_symptoms": ["skin rash", "scaly skin", "itching", "red patches", "joint pain"],
+        "typical_symptoms": [
+            "skin rash", "scaly skin", "itching", "red patches", "joint pain",
+        ],
         "red_flags": ["erythrodermic rash involving >90% body area"],
         "specialty": "Dermatology",
     },
@@ -114,7 +160,9 @@ CONDITION_SYMPTOM_MAP: dict[str, dict[str, Any]] = {
         "specialty": "Dermatology",
     },
     "Impetigo": {
-        "typical_symptoms": ["skin rash", "sores", "honey-colored crusts", "blisters", "itching"],
+        "typical_symptoms": [
+            "skin rash", "sores", "honey-colored crusts", "blisters", "itching",
+        ],
         "red_flags": ["rapidly spreading cellulitis"],
         "specialty": "Dermatology",
     },
@@ -124,7 +172,11 @@ CONDITION_SYMPTOM_MAP: dict[str, dict[str, Any]] = {
         "specialty": "Dermatology",
     },
     "allergy": {
-        "typical_symptoms": ["sneezing", "runny nose", "itching", "skin rash", "watery eyes", "cough", "shortness of breath", "difficulty breathing", "wheezing", "sore throat", "fatigue", "fever"],
+        "typical_symptoms": [
+            "sneezing", "runny nose", "itching", "skin rash", "watery eyes",
+            "cough", "shortness of breath", "difficulty breathing",
+            "wheezing", "sore throat", "fatigue", "fever",
+        ],
         "red_flags": ["facial swelling", "stridor", "breathing difficulty"],
         "specialty": "Allergy & Immunology / General Physician",
     },
@@ -134,66 +186,183 @@ CONDITION_SYMPTOM_MAP: dict[str, dict[str, Any]] = {
         "specialty": "Allergy & Clinical Immunology / Dermatology",
     },
     "diabetes": {
-        "typical_symptoms": ["increased thirst", "frequent urination", "fatigue", "weight loss", "blurred vision"],
-        "red_flags": ["ketoacidosis signs", "fruity breath odor", "altered sensorium"],
+        "typical_symptoms": [
+            "increased thirst", "frequent urination", "fatigue", "weight loss",
+            "blurred vision",
+        ],
+        "red_flags": [
+            "ketoacidosis signs", "fruity breath odor", "altered sensorium",
+        ],
         "specialty": "Endocrinology",
     },
     "Hypertension": {
-        "typical_symptoms": ["headache", "dizziness", "chest discomfort", "shortness of breath"],
-        "red_flags": ["severe chest pain", "neurological deficits", "hypertensive crisis"],
+        "typical_symptoms": [
+            "headache", "dizziness", "chest discomfort", "shortness of breath",
+        ],
+        "red_flags": [
+            "severe chest pain", "neurological deficits", "hypertensive crisis",
+        ],
         "specialty": "Cardiology / Internal Medicine",
     },
     "Jaundice": {
-        "typical_symptoms": ["yellow skin", "yellow eyes", "dark urine", "abdominal pain", "fatigue"],
+        "typical_symptoms": [
+            "yellow skin", "yellow eyes", "dark urine", "abdominal pain",
+            "fatigue",
+        ],
         "red_flags": ["hepatic encephalopathy", "coagulopathy"],
         "specialty": "Gastroenterology / Hepatology",
     },
     "Varicose Veins": {
-        "typical_symptoms": ["leg pain", "swollen veins", "aching legs", "heaviness in legs"],
+        "typical_symptoms": [
+            "leg pain", "swollen veins", "aching legs", "heaviness in legs",
+        ],
         "red_flags": ["sudden unilateral leg swelling with shortness of breath"],
         "specialty": "Vascular Surgery",
     },
     "Dimorphic Hemorrhoids": {
-        "typical_symptoms": ["rectal bleeding", "pain during bowel movements", "itching", "swelling around anus"],
+        "typical_symptoms": [
+            "rectal bleeding", "pain during bowel movements", "itching",
+            "swelling around anus",
+        ],
         "red_flags": ["massive rectal bleeding", "severe thrombosis"],
         "specialty": "Proctology / General Surgery",
     },
 }
 
 
+def _normalize(value: Any) -> str:
+    """Normalize text for safe phrase comparison."""
+    text = str(value or "").strip().lower()
+    text = re.sub(r"[_\-]+", " ", text)
+    text = re.sub(r"[^\w\s]", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_name(item: Any) -> str:
+    """Extract a symptom/finding name from a string or dictionary."""
+    if isinstance(item, dict):
+        return _normalize(item.get("symptom") or item.get("finding") or "")
+    return _normalize(item)
+
+
+def _phrase_matches(profile_phrase: str, patient_phrase: str) -> bool:
+    """Match whole phrases rather than arbitrary substrings."""
+    profile = _normalize(profile_phrase)
+    patient = _normalize(patient_phrase)
+
+    if not profile or not patient:
+        return False
+
+    if profile == patient:
+        return True
+
+    # Allow a phrase to be embedded in a longer phrase, but only at word
+    # boundaries. This avoids matching "pain" inside an unrelated word.
+    return (
+        re.search(r"(?<!\w)" + re.escape(profile) + r"(?!\w)", patient) is not None
+        or re.search(r"(?<!\w)" + re.escape(patient) + r"(?!\w)", profile) is not None
+    )
+
+
+def _get_state(item: Any) -> str:
+    if not isinstance(item, dict):
+        return ""
+    return str(item.get("state") or "").strip().upper()
+
+
+def _is_historical(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    return str(item.get("type") or "").strip().upper() == "HISTORICAL"
+
+
+def _match_profile(
+    profile_symptoms: list[str],
+    patient_symptoms: set[str],
+) -> list[str]:
+    return [
+        profile_symptom
+        for profile_symptom in profile_symptoms
+        if any(_phrase_matches(profile_symptom, patient) for patient in patient_symptoms)
+    ]
+
+
 class ConditionPredictionService:
-    """Service for assistive machine-learning condition prediction."""
+    """Assistive ML condition prediction service."""
 
     def __init__(self, model_dir: Optional[Path] = None) -> None:
-        self.model_dir = model_dir or DEFAULT_MODEL_DIR
+        self.model_dir = Path(model_dir) if model_dir else DEFAULT_MODEL_DIR
         self._pipeline: Any = None
         self._classes: list[str] = []
-        self._loaded: bool = False
+        self._loaded = False
         self.model_version = MODEL_VERSION
 
     def load_model(self) -> bool:
-        """Load trained scikit-learn pipeline and class metadata from disk."""
+        """Load the trained pipeline and use its own class order."""
         pipeline_path = self.model_dir / MODEL_PIPELINE_FILE
         classes_path = self.model_dir / MODEL_CLASSES_FILE
 
-        if not pipeline_path.exists():
+        if not pipeline_path.is_file():
             logger.info("Condition prediction model not found at: %s", pipeline_path)
+            self._pipeline = None
+            self._classes = []
             self._loaded = False
             return False
 
         try:
-            self._pipeline = joblib.load(pipeline_path)
-            if classes_path.exists():
-                with open(classes_path, "r", encoding="utf-8") as f:
-                    self._classes = json.load(f)
-            else:
-                self._classes = list(self._pipeline.classes_)
+            pipeline = joblib.load(pipeline_path)
 
+            if not hasattr(pipeline, "predict_proba"):
+                raise ValueError("Condition pipeline does not support predict_proba().")
+
+            # The classifier's class order corresponds to predict_proba() columns.
+            # Never replace this order with a separate JSON list.
+            classifier = getattr(pipeline, "classes_", None)
+
+            if classifier is None and hasattr(pipeline, "steps") and pipeline.steps:
+                classifier = getattr(pipeline.steps[-1][1], "classes_", None)
+
+            if classifier is None:
+                raise ValueError(
+                    "Cannot determine the trained model's class order. "
+                    "The pipeline must expose classes_."
+                )
+
+            model_classes = [str(label) for label in classifier]
+
+            if not model_classes:
+                raise ValueError("The trained model has no classes.")
+
+            if classes_path.is_file():
+                try:
+                    with classes_path.open("r", encoding="utf-8") as file:
+                        metadata_classes = json.load(file)
+
+                    if not isinstance(metadata_classes, list):
+                        logger.warning(
+                            "Class metadata is not a list; using model classes."
+                        )
+                    elif set(map(str, metadata_classes)) != set(model_classes):
+                        logger.warning(
+                            "Class metadata differs from trained model classes. "
+                            "Using the model's authoritative class order."
+                        )
+                except (OSError, json.JSONDecodeError) as exc:
+                    logger.warning("Could not read class metadata: %s", exc)
+
+            self._pipeline = pipeline
+            self._classes = model_classes
             self._loaded = True
-            logger.info("Successfully loaded condition prediction pipeline (%d classes).", len(self._classes))
+
+            logger.info(
+                "Loaded condition pipeline with %d model classes.", len(model_classes)
+            )
             return True
+
         except Exception as exc:
             logger.error("Failed to load condition prediction pipeline: %s", exc)
+            self._pipeline = None
+            self._classes = []
             self._loaded = False
             return False
 
@@ -210,219 +379,332 @@ class ConditionPredictionService:
         raw_text: Optional[str] = None,
         top_k: int = 3,
     ) -> dict[str, Any]:
-        """Generate ranked possible condition candidates with structured evidence explanation.
+        """Return ranked, evidence-supported candidates.
 
-        Safety:
-        - Only active present symptoms constitute positive features.
-        - Absent symptoms do NOT predict disease; they are checked for contradictions.
-        - Unknown symptoms are preserved as unknown, never inferred as absent.
-        - Returned conditions are assistive suggestions, never definitive diagnoses.
+        raw_text is intentionally not used to build model features. Use the
+        structured, validated symptom lists instead.
+        top_k is retained for API compatibility; supported candidates are not
+        truncated to the top three.
         """
+        del raw_text, top_k
+
+        safety_notice = (
+            "Clinical decision-support only; these results are not a diagnosis. "
+            "Emergency triage and clinician assessment take precedence."
+        )
+
         if not self.is_available():
             return {
                 "status": "unavailable",
                 "model_version": None,
                 "conditions": [],
                 "message": (
-                    "Assistive machine learning condition prediction is currently unavailable "
-                    "(trained model pipeline not found). Place trained pipeline at backend/models/conditions/."
+                    "Condition prediction is unavailable because the trained model "
+                    "could not be loaded. Check backend/models/conditions/."
                 ),
                 "is_experimental": True,
+                "safety_notice": safety_notice,
             }
 
-        # 1. Filter out historical, absent, and unknown symptoms; deduplicate active present symptoms
+        present_items = symptoms_present or []
+        absent_items = symptoms_absent or []
+        unknown_items = symptoms_unknown or []
+
+        # Only active PRESENT symptoms can become positive model features.
         active_present: list[dict[str, Any]] = []
-        seen_syms: set[tuple[str, str, str]] = set()
+        seen: set[tuple[str, str, str]] = set()
 
-        for s in (symptoms_present or []):
-            if not isinstance(s, dict):
-                s_name = str(s).strip().lower()
-                if s_name and (s_name, "", "") not in seen_syms:
-                    seen_syms.add((s_name, "", ""))
-                    active_present.append({"symptom": s_name, "state": "PRESENT"})
+        for item in present_items:
+            if _is_historical(item):
                 continue
 
-            # Historical symptoms are contextual, not active presentation
-            if s.get("type") == "HISTORICAL":
-                continue
-            # Unknown or absent symptoms mistakenly in present list
-            if s.get("state") in {"ABSENT", "UNKNOWN"}:
-                continue
+            if isinstance(item, dict):
+                state = _get_state(item)
+                if state in {"ABSENT", "UNKNOWN", "HISTORICAL"}:
+                    continue
 
-            sym_name = str(s.get("symptom") or s.get("finding") or "").strip().lower()
-            if not sym_name:
-                continue
+                name = _extract_name(item)
+                area = _normalize(item.get("body_area"))
+                quality = _normalize(item.get("quality"))
 
-            area = str(s.get("body_area") or "").strip().lower()
-            qual = str(s.get("quality") or "").strip().lower()
-            dedup_key = (sym_name, area, qual)
-            if dedup_key not in seen_syms:
-                seen_syms.add(dedup_key)
-                active_present.append(s)
+                if not name:
+                    continue
 
-        # Validate input: require active acute present symptoms
+                key = (name, area, quality)
+                if key not in seen:
+                    seen.add(key)
+                    normalized_item = dict(item)
+                    normalized_item["symptom"] = name
+                    normalized_item["state"] = "PRESENT"
+                    active_present.append(normalized_item)
+            else:
+                name = _extract_name(item)
+                if name and (name, "", "") not in seen:
+                    seen.add((name, "", ""))
+                    active_present.append(
+                        {"symptom": name, "state": "PRESENT"}
+                    )
+
         if not active_present:
             return {
                 "status": "insufficient_evidence",
                 "model_version": self.model_version,
                 "conditions": [],
-                "message": "Insufficient symptom evidence to compute possible conditions. Please report active symptoms.",
+                "message": (
+                    "There are no active present symptoms to evaluate. "
+                    "Please provide the current symptoms."
+                ),
                 "is_experimental": True,
+                "safety_notice": safety_notice,
             }
 
-        # Build feature text strictly and exclusively from active present symptoms
-        feature_parts = []
-        for s in active_present:
-            sym_name = (s.get("symptom") or s.get("finding") or "").strip()
-            if not sym_name or sym_name.lower() in {"temperature"}:
-                continue
-            feature_parts.append(sym_name)
-            if s.get("quality"):
-                feature_parts.append(f"{s['quality']} {sym_name}")
+        present_names = {
+            _extract_name(item)
+            for item in active_present
+            if _extract_name(item) and _extract_name(item) != "temperature"
+        }
 
-        query_text = " ".join(feature_parts).strip()
+        absent_names = {
+            _extract_name(item)
+            for item in absent_items
+            if _extract_name(item)
+        }
+
+        unknown_names = {
+            _extract_name(item)
+            for item in unknown_items
+            if _extract_name(item)
+        }
+
+        # A symptom marked absent/unknown must not be treated as present,
+        # even if a caller accidentally supplied it in the present list.
+        absent_names.update(
+            _extract_name(item)
+            for item in present_items
+            if _get_state(item) == "ABSENT" and _extract_name(item)
+        )
+        unknown_names.update(
+            _extract_name(item)
+            for item in present_items
+            if _get_state(item) == "UNKNOWN" and _extract_name(item)
+        )
+
+        # Exclude any accidental overlap from the positive feature set.
+        present_names = {
+            name for name in present_names
+            if name not in absent_names and name not in unknown_names
+        }
+
+        if not present_names:
+            return {
+                "status": "insufficient_evidence",
+                "model_version": self.model_version,
+                "conditions": [],
+                "message": "No usable active present symptom keywords were provided.",
+                "is_experimental": True,
+                "safety_notice": safety_notice,
+            }
+
+        # Build ML text exclusively from validated present symptoms.
+        feature_parts: list[str] = []
+        for item in active_present:
+            name = _extract_name(item)
+
+            if not name or name == "temperature":
+                continue
+            if name not in present_names:
+                continue
+
+            feature_parts.append(name)
+
+            quality = _normalize(item.get("quality")) if isinstance(item, dict) else ""
+            if quality and quality not in name:
+                feature_parts.append(f"{quality} {name}")
+
+        # Deduplicate feature tokens without increasing their frequency.
+        query_text = " ".join(dict.fromkeys(feature_parts)).strip()
+
         if not query_text:
             return {
                 "status": "insufficient_evidence",
                 "model_version": self.model_version,
                 "conditions": [],
-                "message": "No active clinical symptom keywords found for condition prediction.",
+                "message": "No usable symptom keywords were found.",
                 "is_experimental": True,
+                "safety_notice": safety_notice,
             }
 
         try:
-            # Predict calibrated class probabilities
-            probs = self._pipeline.predict_proba([query_text])[0]
-            classes = self._classes if self._classes else list(self._pipeline.classes_)
+            probabilities = np.asarray(
+                self._pipeline.predict_proba([query_text])[0],
+                dtype=float,
+            )
 
-            # Rank classes by descending probability
-            ranked_indices = np.argsort(probs)[::-1][:top_k]
+            # Class names and probability columns must have identical ordering.
+            classes = list(self._classes)
 
-            def _extract_symptom_name(item: Any) -> str:
-                if isinstance(item, dict):
-                    return str(item.get("symptom") or item.get("finding") or "").strip().lower()
-                return str(item).strip().lower()
+            if len(probabilities) != len(classes):
+                raise ValueError(
+                    "Model probability count does not match its class count."
+                )
 
-            present_sym_names = {_extract_symptom_name(s) for s in active_present if _extract_symptom_name(s)}
-            absent_sym_names = {_extract_symptom_name(s) for s in symptoms_absent if _extract_symptom_name(s)}
-            unknown_sym_names = {_extract_symptom_name(s) for s in symptoms_unknown if _extract_symptom_name(s)}
+            if not np.all(np.isfinite(probabilities)):
+                raise ValueError("Model returned non-finite probabilities.")
 
+            if np.any(probabilities < 0) or np.any(probabilities > 1):
+                raise ValueError("Model returned probabilities outside [0, 1].")
+
+            # Accommodate minor naming/capitalization differences in metadata.
+            metadata_by_normalized_name = {
+                _normalize(name): metadata
+                for name, metadata in CONDITION_SYMPTOM_MAP.items()
+            }
+
+            ranked_indices = np.argsort(probabilities)[::-1]
             conditions: list[dict[str, Any]] = []
 
-            for idx in ranked_indices:
-                cond_name = classes[idx]
-                score = float(probs[idx])
-                # Only include candidates with meaningful non-trivial likelihood
-                if score < 0.04 and len(conditions) >= 1:
+            for index in ranked_indices:
+                condition_name = classes[int(index)]
+                score = float(probabilities[int(index)])
+
+                # Retain low scores only until a candidate has been accepted;
+                # do not stop ranking before checking evidence alignment.
+                if score < MIN_CANDIDATE_SCORE and conditions:
                     continue
 
-                meta = CONDITION_SYMPTOM_MAP.get(cond_name, {})
-                typical = meta.get("typical_symptoms", [])
+                metadata = metadata_by_normalized_name.get(
+                    _normalize(condition_name), {}
+                )
+                typical_symptoms = metadata.get("typical_symptoms", [])
 
-                # Evidence alignment for explanation:
-                # 1. Supporting: which present symptoms truly align with this condition's profile
-                supporting = [
-                    s for s in typical
-                    if any(s in p or p in s for p in present_sym_names)
-                ]
-
-                # Evidence integrity: Every candidate MUST have at least 1 verified supporting symptom
+                # Evidence is matched against structured symptoms only.
+                supporting = _match_profile(typical_symptoms, present_names)
                 if not supporting:
                     continue
 
-                # 2. Contradictory: which absent symptoms conflict with typical presentation
-                contradictory = [
-                    s for s in typical
-                    if any(s in a or a in s for a in absent_sym_names)
-                ]
+                contradictory = _match_profile(typical_symptoms, absent_names)
+                explicitly_unknown = _match_profile(
+                    typical_symptoms, unknown_names
+                )
 
-                # If contradictory symptoms strictly outweigh supporting symptoms and >= 2 contradictory cardinal features, disqualify
-                if len(contradictory) > len(supporting) and len(contradictory) >= 2:
+                # A candidate with multiple contradictions outweighing its
+                # support is excluded by this conservative heuristic.
+                # This is not a clinically validated exclusion rule.
+                if len(contradictory) >= 2 and len(contradictory) > len(supporting):
                     continue
 
-                # 3. Unknown / Unassessed: typical features that remain unknown or missing
-                missing_relevant = [
-                    s for s in typical
-                    if not any(s in p or p in s for p in present_sym_names)
-                    and not any(s in a or a in s for a in absent_sym_names)
+                assessed_names = present_names | absent_names | unknown_names
+                missing = [
+                    symptom
+                    for symptom in typical_symptoms
+                    if not any(
+                        _phrase_matches(symptom, patient_name)
+                        for patient_name in assessed_names
+                    )
                 ][:3]
 
-                # Calibrated confidence label (never claims certainty)
                 if score >= 0.50:
                     confidence_tier = "Moderate Alignment"
-                elif score >= 0.25:
+                elif score >= REJECTION_THRESHOLD:
                     confidence_tier = "Possible Alignment"
                 else:
                     confidence_tier = "Low Alignment / Differential"
 
                 conditions.append({
                     "rank": len(conditions) + 1,
-                    "condition": cond_name,
+                    "condition": condition_name,
                     "probability_score": round(score, 4),
                     "confidence_tier": confidence_tier,
                     "supporting_symptoms": supporting,
                     "contradictory_findings": contradictory,
-                    "unknown_or_missing_information": missing_relevant,
-                    "suggested_specialty": meta.get("specialty", "General Physician / Internal Medicine"),
+                    "unknown_symptoms": explicitly_unknown,
+                    "unknown_or_missing_information": (
+                        explicitly_unknown + missing
+                    ),
+                    "unassessed_symptoms": missing,
+                    "suggested_specialty": metadata.get(
+                        "specialty", "General Physician / Internal Medicine"
+                    ),
                     "clinical_rationale": (
-                        f"Active symptoms ({', '.join(supporting)}) show statistical concordance with "
-                        f"the clinical profile of {cond_name} in community dataset benchmarks."
+                        "The listed active symptoms match some features in this "
+                        "condition's configured symptom profile. This is statistical "
+                        "alignment, not confirmation of the condition."
                     ),
                     "disclaimer": (
-                        "Statistical pattern alignment for discussion with your healthcare provider; "
-                        "not a diagnosis."
+                        "Possible condition for discussion with a licensed healthcare "
+                        "professional; not a diagnosis or treatment recommendation."
                     ),
                 })
 
-            # Out-of-domain / Unsupported Condition Rejection Check:
-            # Grounded in validation quantile analysis: 99% of in-distribution cases score >= 0.35.
-            # Presentations scoring < 0.25 or having zero clinical concordance with condition profiles
-            # are explicitly rejected rather than forcing differential guesses.
-            REJECTION_THRESHOLD = 0.25
+            # Keep candidate order consistent with descending model probability.
+            conditions.sort(
+                key=lambda candidate: candidate["probability_score"],
+                reverse=True,
+            )
 
-            if not conditions or conditions[0]["probability_score"] < REJECTION_THRESHOLD:
+            for rank, candidate in enumerate(conditions, start=1):
+                candidate["rank"] = rank
+
+            if not conditions:
                 return {
                     "status": "unsupported_condition",
                     "model_version": self.model_version,
                     "conditions": [],
-                    "total_candidates_evaluated": len(classes),
+                    "total_candidates_evaluated": len(ranked_indices),
                     "rejection_threshold": REJECTION_THRESHOLD,
                     "message": (
-                        "Reported symptoms do not show strong alignment with the 24 disease patterns evaluated by this assistive model. "
-                        "A comprehensive clinical evaluation by a healthcare provider is recommended."
+                        "The symptoms do not show strong alignment with any "
+                        "supported condition profile. This does not rule out "
+                        "a medical condition; seek professional assessment."
                     ),
                     "is_experimental": True,
-                    "safety_notice": (
-                        "CLINICAL SAFETY NOTICE: Machine learning predictions are assistive and probabilistic. "
-                        "Emergency safety triage rules remain completely independent and must take precedence. "
-                        "Always consult a licensed medical professional for definitive diagnosis and treatment."
-                    ),
+                    "safety_notice": safety_notice,
                 }
 
-            status = "completed"
-            msg = f"Generated {len(conditions)} possible condition candidate(s) based on verified symptoms."
+            # A low score is not proof that a condition is absent. Return an
+            # explicit uncertainty state rather than presenting weak candidates
+            # as supported results.
+            if conditions[0]["probability_score"] < REJECTION_THRESHOLD:
+                return {
+                    "status": "unsupported_condition",
+                    "model_version": self.model_version,
+                    "conditions": [],
+                    "total_candidates_evaluated": len(ranked_indices),
+                    "rejection_threshold": REJECTION_THRESHOLD,
+                    "message": (
+                        "The model scores did not meet the configured acceptance "
+                        "threshold. No condition candidates are being presented as "
+                        "supported. A clinician can evaluate other possibilities."
+                    ),
+                    "is_experimental": True,
+                    "safety_notice": safety_notice,
+                }
 
             return {
-                "status": status,
+                "status": "completed",
                 "model_version": self.model_version,
                 "conditions": conditions,
-                "total_candidates_evaluated": len(classes),
-                "message": msg,
-                "is_experimental": True,
-                "safety_notice": (
-                    "CLINICAL SAFETY NOTICE: Machine learning predictions are assistive and probabilistic. "
-                    "Emergency safety triage rules remain completely independent and must take precedence. "
-                    "Always consult a licensed medical professional for definitive diagnosis and treatment."
+                "total_candidates_evaluated": len(ranked_indices),
+                "message": (
+                    f"Generated {len(conditions)} evidence-supported possible "
+                    "condition candidate(s). These are not diagnoses."
                 ),
+                "is_experimental": True,
+                "safety_notice": safety_notice,
             }
+
         except Exception as exc:
-            logger.error("Condition prediction inference failed: %s", exc)
+            logger.exception("Condition prediction inference failed: %s", exc)
             return {
                 "status": "unavailable",
                 "model_version": self.model_version,
                 "conditions": [],
-                "message": f"Condition prediction failed: {exc}",
+                "message": (
+                    "Condition prediction could not be completed. The system should "
+                    "continue to use its independent safety-triage process."
+                ),
                 "is_experimental": True,
+                "safety_notice": safety_notice,
             }
 
 
@@ -432,6 +714,8 @@ _condition_service: Optional[ConditionPredictionService] = None
 
 def get_condition_prediction_service() -> ConditionPredictionService:
     global _condition_service
+
     if _condition_service is None:
         _condition_service = ConditionPredictionService()
+
     return _condition_service

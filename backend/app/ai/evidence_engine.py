@@ -18,10 +18,31 @@ from typing import Any, Optional
 CRITICAL_NEGATIVES = ["chest pain", "shortness of breath", "high fever", "severe bleeding"]
 
 
+def _as_dict_list(value: Any) -> list[dict[str, Any]]:
+    """Return only dictionary records from an optional list-like input."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _state(record: dict[str, Any]) -> str:
+    return str(record.get("state") or "").strip().upper()
+
+
+def _status(record: dict[str, Any]) -> str:
+    """Normalize report flags while preserving explicit status over interpretation."""
+    return str(record.get("status") or record.get("interpretation") or "").strip().upper()
+
+
 def _lookup_symptom_domain(symptom_name: str | None) -> str:
     if not symptom_name:
         return "general"
-    from app.ai.symptom_nlp import SYMPTOM_LEXICON
+    try:
+        from app.ai.symptom_nlp import SYMPTOM_LEXICON
+    except ImportError:
+        # Keep evidence compilation usable in isolated tests/tools; the full
+        # application supplies the lexicon and should be used in production.
+        return "general"
 
     key = str(symptom_name).strip().lower()
     if key in SYMPTOM_LEXICON:
@@ -42,37 +63,58 @@ def combine_evidence(
     xray_results: list[dict[str, Any]] | None = None,
     xray_reports: list[dict[str, Any]] | None = None,
     medical_reports: list[dict[str, Any]] | None = None,
+    medical_report_provided: bool | None = None,
+    radiology_report_provided: bool | None = None,
 ) -> dict[str, Any]:
     """Combine multimodal inputs into structured clinical evidence."""
-    symptoms = symptoms or []
-    report_findings = report_findings or []
-    qualitative_report_findings = qualitative_report_findings or []
-    narrative_report_findings = narrative_report_findings or []
-    xray_images = list(xray_results) if xray_results is not None else ([xray_result] if xray_result else [])
-    xray_reports = list(xray_reports or [])
-    medical_reports = list(medical_reports or [])
+    # Normalize inputs at the boundary so malformed records do not crash the
+    # entire assessment. Copy symptom dictionaries before adding inferred onset.
+    symptoms = [dict(item) for item in _as_dict_list(symptoms)]
+    report_findings = _as_dict_list(report_findings)
+    qualitative_report_findings = _as_dict_list(qualitative_report_findings)
+    narrative_report_findings = _as_dict_list(narrative_report_findings)
+    xray_images = _as_dict_list(xray_results) if xray_results is not None else ([dict(xray_result)] if isinstance(xray_result, dict) else [])
+    xray_reports = _as_dict_list(xray_reports)
+    medical_reports = _as_dict_list(medical_reports)
 
     # If qualitative findings are passed inside report_findings, normalize them
     for f in list(report_findings):
         if "finding" in f and "test_name" not in f and f not in qualitative_report_findings:
-            qualitative_report_findings.append(f)
+            qualitative_report_findings.append(dict(f))
 
+    # Keep report categories separate. The legacy report_provided argument
+    # remains supported as an overall report-availability signal.
+    is_medical_report_provided = (
+        medical_report_provided
+        if medical_report_provided is not None
+        else bool(
+            report_findings
+            or qualitative_report_findings
+            or narrative_report_findings
+            or medical_reports
+        )
+    )
+    is_radiology_report_provided = (
+        radiology_report_provided
+        if radiology_report_provided is not None
+        else bool(xray_reports)
+    )
     is_report_provided = (
         report_provided
         if report_provided is not None
-        else bool(report_findings or qualitative_report_findings or narrative_report_findings or medical_reports or xray_reports)
+        else (is_medical_report_provided or is_radiology_report_provided)
     )
 
     current_present = [
         s for s in symptoms
-        if s.get("state") == "PRESENT"
-        and s.get("type") != "HISTORICAL"
-        and s.get("symptom") not in {"previous similar headache", "gradual onset", "sudden onset"}
+        if _state(s) == "PRESENT"
+        and str(s.get("type") or "").strip().upper() != "HISTORICAL"
+        and str(s.get("symptom") or "").strip().lower() not in {"previous similar headache", "gradual onset", "sudden onset"}
     ]
     historical = [
         s for s in symptoms
-        if s.get("state") == "PRESENT"
-        and (s.get("type") == "HISTORICAL" or s.get("symptom") == "previous similar headache")
+        if _state(s) == "PRESENT"
+        and (str(s.get("type") or "").strip().upper() == "HISTORICAL" or str(s.get("symptom") or "").strip().lower() == "previous similar headache")
     ]
     # Propagate onset attribute from gradual onset / sudden onset pseudo-symptoms if not already set
     has_gradual = any(s.get("symptom") == "gradual onset" for s in symptoms)
@@ -86,18 +128,12 @@ def combine_evidence(
                     break
 
     symptoms_present = current_present
-    symptoms_absent = [s for s in symptoms if s.get("state") == "ABSENT"]
-    symptoms_unknown = [s for s in symptoms if s.get("state") == "UNKNOWN"]
+    symptoms_absent = [s for s in symptoms if _state(s) == "ABSENT"]
+    symptoms_unknown = [s for s in symptoms if _state(s) == "UNKNOWN"]
 
-    report_abnormal = [
-        f for f in report_findings if (f.get("status") or f.get("interpretation")) in {"HIGH", "LOW", "ABNORMAL"}
-    ]
-    report_normal = [
-        f for f in report_findings if (f.get("status") or f.get("interpretation")) == "NORMAL"
-    ]
-    report_unknown_range = [
-        f for f in report_findings if (f.get("status") or f.get("interpretation")) in {"UNKNOWN", "RECORDED"}
-    ]
+    report_abnormal = [f for f in report_findings if _status(f) in {"HIGH", "LOW", "ABNORMAL"}]
+    report_normal = [f for f in report_findings if _status(f) == "NORMAL"]
+    report_unknown_range = [f for f in report_findings if _status(f) in {"UNKNOWN", "RECORDED", ""}]
 
     supporting: list[str] = []
     reassuring: list[str] = []
@@ -107,9 +143,9 @@ def combine_evidence(
     unassessed: list[str] = []
     evidence_relationships: list[dict[str, Any]] = []
 
-    present_names = {s.get("symptom", "").lower() for s in current_present}
-    absent_names = {s.get("symptom", "").lower() for s in symptoms_absent}
-    all_known_names = present_names.union(absent_names).union({s.get("symptom", "").lower() for s in historical})
+    present_names = {str(s.get("symptom") or "").strip().lower() for s in current_present} - {""}
+    absent_names = {str(s.get("symptom") or "").strip().lower() for s in symptoms_absent} - {""}
+    all_known_names = present_names.union(absent_names).union({str(s.get("symptom") or "").strip().lower() for s in historical} - {""})
 
     # 1. Contradiction Detection
     has_fever_absent = "fever" in absent_names
@@ -158,12 +194,12 @@ def combine_evidence(
     has_normal_wbc = any(k in t for t in normal_lab_tests for k in ["wbc", "white blood cell"])
     has_normal_crp = any(k in t for t in normal_lab_tests for k in ["crp", "c-reactive"])
     has_abnormal_wbc = any(
-        f.get("interpretation") in {"HIGH", "ABNORMAL"}
+        _status(f) in {"HIGH", "ABNORMAL"}
         and any(k in f.get("test_name", "").lower() for k in ["wbc", "white blood cell"])
         for f in report_abnormal
     )
     has_abnormal_crp = any(
-        f.get("interpretation") in {"HIGH", "ABNORMAL"}
+        _status(f) in {"HIGH", "ABNORMAL"}
         and any(k in f.get("test_name", "").lower() for k in ["crp", "c-reactive"])
         for f in report_abnormal
     )
@@ -236,8 +272,8 @@ def combine_evidence(
     # Cross-modal relevance: Aligned vs Separate/Contextual qualitative findings
     for qf in qualitative_report_findings:
         f_name = qf.get("finding", "")
-        f_state = qf.get("state", "PRESENT")
-        f_lower = f_name.lower()
+        f_state = str(qf.get("state") or "PRESENT").strip().upper()
+        f_lower = str(f_name or "").lower()
 
         is_relevant = False
         if has_respiratory_symptom:
@@ -292,7 +328,7 @@ def combine_evidence(
         all_regions = set()
 
         for idx, img in enumerate(xray_images):
-            img_status = (img.get("status") or "unavailable").lower()
+            img_status = str(img.get("status") or "unavailable").strip().lower()
             reg_raw = img.get("region")
             if isinstance(reg_raw, (list, tuple)):
                 reg_raw = reg_raw[0] if reg_raw else ""
@@ -382,9 +418,9 @@ def combine_evidence(
         processed_xray_reports.append(xr_entry)
 
         for qf in xr_qual:
-            q_name = qf.get("finding", "")
+            q_name = str(qf.get("finding") or "")
             q_lower = q_name.lower()
-            q_state = qf.get("state", "PRESENT")
+            q_state = str(qf.get("state") or "PRESENT").strip().upper()
             if q_state == "ABSENT" or any(neg in q_lower for neg in ["no fracture", "no acute fracture", "no dislocation", "intact", "unremarkable", "normal", "clear"]):
                 reassuring.append(f"Radiology report ({xr_fname}) explicitly confirms: {q_name}.")
             else:
@@ -392,7 +428,7 @@ def combine_evidence(
 
         # Check for body-region mismatch between X-ray images and radiology reports
         if processed_images:
-            rep_text = (xr.get("extracted_text") or "").lower() + " " + xr_fname.lower()
+            rep_text = str(xr.get("extracted_text") or "").lower() + " " + str(xr_fname).lower()
             for img in processed_images:
                 img_reg = img.get("region", "").lower()
                 if img_reg and img_reg not in {"not declared", "unknown"}:
@@ -424,7 +460,7 @@ def combine_evidence(
                 rep_narrative = " ".join([n.get("content", "").lower() for n in rep.get("narrative_findings", [])])
 
                 if img_status == "completed" and img_pred:
-                    pred_lower = img_pred.lower()
+                    pred_lower = str(img_pred).lower()
                     if any(pred_lower in rf for rf in rep_findings) or pred_lower in rep_narrative:
                         status_str = "CONCORDANT"
                         reason = f"Image prediction '{img_pred}' is corroborated by findings in radiology report '{rep_file}'."
@@ -496,7 +532,7 @@ def combine_evidence(
     if current_present and not durations:
         missing.append("Symptom duration (onset timeframe unspecified)")
 
-    if not is_report_provided:
+    if not is_medical_report_provided:
         missing.append("Medical laboratory report (biochemical parameters unassessed)")
 
     if not xray_received:
@@ -527,7 +563,7 @@ def combine_evidence(
     report_evidence_status = (
         "SUPPORTING"
         if (report_abnormal or report_normal or qualitative_report_findings or narrative_report_findings)
-        else ("NOT_ASSESSED" if not is_report_provided else "RECORDED")
+        else ("NOT_ASSESSED" if not is_medical_report_provided else "RECORDED")
     )
 
     current_present_list = [
@@ -613,7 +649,11 @@ def combine_evidence(
             ],
         },
         "report": {
-            "provided": is_report_provided,
+            # `provided` now means a medical/laboratory report was provided.
+            "provided": is_medical_report_provided,
+            "medical_report_provided": is_medical_report_provided,
+            "radiology_report_provided": is_radiology_report_provided,
+            "any_report_provided": is_report_provided,
             "evidence_status": report_evidence_status,
             "medical_reports": medical_reports,
             "xray_reports": processed_xray_reports,

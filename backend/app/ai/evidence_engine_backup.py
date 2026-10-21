@@ -1,0 +1,867 @@
+"""Evidence combination engine for MediSense AI.
+
+Combines multimodal evidence (symptoms, medical report findings, X-ray analysis)
+into a unified clinical evidence representation:
+- Preserves PRESENT / ABSENT / UNKNOWN states without losing qualifiers
+- Preserves laterality, quality, duration, severity, triggers, and onset
+- Identifies supporting findings (e.g. cough + report respiratory findings, normal lab confirmations)
+- Identifies contradictory findings (e.g. fever denied vs high objective temp)
+- Identifies missing critical information accurately without re-asking answered questions
+- Truthful X-ray representation (received vs interpreted vs unavailable vs not provided)
+- Establishes evidence_state: EVIDENCE_PRESENT, INSUFFICIENT_EVIDENCE, CONFLICTING_EVIDENCE
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+CRITICAL_NEGATIVES = ["chest pain", "shortness of breath", "high fever", "severe bleeding"]
+
+
+def _as_dict_list(value: Any) -> list[dict[str, Any]]:
+    """Return only dictionary records from an optional list-like input."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _state(record: dict[str, Any]) -> str:
+    return str(record.get("state") or "").strip().upper()
+
+
+def _status(record: dict[str, Any]) -> str:
+    """Return a normalized lab status, falling back when status is not meaningful."""
+    recognized = {"HIGH", "LOW", "ABNORMAL", "NORMAL", "UNKNOWN", "RECORDED"}
+    status = str(record.get("status") or "").strip().upper()
+    interpretation = str(record.get("interpretation") or "").strip().upper()
+    if status in recognized:
+        return status
+    if interpretation in recognized:
+        return interpretation
+    return status or interpretation
+
+
+def _temperature_celsius(context: str) -> Optional[float]:
+    """Extract an explicitly Celsius temperature and return Celsius, if present."""
+    import re
+    match = re.search(r"(\d{2}(?:\.\d+)?)\s*(?:°\s*C|degrees?\s+C|\bCelsius\b)", context, re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        value = float(match.group(1))
+    except ValueError:
+        return None
+    return value if 25.0 <= value <= 45.0 else None
+
+
+def _temperature_fahrenheit(context: str) -> Optional[float]:
+    """Extract Fahrenheit; bare values are accepted only in a plausible °F range."""
+    import re
+    match = re.search(r"(\d{2,3}(?:\.\d+)?)\s*(?:°\s*F|degrees?\s+F|\bFahrenheit\b)", context, re.IGNORECASE)
+    if match:
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            return None
+        return value if 70.0 <= value <= 115.0 else None
+    match = re.search(r"(?<![\w.])(\d{2,3}(?:\.\d+)?)(?![\w.])", context)
+    if match:
+        try:
+            value = float(match.group(1))
+        except ValueError:
+            return None
+        return value if 70.0 <= value <= 115.0 else None
+    return None
+
+
+def _reported_body_regions(text: str) -> set[str]:
+    """Find explicit anatomical region terms in report text/filename."""
+    import re
+    aliases = {
+        "chest": r"(?:\b(?:chest|thorax|lungs?)\b|chest_)", "knee": r"\bknee\b",
+        "wrist": r"\bwrist\b", "hand": r"\bhand\b", "elbow": r"\belbow\b",
+        "shoulder": r"\bshoulder\b", "spine": r"\b(?:spine|spinal|cervical spine|thoracic spine|lumbar spine)\b",
+        "pelvis": r"\b(?:pelvis|pelvic)\b", "hip": r"\bhip\b",
+        "ankle": r"\bankle\b", "foot": r"\b(?:foot|feet)\b",
+        "skull": r"\b(?:skull|head)\b",
+    }
+    return {region for region, pattern in aliases.items() if re.search(pattern, text, re.IGNORECASE)}
+
+
+def _lookup_symptom_domain(symptom_name: str | None) -> str:
+    if not symptom_name:
+        return "general"
+    try:
+        from app.ai.symptom_nlp import SYMPTOM_LEXICON
+    except ImportError:
+        # Keep evidence compilation usable in isolated tests/tools; the full
+        # application supplies the lexicon and should be used in production.
+        return "general"
+
+    key = str(symptom_name).strip().lower()
+    if key in SYMPTOM_LEXICON:
+        return SYMPTOM_LEXICON[key].get("domain", "general")
+    for k, v in SYMPTOM_LEXICON.items():
+        if k in key or key in k:
+            return v.get("domain", "general")
+    return "general"
+
+
+def combine_evidence(
+    symptoms: list[dict[str, Any]] | None = None,
+    report_findings: list[dict[str, Any]] | None = None,
+    xray_result: dict[str, Any] | None = None,
+    report_provided: bool | None = None,
+    qualitative_report_findings: list[dict[str, Any]] | None = None,
+    narrative_report_findings: list[dict[str, Any]] | None = None,
+    xray_results: list[dict[str, Any]] | None = None,
+    xray_reports: list[dict[str, Any]] | None = None,
+    medical_reports: list[dict[str, Any]] | None = None,
+    medical_report_provided: bool | None = None,
+    radiology_report_provided: bool | None = None,
+) -> dict[str, Any]:
+    """Combine multimodal inputs into structured clinical evidence."""
+    # Normalize inputs at the boundary so malformed records do not crash the
+    # entire assessment. Copy symptom dictionaries before adding inferred onset.
+    symptoms = [dict(item) for item in _as_dict_list(symptoms)]
+    report_findings = _as_dict_list(report_findings)
+    qualitative_report_findings = _as_dict_list(qualitative_report_findings)
+    narrative_report_findings = _as_dict_list(narrative_report_findings)
+    xray_images = _as_dict_list(xray_results) if xray_results is not None else ([dict(xray_result)] if isinstance(xray_result, dict) else [])
+    xray_reports = _as_dict_list(xray_reports)
+    medical_reports = _as_dict_list(medical_reports)
+
+    # Backward compatibility: promote only untyped qualitative records.
+    # Explicit radiology/X-ray records must stay in the radiology evidence channel.
+    for f in list(report_findings):
+        source_type = str(f.get("source_type") or f.get("document_type") or "").strip().upper()
+        is_radiology_record = any(
+            token in source_type for token in ("XRAY", "X-RAY", "RADIOLOGY", "RADIOGRAPH")
+        ) or bool(f.get("radiology_report_id") or f.get("xray_report_id"))
+        if ("finding" in f and not f.get("test_name") and not is_radiology_record
+                and f not in qualitative_report_findings):
+            qualitative_report_findings.append(dict(f))
+
+    # Keep report categories separate. The legacy report_provided argument
+    # remains supported as an overall report-availability signal.
+    is_medical_report_provided = (
+        medical_report_provided
+        if medical_report_provided is not None
+        else bool(
+            report_findings
+            or qualitative_report_findings
+            or narrative_report_findings
+            or medical_reports
+        )
+    )
+    is_radiology_report_provided = (
+        radiology_report_provided
+        if radiology_report_provided is not None
+        else bool(xray_reports)
+    )
+    is_report_provided = (
+        report_provided
+        if report_provided is not None
+        else (is_medical_report_provided or is_radiology_report_provided)
+    )
+
+    current_present = [
+        s for s in symptoms
+        if _state(s) == "PRESENT"
+        and str(s.get("type") or "").strip().upper() != "HISTORICAL"
+        and str(s.get("symptom") or "").strip().lower() not in {"previous similar headache", "gradual onset", "sudden onset"}
+    ]
+    historical = [
+        s for s in symptoms
+        if _state(s) == "PRESENT"
+        and (str(s.get("type") or "").strip().upper() == "HISTORICAL" or str(s.get("symptom") or "").strip().lower() == "previous similar headache")
+    ]
+    # Propagate onset attribute from gradual onset / sudden onset pseudo-symptoms if not already set
+    has_gradual = any(s.get("symptom") == "gradual onset" for s in symptoms)
+    has_sudden = any(s.get("symptom") == "sudden onset" for s in symptoms)
+    if has_gradual or has_sudden:
+        target_onset = "GRADUAL" if has_gradual else "SUDDEN"
+        for s in current_present:
+            if not s.get("onset"):
+                if s.get("symptom") in {"headache", "migraine", "cough", "chest pain"}:
+                    s["onset"] = target_onset
+                    break
+
+    symptoms_present = current_present
+    symptoms_absent = [s for s in symptoms if _state(s) == "ABSENT"]
+    symptoms_unknown = [s for s in symptoms if _state(s) == "UNKNOWN"]
+
+    report_abnormal = [f for f in report_findings if _status(f) in {"HIGH", "LOW", "ABNORMAL"}]
+    report_normal = [f for f in report_findings if _status(f) == "NORMAL"]
+    report_unknown_range = [f for f in report_findings if _status(f) in {"UNKNOWN", "RECORDED", ""}]
+
+    supporting: list[str] = []
+    reassuring: list[str] = []
+    separate: list[str] = []
+    contradictory: list[str] = []
+    missing: list[str] = []
+    unassessed: list[str] = []
+    evidence_relationships: list[dict[str, Any]] = []
+
+    present_names = {str(s.get("symptom") or "").strip().lower() for s in current_present} - {""}
+    absent_names = {str(s.get("symptom") or "").strip().lower() for s in symptoms_absent} - {""}
+    all_known_names = present_names.union(absent_names).union({str(s.get("symptom") or "").strip().lower() for s in historical} - {""})
+
+    # 1. Contradiction Detection. Respect explicit units: 38°C is febrile.
+    has_fever_absent = "fever" in absent_names
+    for s in current_present:
+        if str(s.get("symptom") or "").strip().lower() == "temperature":
+            val_str = str(s.get("context") or "")
+            temp_c = _temperature_celsius(val_str)
+            temp_f = _temperature_fahrenheit(val_str) if temp_c is None else None
+            is_febrile = (temp_c is not None and temp_c >= 38.0) or (temp_f is not None and temp_f >= 100.4)
+            if is_febrile and has_fever_absent:
+                display_temp = f"{temp_c:g}°C" if temp_c is not None else f"{temp_f:g}°F"
+                contradictory.append(
+                    f"Contradiction: Patient reported absence of fever, but recorded temperature is {display_temp} (febrile range)."
+                )
+
+    # Laboratory explicit flag vs reference range conflict detection
+    for item in report_findings:
+        if item.get("conflict"):
+            fname = item.get("test_name", "Laboratory parameter")
+            ex_flag = item.get("explicit_flag")
+            calc_st = item.get("calculated_status")
+            val = item.get("value")
+            unit = item.get("unit") or ""
+            ref = item.get("reference_range") or "unspecified"
+            contradictory.append(
+                f"Contradictory laboratory evidence for {fname}: Explicit report flag is '{ex_flag}', but measured value {val} {unit} evaluates to '{calc_st}' against reference range ({ref})."
+            )
+            evidence_relationships.append({
+                "source_a": "report_flag",
+                "source_b": "report_reference_range",
+                "finding": fname,
+                "relationship": "CONFLICTING",
+                "reason": f"Explicit flag '{ex_flag}' conflicts with calculated status '{calc_st}' for {fname}.",
+            })
+
+    # 2. Supporting Clinical Correlations & Reassuring Evidence
+    has_respiratory_symptom = bool(
+        present_names.intersection({"cough", "dry cough", "productive cough", "shortness of breath", "dyspnea", "wheezing", "chest discomfort"})
+    )
+    has_fever = "fever" in present_names or "temperature" in present_names
+
+    normal_lab_tests = {f.get("test_name", "").lower() for f in report_normal}
+    has_normal_wbc = any(k in t for t in normal_lab_tests for k in ["wbc", "white blood cell"])
+    has_normal_crp = any(k in t for t in normal_lab_tests for k in ["crp", "c-reactive"])
+    has_abnormal_wbc = any(
+        _status(f) in {"HIGH", "ABNORMAL"}
+        and any(k in f.get("test_name", "").lower() for k in ["wbc", "white blood cell"])
+        for f in report_abnormal
+    )
+    has_abnormal_crp = any(
+        _status(f) in {"HIGH", "ABNORMAL"}
+        and any(k in f.get("test_name", "").lower() for k in ["crp", "c-reactive"])
+        for f in report_abnormal
+    )
+
+    if has_respiratory_symptom:
+        reassuring_lab_parts = []
+        if has_normal_wbc:
+            reassuring_lab_parts.append("WBC")
+        if has_normal_crp:
+            reassuring_lab_parts.append("CRP")
+        if reassuring_lab_parts:
+            reassuring.append(f"Available {' and '.join(reassuring_lab_parts)} value(s) are within the supplied reference ranges.")
+        elif has_fever and not (has_normal_wbc or has_normal_crp):
+            supporting.append("Respiratory symptoms correlate with systemic febrile presentation.")
+
+    if "headache" in present_names:
+        headache_sym = next((s for s in current_present if s.get("symptom") == "headache"), None)
+        features = []
+        if headache_sym and headache_sym.get("laterality"):
+            features.append(f"{headache_sym.get('laterality').lower()}-sided")
+        if headache_sym and headache_sym.get("quality"):
+            features.append(f"{headache_sym.get('quality').lower()}")
+        if "photophobia" in present_names:
+            features.append("photophobia")
+        if "phonophobia" in present_names:
+            features.append("phonophobia")
+        if "nausea" in present_names:
+            features.append("nausea")
+        if features:
+            supporting.append(f"Headache presentation characterized by {', '.join(features)}.")
+
+    # Musculoskeletal correlations
+    if any(n in present_names for n in {"wrist pain", "wrist injury", "fall/trauma", "swelling", "tenderness"}):
+        msk_features = []
+        for s in current_present:
+            if s.get("body_area") == "wrist" or s.get("symptom") in {"wrist pain", "wrist injury", "fall/trauma"}:
+                lat = f"{s.get('laterality').lower()} " if s.get("laterality") else ""
+                msk_features.append(f"{lat}{s.get('symptom')}")
+        if msk_features:
+            supporting.append(f"Musculoskeletal trauma indicators: {', '.join(list(dict.fromkeys(msk_features)))}.")
+
+    # Abnormal laboratory parameters: contextual laboratory evidence (never causal proof)
+    for item in report_abnormal:
+        fname = item.get("test_name", "")
+        val = item.get("value")
+        unit = item.get("unit") or ""
+        interp = item.get("interpretation") or "ABNORMAL"
+        ref = item.get("reference_range")
+        ref_text = f" (reference: {ref})" if ref else ""
+
+        separate.append(f"Additional abnormal laboratory finding: {fname} recorded outside reference range ({val} {unit}{ref_text}, {interp}); requires clinical interpretation and does not by itself establish the cause of the presenting complaint.")
+        evidence_relationships.append({
+            "source_a": "symptoms",
+            "source_b": "medical_report",
+            "finding": fname,
+            "relationship": "SEPARATE",
+            "reason": f"{fname} is outside standard reference limits but does not directly establish the cause of the presenting complaints."
+        })
+
+    if report_abnormal and "headache" in present_names:
+        separate.append("Additional abnormal laboratory findings were identified and require clinical interpretation; they do not by themselves establish the cause of the headache.")
+    elif report_abnormal and has_respiratory_symptom:
+        separate.append("Additional abnormal laboratory findings were identified and require clinical interpretation; they do not by themselves establish the cause of the respiratory symptoms.")
+
+    # Normal laboratory parameters (reassuring evidence)
+    if report_normal:
+        normal_names = [f.get("test_name") for f in report_normal if f.get("test_name")]
+        reassuring.append(f"Available laboratory values ({', '.join(normal_names)}) are within standard supplied reference ranges.")
+
+    # Cross-modal relevance: Aligned vs Separate/Contextual qualitative findings
+    for qf in qualitative_report_findings:
+        f_name = qf.get("finding", "")
+        f_state = str(qf.get("state") or "PRESENT").strip().upper()
+        f_lower = str(f_name or "").lower()
+
+        is_relevant = False
+        if has_respiratory_symptom:
+            if any(k in f_lower for k in ["lung", "breath", "cough", "throat", "chest", "wheez", "rales", "rhonchi", "bronch", "pharynx"]):
+                is_relevant = True
+        elif "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
+            if any(k in f_lower for k in ["head", "neuro", "pupil", "cranial", "mening", "vision", "speech", "reflex"]):
+                is_relevant = True
+        elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
+            if any(k in f_lower for k in ["wrist", "hand", "joint", "bone", "swelling", "fracture", "tendon", "ligament", "sprain", "strain"]):
+                is_relevant = True
+
+        if not is_relevant:
+            separate.append(f"Qualitative finding of {f_name} does not directly account for the primary presenting clinical presentation.")
+            evidence_relationships.append({
+                "source_a": "symptoms",
+                "source_b": "medical_report",
+                "finding": f_name,
+                "relationship": "SEPARATE",
+                "reason": f"{f_name.capitalize()} does not directly explain the primary symptom presentation."
+            })
+        else:
+            if f_state == "PRESENT":
+                supporting.append(f"Medical report qualitative finding confirmed: {f_name}.")
+            elif f_state == "ABSENT":
+                reassuring.append(f"Medical report explicitly confirms absence of: {f_name}.")
+
+    import re
+    synthetic_instruction_re = re.compile(
+        r"\b(?:synthetic|demonstration|demo\s+only|sample\s+report|test\s+case|no\s+actual\s+clinical\s+findings|instructions?|placeholder|dummy\s+data|simulated|example\s+report)\b",
+        re.IGNORECASE,
+    )
+    for nf in narrative_report_findings:
+        sec = nf.get("section", "")
+        cnt = nf.get("content", "")
+        if cnt and not synthetic_instruction_re.search(cnt) and not synthetic_instruction_re.search(sec):
+            short_cnt = cnt[:100] + "..." if len(cnt) > 100 else cnt
+            supporting.append(f"Report narrative ({sec}): {short_cnt}")
+
+    # 3. Truthful X-ray Status and Interpretation (Multi-Image & Multi-Report Aware)
+    processed_images: list[dict[str, Any]] = []
+    xray_finding_str = None
+    xray_received = bool(xray_images)
+    xray_status_display = "NOT_PROVIDED"
+    xray_interpretation = "NOT_PROVIDED"
+    xray_evidence_status = "NOT_ASSESSED"
+    xray_region = "not declared"
+
+    if xray_images:
+        completed_preds = []
+        any_unavailable = False
+        all_regions = set()
+
+        for idx, img in enumerate(xray_images):
+            img_status = str(img.get("status") or "unavailable").strip().lower()
+            reg_raw = img.get("region")
+            if isinstance(reg_raw, (list, tuple)):
+                reg_raw = reg_raw[0] if reg_raw else ""
+            img_reg = str(reg_raw or "").strip().lower() or "not declared"
+            all_regions.add(img_reg)
+            img_fname = img.get("file_name") or img.get("source_file") or f"xray_image_{idx+1}"
+            img_label = f"{img_reg.capitalize()} X-ray ({img_fname})" if img_reg not in {"not declared", "unknown"} else f"X-ray ({img_fname})"
+            pred = img.get("prediction")
+
+            p_entry = {
+                "id": img.get("id") or img.get("xray_result_id"),
+                "file_name": img_fname,
+                "region": img_reg,
+                "status": img_status.upper(),
+                "prediction": pred,
+                "model_version": img.get("model_version") or "N/A",
+                "confidence": img.get("confidence_if_valid"),
+                "uncertainty": img.get("uncertainty"),
+                "message": img.get("message"),
+                "source": "xray_image",
+                "source_type": "XRAY_IMAGE",
+                "source_file": img_fname,
+            }
+            processed_images.append(p_entry)
+
+            # Check anatomical alignment with primary complaints
+            is_anatomically_aligned = True
+            if has_respiratory_symptom and img_reg in {"wrist", "hand", "ankle", "knee", "extremity"}:
+                is_anatomically_aligned = False
+            elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present) and not has_respiratory_symptom and img_reg == "chest":
+                is_anatomically_aligned = False
+
+            if img_status == "completed" and pred:
+                completed_preds.append(pred)
+                if is_anatomically_aligned:
+                    supporting.append(f"{img_label} deep learning model identified radiographic pattern: {pred}.")
+                else:
+                    separate.append(f"{img_label} finding ({pred}) is separate from the primary clinical complaint.")
+                    evidence_relationships.append({
+                        "source_a": "symptoms",
+                        "source_b": "xray_image",
+                        "finding": f"{img_label}: {pred}",
+                        "relationship": "SEPARATE",
+                        "reason": f"Anatomical region ({img_reg}) does not directly explain the primary presenting symptoms."
+                    })
+            elif img_status == "unavailable":
+                any_unavailable = True
+                unassessed.append(f"{img_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
+            else:
+                any_unavailable = True
+                unassessed.append(f"{img_label} status: {img_status.upper()}. Automated interpretation unavailable.")
+
+        xray_region = ", ".join(sorted(all_regions)) if all_regions else "not declared"
+
+        if completed_preds and any_unavailable:
+            # Some images were interpreted, but at least one was not.
+            # Preserve the individual image statuses and mark the aggregate partial.
+            xray_finding_str = "; ".join(completed_preds)
+            xray_interpretation = "PARTIAL"
+            xray_evidence_status = "SUPPORTING"
+            xray_status_display = "PARTIAL"
+        elif completed_preds:
+            # At least one usable prediction exists and no image was unavailable.
+            xray_finding_str = "; ".join(completed_preds)
+            xray_interpretation = "AVAILABLE"
+            xray_evidence_status = "SUPPORTING"
+            xray_status_display = "COMPLETED"
+        elif any_unavailable:
+            # Images were received, but none produced a usable prediction.
+            xray_interpretation = "UNAVAILABLE"
+            xray_evidence_status = "UNKNOWN"
+            xray_status_display = "UNAVAILABLE"
+        else:
+            xray_interpretation = "UNAVAILABLE"
+            xray_evidence_status = "UNKNOWN"
+            xray_status_display = "RECEIVED"
+
+    # Process X-ray / Radiology Reports
+    processed_xray_reports: list[dict[str, Any]] = []
+    for idx, xr in enumerate(xray_reports):
+        xr_fname = xr.get("file_name") or f"xray_report_{idx+1}.pdf"
+        struct = xr.get("structured_findings") or {}
+        xr_qual = struct.get("qualitative_findings", []) if isinstance(struct, dict) else []
+        xr_narr = struct.get("narrative_findings", []) if isinstance(struct, dict) else []
+        xr_entry = {
+            "id": xr.get("id") or xr.get("report_id"),
+            "file_name": xr_fname,
+            "source_type": "XRAY_REPORT",
+            "source_file": xr_fname,
+            "status": "EXTRACTED" if (xr.get("extracted_text") or struct) else "UNREADABLE",
+            "structured_findings": struct,
+            "qualitative_findings": xr_qual,
+            "narrative_findings": xr_narr,
+            "created_at": xr.get("created_at"),
+            "is_historical": xr.get("is_historical", False),
+        }
+        processed_xray_reports.append(xr_entry)
+
+        for qf in xr_qual:
+            q_name = str(qf.get("finding") or "")
+            q_lower = q_name.lower()
+            q_state = str(qf.get("state") or "PRESENT").strip().upper()
+            if q_state == "ABSENT" or any(neg in q_lower for neg in ["no fracture", "no acute fracture", "no dislocation", "intact", "unremarkable", "normal", "clear"]):
+                reassuring.append(f"Radiology report ({xr_fname}) explicitly confirms: {q_name}.")
+            else:
+                supporting.append(f"Radiology report ({xr_fname}) clinical finding: {q_name} ({q_state}).")
+
+        # Link a radiology report only when its text/filename identifies a single region.
+        # Unknown or ambiguous regions are left unlinked rather than called a mismatch.
+        if processed_images:
+            rep_text = (str(xr.get("extracted_text") or "") + " " + str(xr_fname)).lower()
+            report_regions = _reported_body_regions(rep_text)
+            for img in processed_images:
+                img_reg = str(img.get("region") or "").strip().lower()
+                if img_reg in {"not declared", "unknown", ""} or not report_regions:
+                    continue
+                normalized_img_region = "skull" if img_reg in {"head", "skull"} else img_reg
+                if len(report_regions) == 1 and normalized_img_region not in report_regions:
+                    report_region = next(iter(report_regions))
+                    contradictory.append(
+                        f"Body region mismatch: Image region is '{img_reg.capitalize()}', but radiology report '{xr_fname}' appears to refer to '{report_region.capitalize()}'. The items remain unlinked."
+                    )
+                    evidence_relationships.append({
+                        "source_a": f"xray_image ({img.get('file_name')})",
+                        "source_b": f"xray_report ({xr_fname})",
+                        "finding": "body_region_mismatch",
+                        "relationship": "POTENTIAL_CONFLICT",
+                        "reason": f"Image region '{img_reg}' differs from the single region '{report_region}' identified in the report text.",
+                    })
+
+    # Cross-modal concordance: compare only when the anatomical region is confidently matched.
+    cross_modal_concordance: list[dict[str, Any]] = []
+    if processed_images and processed_xray_reports:
+        for img in processed_images:
+            img_pred = img.get("prediction")
+            img_status = (img.get("status") or "").lower()
+            img_file = img.get("file_name") or "xray_image"
+            img_reg = str(img.get("region") or "").strip().lower()
+            normalized_img_region = "skull" if img_reg in {"head", "skull"} else img_reg
+            for rep in processed_xray_reports:
+                rep_file = rep.get("file_name") or "radiology_report.pdf"
+                struct = rep.get("structured_findings") or {}
+                struct_region = str(struct.get("region") or "") if isinstance(struct, dict) else ""
+                rep_text = " ".join([
+                    str(rep.get("file_name") or ""), struct_region,
+                    " ".join(str(q.get("finding") or "") for q in rep.get("qualitative_findings", []) if isinstance(q, dict)),
+                    " ".join(str(n.get("content") or "") for n in rep.get("narrative_findings", []) if isinstance(n, dict)),
+                ])
+                rep_regions = _reported_body_regions(rep_text)
+                # If the image model did not produce a usable prediction, concordance
+                # is not applicable. Region mismatch is still recorded separately above;
+                # do not mislabel an unavailable model as a region-linking failure.
+                if img_status != "completed" or not img_pred:
+                    region_matches = (
+                        img_reg not in {"", "not declared", "unknown"}
+                        and len(rep_regions) == 1
+                        and normalized_img_region in rep_regions
+                    )
+                    detail = (
+                        f"Automated image model interpretation is unavailable for '{img_file}'. "
+                        + ("The report identifies the same anatomical region; report findings are retained independently."
+                           if region_matches else
+                           "Image/report region linkage is uncertain; report findings are retained independently and no image concordance is inferred.")
+                    )
+                    cross_modal_concordance.append({
+                        "image_file": img_file,
+                        "report_file": rep_file,
+                        "image_prediction": None,
+                        "concordance_status": "NOT_APPLICABLE",
+                        "details": detail,
+                    })
+                    continue
+                if (img_reg in {"", "not declared", "unknown"} or len(rep_regions) != 1
+                        or normalized_img_region not in rep_regions):
+                    cross_modal_concordance.append({
+                        "image_file": img_file, "report_file": rep_file,
+                        "image_prediction": img_pred,
+                        "concordance_status": "NOT_LINKED",
+                        "details": "Image and radiology report were not compared because a matching anatomical region could not be established safely.",
+                    })
+                    continue
+                rep_findings = [str(q.get("finding") or "").lower() for q in rep.get("qualitative_findings", []) if isinstance(q, dict)]
+                rep_narrative = " ".join(str(n.get("content") or "").lower() for n in rep.get("narrative_findings", []) if isinstance(n, dict))
+                if img_status == "completed" and img_pred:
+                    pred_lower = str(img_pred).lower()
+                    if any(pred_lower in rf for rf in rep_findings) or pred_lower in rep_narrative:
+                        status_str = "CONCORDANT"
+                        reason = f"Image prediction '{img_pred}' is textually corroborated by radiology report '{rep_file}' for the same identified region."
+                        supporting.append(f"Cross-modal concordance: Image finding '{img_pred}' is textually corroborated by radiology report '{rep_file}'.")
+                    elif any(f"no {pred_lower}" in rf or f"without {pred_lower}" in rf for rf in rep_findings) or f"no {pred_lower}" in rep_narrative:
+                        status_str = "DISCORDANT"
+                        reason = f"Image prediction '{img_pred}' appears to contrast with a negative finding in radiology report '{rep_file}'."
+                        contradictory.append(f"Potential cross-modal discordance: Image model predicted '{img_pred}', while radiology report '{rep_file}' appears to describe its absence. Clinician review is needed.")
+                    else:
+                        status_str = "INDEPENDENT"
+                        reason = f"Image model detected '{img_pred}'; the matched-region radiology report does not explicitly confirm or rule out this finding."
+                    cross_modal_concordance.append({"image_file": img_file, "report_file": rep_file, "image_prediction": img_pred, "concordance_status": status_str, "details": reason})
+                else:
+                    cross_modal_concordance.append({
+                        "image_file": img_file, "report_file": rep_file, "image_prediction": None,
+                        "concordance_status": "NOT_APPLICABLE",
+                        "details": f"Automated image model interpretation is unavailable for '{img_file}'. Matched-region report findings are retained independently.",
+                    })
+
+    # 4. Missing critical information (context-sensitive, never generic across unrelated domains)
+    relevant_critical_checks: list[str] = []
+    if has_respiratory_symptom:
+        relevant_critical_checks.extend(["difficulty breathing", "chest pain", "high fever"])
+    elif "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
+        relevant_critical_checks.extend(["sudden onset", "weakness", "speech difficulty", "fever", "chest pain"])
+    elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
+        relevant_critical_checks.extend(["severe swelling/deformity", "numbness", "severe bleeding"])
+    elif any(s.get("domain") in {"gi", "gastrointestinal", "abdominal"} for s in current_present) or any("abdominal" in s.get("symptom", "").lower() for s in current_present):
+        relevant_critical_checks.extend(["sudden onset", "vomiting", "blood in stool", "fever"])
+
+    for crit in relevant_critical_checks:
+        addressed = False
+        if crit in all_known_names:
+            addressed = True
+        elif crit == "chest pain" and any("chest pain" in n for n in all_known_names):
+            addressed = True
+        elif crit in {"difficulty breathing", "shortness of breath"} and any("breath" in n or "dyspnea" in n for n in all_known_names):
+            addressed = True
+        elif crit in {"high fever", "fever"} and ("fever" in all_known_names or "temperature" in all_known_names):
+            addressed = True
+        elif crit == "sudden onset" and (any(s.get("onset") for s in current_present) or any("onset" in n for n in all_known_names)):
+            addressed = True
+        elif crit == "weakness" and any("weakness" in n or "numb" in n for n in all_known_names):
+            addressed = True
+        elif crit == "speech difficulty" and any("speech" in n for n in all_known_names):
+            addressed = True
+        elif crit == "vomiting" and any("vomit" in n for n in all_known_names):
+            addressed = True
+        elif crit == "blood in stool" and any("blood in stool" in n for n in all_known_names):
+            addressed = True
+        elif crit == "severe bleeding" and any("bleed" in n or "hemorrhage" in n for n in all_known_names):
+            addressed = True
+        elif crit == "severe swelling/deformity" and any("deform" in n or "swelling" in n for n in all_known_names):
+            addressed = True
+
+        if not addressed:
+            missing.append(f"Status of '{crit}' (neither confirmed nor denied)")
+
+    durations = [s.get("duration") for s in current_present if s.get("duration")]
+    if current_present and not durations:
+        missing.append("Symptom duration (onset timeframe unspecified)")
+
+    if not is_medical_report_provided:
+        missing.append("Medical laboratory report (biochemical parameters unassessed)")
+
+    if not xray_received:
+        missing.append("Radiographic imaging (radiographic status unassessed)")
+
+    # 5. Determine overall evidence state.
+    # A file being uploaded, an absent symptom, historical information, or an
+    # unavailable model is not by itself a meaningful clinical finding.
+    # Count only non-empty extracted findings/narratives; keep contradictory
+    # evidence at the highest priority so conflicting inputs remain visible.
+    import re
+
+    synthetic_instruction_re = re.compile(
+        r"\b(?:synthetic|demonstration|demo\s+only|sample\s+report|test\s+case|"
+        r"no\s+actual\s+clinical\s+findings|instructions?|placeholder|dummy\s+data|"
+        r"simulated|example\s+report)\b",
+        re.IGNORECASE,
+    )
+
+    def _has_meaningful_finding(record: Any, text_keys: tuple[str, ...]) -> bool:
+        if isinstance(record, str):
+            text_value = record.strip()
+        elif isinstance(record, dict):
+            text_value = ""
+            for key in text_keys:
+                value = record.get(key)
+                if value is not None and str(value).strip():
+                    text_value = str(value).strip()
+                    break
+        else:
+            return False
+        return bool(text_value) and not synthetic_instruction_re.search(text_value)
+
+    qualitative_signal_count = sum(
+        1 for item in qualitative_report_findings
+        if _has_meaningful_finding(item, ("finding", "interpretation", "description", "text"))
+    )
+    narrative_signal_count = sum(
+        1 for item in narrative_report_findings
+        if _has_meaningful_finding(item, ("content", "text", "narrative", "finding"))
+    )
+    radiology_qualitative_count = sum(
+        1
+        for rep in processed_xray_reports
+        for item in (rep.get("qualitative_findings", []) if isinstance(rep.get("qualitative_findings"), list) else [])
+        if _has_meaningful_finding(item, ("finding", "interpretation", "description", "text"))
+    )
+    radiology_narrative_count = sum(
+        1
+        for rep in processed_xray_reports
+        for item in (rep.get("narrative_findings", []) if isinstance(rep.get("narrative_findings"), list) else [])
+        if _has_meaningful_finding(item, ("content", "text", "narrative", "finding"))
+    )
+
+    total_active_signals = (
+        len(current_present)
+        + len(report_abnormal)
+        + len(report_normal)
+        + qualitative_signal_count
+        + narrative_signal_count
+        + radiology_qualitative_count
+        + radiology_narrative_count
+        + (1 if xray_finding_str and str(xray_finding_str).strip() else 0)
+    )
+
+    if contradictory:
+        evidence_state = "CONFLICTING_EVIDENCE"
+    elif total_active_signals > 0:
+        evidence_state = "EVIDENCE_PRESENT"
+    else:
+        evidence_state = "INSUFFICIENT_EVIDENCE"
+
+    report_evidence_status = (
+        "SUPPORTING"
+        if (
+            report_abnormal
+            or report_normal
+            or qualitative_signal_count > 0
+            or narrative_signal_count > 0
+            or radiology_qualitative_count > 0
+            or radiology_narrative_count > 0
+        )
+        else ("NOT_ASSESSED" if not is_medical_report_provided else "RECORDED")
+    )
+
+    current_present_list = [
+        {
+            "finding": s.get("symptom"),
+            "symptom": s.get("symptom"),
+            "status": "PRESENT",
+            "state": "PRESENT",
+            "duration": s.get("duration"),
+            "severity": (s.get("severity") or "UNKNOWN").upper(),
+            "body_area": s.get("body_area"),
+            "laterality": s.get("laterality"),
+            "quality": s.get("quality"),
+            "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
+            "context": s.get("context"),
+            "trigger": s.get("trigger"),
+            "type": s.get("type") or "CURRENT",
+            "onset": s.get("onset"),
+            "source": "user_input",
+            "provenance": "symptom_nlp",
+        }
+        for s in current_present
+    ]
+
+    historical_list = [
+        {
+            "finding": s.get("symptom"),
+            "symptom": s.get("symptom"),
+            "status": "PRESENT",
+            "state": "PRESENT",
+            "duration": None,
+            "severity": (s.get("severity") or "UNKNOWN").upper(),
+            "body_area": s.get("body_area"),
+            "laterality": s.get("laterality"),
+            "quality": s.get("quality"),
+            "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
+            "context": s.get("context"),
+            "trigger": s.get("trigger"),
+            "type": "HISTORICAL",
+            "history": s.get("history") or s.get("context") or "historical occurrence",
+            "source": "user_input",
+            "provenance": "symptom_nlp",
+        }
+        for s in historical
+    ]
+
+    return {
+        "evidence_state": evidence_state,
+        "symptoms": {
+            "current_present": current_present_list,
+            "historical": historical_list,
+            "present": current_present_list,
+            "all_present": current_present_list + historical_list,
+            "absent": [
+                {
+                    "finding": s.get("symptom"),
+                    "symptom": s.get("symptom"),
+                    "status": "ABSENT",
+                    "state": "ABSENT",
+                    "type": "NEGATIVE",
+                    "body_area": s.get("body_area"),
+                    "context": s.get("context"),
+                    "domain": s.get("domain") or _lookup_symptom_domain(s.get("symptom")),
+                    "source": "user_input",
+                    "provenance": "symptom_nlp",
+                }
+                for s in symptoms_absent
+            ],
+            "unknown": [
+                {
+                    "finding": s.get("symptom") if isinstance(s, dict) else str(s),
+                    "symptom": s.get("symptom") if isinstance(s, dict) else str(s),
+                    "status": "UNKNOWN",
+                    "state": "UNKNOWN",
+                    "type": "UNCERTAIN",
+                    "body_area": s.get("body_area") if isinstance(s, dict) else None,
+                    "context": s.get("context") if isinstance(s, dict) else None,
+                    "domain": _lookup_symptom_domain(s.get("symptom") if isinstance(s, dict) else str(s)),
+                    "source": "user_input",
+                    "provenance": "symptom_nlp",
+                }
+                for s in symptoms_unknown
+            ],
+        },
+        "report": {
+            # `provided` now means a medical/laboratory report was provided.
+            "provided": is_medical_report_provided,
+            "medical_report_provided": is_medical_report_provided,
+            "radiology_report_provided": is_radiology_report_provided,
+            "any_report_provided": is_report_provided,
+            "evidence_status": report_evidence_status,
+            "medical_reports": medical_reports,
+            "xray_reports": processed_xray_reports,
+            "abnormal_findings": [
+                {
+                    **f,
+                    "status": f.get("status") or f.get("interpretation") or "ABNORMAL",
+                    "interpretation": f.get("interpretation") or "ABNORMAL",
+                    "source": "uploaded_report",
+                    "provenance": "report_ocr_nlp",
+                }
+                for f in report_abnormal
+            ],
+            "normal_findings": [
+                {
+                    **f,
+                    "status": f.get("status") or "NORMAL",
+                    "interpretation": "NORMAL",
+                    "source": "uploaded_report",
+                    "provenance": "report_ocr_nlp",
+                }
+                for f in report_normal
+            ],
+            "qualitative_findings": qualitative_report_findings,
+            "narrative_findings": narrative_report_findings,
+            "unknown_range_findings": report_unknown_range,
+            "total_extracted": len(report_findings) + len(qualitative_report_findings) + len(narrative_report_findings),
+        },
+        "xray": {
+            "received": xray_received,
+            "interpretation": xray_interpretation,
+            "evidence_status": xray_evidence_status,
+            "status": xray_status_display,
+            "region": xray_region,
+            "prediction": xray_finding_str,
+            "images": processed_images,
+            "reports": processed_xray_reports,
+            "cross_modal_concordance": cross_modal_concordance,
+            "model_version": (xray_images[0] if xray_images else (xray_result or {})).get("model_version") or "N/A",
+            "uncertainty": (xray_images[0] if xray_images else (xray_result or {})).get("uncertainty"),
+            "explainability_artifact": (xray_images[0] if xray_images else (xray_result or {})).get("explainability_artifact"),
+            "message": (xray_images[0] if xray_images else (xray_result or {})).get("message"),
+            "provenance": "xray_deep_learning" if xray_received else "none",
+        },
+        "supporting": supporting,
+        "reassuring": reassuring,
+        "separate": separate,
+        "separate_or_contextual": separate,
+        "unassessed": unassessed,
+        "contradictory": contradictory,
+        "missing": missing,
+        "evidence_relationships": evidence_relationships,
+        "message": (
+            "Multimodal evidence compiled successfully."
+            if evidence_state == "EVIDENCE_PRESENT"
+            else "Available information is insufficient for a specific clinical conclusion."
+        ),
+    }

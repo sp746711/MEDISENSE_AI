@@ -440,3 +440,35 @@ async def test_backend_validation_xray_report_rejects_medical_report():
             )
     assert exc_info.value.status_code == 400
     assert "general medical report" in exc_info.value.detail.lower()
+
+
+def test_mixed_xray_results_preserve_each_image_status():
+    """A successful image must not hide a second image's unavailable status."""
+    xray_results = [
+        {
+            "file_name": "chest.png",
+            "region": "chest",
+            "status": "COMPLETED",
+            "prediction": "test_finding",
+            "confidence": 0.80,
+            "model_version": "test-model",
+        },
+        {
+            "file_name": "knee.png",
+            "region": "knee",
+            "status": "UNAVAILABLE",
+            "prediction": None,
+            "message": "Model unavailable.",
+        },
+    ]
+
+    evidence = combine_evidence(xray_results=xray_results)
+    images = evidence["xray"]["images"]
+
+    assert len(images) == 2
+    by_name = {image["file_name"]: image for image in images}
+
+    assert by_name["chest.png"]["status"] == "COMPLETED"
+    assert by_name["chest.png"]["prediction"] == "test_finding"
+    assert by_name["knee.png"]["status"] == "UNAVAILABLE"
+    assert by_name["knee.png"]["prediction"] is None

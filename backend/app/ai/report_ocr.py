@@ -139,129 +139,162 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
             extracted_pages: list[str] = []
             tables_data: list[list[list[str]]] = []
             total_doc_pages = 0
+            ocr_used = False
+            has_digital_text = False
+            ocr_unavailable_pages: list[int] = []
 
             if fitz is not None:
-                doc = fitz.open(file_path)
-                total_doc_pages = len(doc)
-                for page_num in range(total_doc_pages):
-                    page = doc[page_num]
-                    text = page.get_text("text") or ""
-                    if text.strip():
-                        extracted_pages.append(text.strip())
-                    if hasattr(page, "find_tables"):
-                        try:
-                            for tab in page.find_tables():
-                                extracted = tab.extract()
-                                if extracted:
-                                    tables_data.append(extracted)
-                        except Exception:
-                            pass
+                # Process each page independently to support mixed digital/scanned PDFs.
+                with fitz.open(file_path) as doc:
+                    total_doc_pages = len(doc)
+                    ocr_available = (
+                        pytesseract is not None and is_ocr_engine_available()
+                    )
 
-                # If digital text was extracted successfully from the PDF
-                full_text = "\n\n".join(extracted_pages).strip()
-                if full_text:
-                    doc.close()
-                    clean_full = normalize_ocr_text(full_text)
-                    return {
-                        "status": "extracted",
-                        "extracted_text": clean_full,
-                        "tables": tables_data,
-                        "pages": len(extracted_pages),
-                        "ocr_engine": "pdf_text_layer",
-                        "message": f"Successfully extracted text across {len(extracted_pages)} page(s).",
-                        "ocr_version": OCR_VERSION,
-                        "file_path": file_path,
-                    }
-
-                # If no selectable digital text found: attempt OCR fallback on rasterized PDF pages
-                ocr_available = is_ocr_engine_available()
-                if ocr_available and pytesseract is not None:
-                    ocr_pages: list[str] = []
                     for page_num in range(total_doc_pages):
                         page = doc[page_num]
-                        pix = page.get_pixmap(dpi=200)
-                        img_bytes = pix.tobytes("png")
-                        with Image.open(io.BytesIO(img_bytes)) as pil_img:
-                            page_ocr = pytesseract.image_to_string(pil_img, config="--oem 3 --psm 6")
-                            if not page_ocr or len(page_ocr.strip()) < 5:
-                                page_ocr = pytesseract.image_to_string(pil_img)
-                            if page_ocr.strip():
-                                ocr_pages.append(page_ocr.strip())
+                        page_text = (page.get_text("text") or "").strip()
 
-                    doc.close()
-                    full_ocr_text = "\n\n".join(ocr_pages).strip()
-                    if full_ocr_text:
-                        clean_ocr = normalize_ocr_text(full_ocr_text)
-                        return {
-                            "status": "extracted",
-                            "extracted_text": clean_ocr,
-                            "tables": [],
-                            "pages": len(ocr_pages),
-                            "ocr_engine": "pytesseract",
-                            "message": f"Successfully extracted text via OCR across {len(ocr_pages)} scanned page(s).",
-                            "ocr_version": OCR_VERSION,
-                            "file_path": file_path,
-                        }
+                        # Preserve table extraction from digital pages.
+                        if hasattr(page, "find_tables"):
+                            try:
+                                for tab in page.find_tables():
+                                    extracted_table = tab.extract()
+                                    if extracted_table:
+                                        tables_data.append(extracted_table)
+                            except Exception:
+                                # Table extraction is optional; continue text extraction.
+                                pass
+
+                        if page_text:
+                            has_digital_text = True
+                            extracted_pages.append(page_text)
+                            continue
+
+                        # OCR only pages that have no selectable text.
+                        if not ocr_available:
+                            ocr_unavailable_pages.append(page_num + 1)
+                            extracted_pages.append("")
+                            continue
+
+                        try:
+                            pix = page.get_pixmap(dpi=200)
+                            img_bytes = pix.tobytes("png")
+                            with Image.open(io.BytesIO(img_bytes)) as pil_img:
+                                if pil_img.mode in ("RGBA", "P", "LA"):
+                                    pil_img = pil_img.convert("RGB")
+                                page_ocr = pytesseract.image_to_string(
+                                    pil_img, config="--oem 3 --psm 6"
+                                )
+                                if not page_ocr or len(page_ocr.strip()) < 5:
+                                    page_ocr = pytesseract.image_to_string(pil_img)
+
+                            page_ocr = (page_ocr or "").strip()
+                            extracted_pages.append(page_ocr)
+                            if page_ocr:
+                                ocr_used = True
+                            else:
+                                ocr_unavailable_pages.append(page_num + 1)
+                        except Exception:
+                            extracted_pages.append("")
+                            ocr_unavailable_pages.append(page_num + 1)
+
+                # Join non-empty page text in original document order.
+                full_text = "\\n\\n".join(
+                    page_text for page_text in extracted_pages if page_text
+                ).strip()
+
+                if full_text:
+                    clean_text = normalize_ocr_text(full_text)
+                    if ocr_unavailable_pages:
+                        message = (
+                            "Text extracted from readable pages, but scanned page(s) "
+                            + ", ".join(map(str, ocr_unavailable_pages))
+                            + " could not be read. Review the original report to verify completeness."
+                        )
+                    elif ocr_used:
+                        message = (
+                            f"Successfully extracted text from readable pages "
+                            f"({total_doc_pages} total page(s)); OCR was used for scanned pages."
+                        )
                     else:
-                        return {
-                            "status": "unreadable",
-                            "extracted_text": None,
-                            "tables": [],
-                            "pages": total_doc_pages,
-                            "ocr_engine": "pytesseract",
-                            "message": "Scanned PDF processed via OCR, but no legible medical report text was detected.",
-                            "ocr_version": OCR_VERSION,
-                            "file_path": file_path,
-                        }
-                else:
-                    doc.close()
+                        message = (
+                            f"Successfully extracted selectable text from the PDF "
+                            f"({total_doc_pages} total page(s))."
+                        )
+
+                    if ocr_used and has_digital_text:
+                        ocr_engine = "pdf_text_layer+pytesseract"
+                    elif ocr_used:
+                        ocr_engine = "pytesseract"
+                    elif ocr_unavailable_pages:
+                        ocr_engine = "pdf_text_layer_partial" if has_digital_text else "none"
+                    else:
+                        ocr_engine = "pdf_text_layer"
+
                     return {
-                        "status": "unreadable",
-                        "extracted_text": None,
-                        "tables": [],
+                        "status": "extracted",
+                        "extracted_text": clean_text,
+                        "tables": tables_data,
                         "pages": total_doc_pages,
-                        "ocr_engine": "none",
-                        "message": (
-                            "PDF contains scanned or rasterized pages without selectable text. "
-                            "Tesseract OCR engine is not installed or configured on the server. "
-                            "Please provide a digital PDF or install Tesseract OCR on Windows."
-                        ),
+                        "ocr_engine": ocr_engine,
+                        "message": message,
                         "ocr_version": OCR_VERSION,
                         "file_path": file_path,
                     }
 
-            elif PdfReader is not None:
-                reader = PdfReader(file_path)
-                total_doc_pages = len(reader.pages)
-                for p in reader.pages:
-                    txt = p.extract_text() or ""
-                    if txt.strip():
-                        extracted_pages.append(txt.strip())
-
-                full_text = "\n\n".join(extracted_pages).strip()
-                if not full_text:
-                    return {
-                        "status": "unreadable",
-                        "extracted_text": None,
-                        "tables": [],
-                        "pages": total_doc_pages,
-                        "ocr_engine": "none",
-                        "message": "PDF contains scanned pages without selectable text.",
-                        "ocr_version": OCR_VERSION,
-                        "file_path": file_path,
-                    }
-
-                clean_full = normalize_ocr_text(full_text)
                 return {
-                    "status": "extracted",
-                    "extracted_text": clean_full,
-                    "tables": [],
-                    "pages": len(extracted_pages),
-                    "ocr_engine": "pdf_text_layer",
-                    "message": f"Successfully extracted text across {len(extracted_pages)} page(s).",
+                    "status": "unreadable",
+                    "extracted_text": None,
+                    "tables": tables_data,
+                    "pages": total_doc_pages,
+                    "ocr_engine": "pytesseract" if ocr_used else "none",
+                    "message": (
+                        "No legible medical report text was detected. If the PDF is scanned, "
+                        "verify that Tesseract OCR is installed and configured."
+                    ),
                     "ocr_version": OCR_VERSION,
                     "file_path": file_path,
                 }
+
+            # pypdf fallback: digital text only; it cannot rasterize pages for OCR.
+            reader = PdfReader(file_path)
+            total_doc_pages = len(reader.pages)
+            for page in reader.pages:
+                page_text = (page.extract_text() or "").strip()
+                extracted_pages.append(page_text)
+
+            full_text = "\\n\\n".join(
+                page_text for page_text in extracted_pages if page_text
+            ).strip()
+            if not full_text:
+                return {
+                    "status": "unreadable",
+                    "extracted_text": None,
+                    "tables": [],
+                    "pages": total_doc_pages,
+                    "ocr_engine": "none",
+                    "message": (
+                        "No selectable PDF text was found. Scanned-page OCR requires "
+                        "PyMuPDF and a configured Tesseract OCR engine."
+                    ),
+                    "ocr_version": OCR_VERSION,
+                    "file_path": file_path,
+                }
+
+            return {
+                "status": "extracted",
+                "extracted_text": normalize_ocr_text(full_text),
+                "tables": [],
+                "pages": total_doc_pages,
+                "ocr_engine": "pdf_text_layer",
+                "message": (
+                    f"Extracted selectable text from the PDF ({total_doc_pages} total page(s)). "
+                    "Scanned pages cannot be OCR-processed by the pypdf-only fallback."
+                ),
+                "ocr_version": OCR_VERSION,
+                "file_path": file_path,
+            }
 
         except Exception as exc:
             return {

@@ -145,6 +145,43 @@ def test_2_scanned_pdf_requiring_ocr(tmp_path):
 
 
 # --------------------------------------------------------------------------
+# 2b. Mixed PDF: preserve selectable digital text and OCR scanned pages
+# --------------------------------------------------------------------------
+def test_2b_mixed_digital_and_scanned_pdf_preserves_both_pages(tmp_path):
+    """A mixed PDF must not lose scanned pages when another page has digital text."""
+    doc = fitz.open()
+
+    # Page 1: selectable digital text.
+    page1 = doc.new_page()
+    page1.insert_text((50, 72), "DIGITAL_PAGE_MARKER: Hemoglobin 12.5 g/dL")
+
+    # Page 2: image-only scanned content with no selectable text layer.
+    scanned_bytes = _create_image("SCANNED_PAGE_MARKER: WBC 7500 /uL", "PNG")
+    page2 = doc.new_page()
+    page2.insert_image(page2.rect, stream=scanned_bytes)
+
+    pdf_path = tmp_path / "mixed_digital_scanned_report.pdf"
+    pdf_path.write_bytes(doc.tobytes())
+    doc.close()
+
+    # Mock OCR to keep this regression test independent of local Tesseract.
+    with patch(
+        "pytesseract.image_to_string",
+        return_value="SCANNED_PAGE_MARKER: WBC 7500 /uL",
+    ), patch(
+        "app.ai.report_ocr.is_ocr_engine_available",
+        return_value=True,
+    ):
+        res = extract_text_from_file(str(pdf_path))
+
+    assert res["status"] == "extracted"
+    assert "DIGITAL_PAGE_MARKER" in res["extracted_text"]
+    assert "SCANNED_PAGE_MARKER" in res["extracted_text"]
+    assert res["pages"] == 2
+
+
+
+# --------------------------------------------------------------------------
 # 3. PNG containing readable printed text
 # --------------------------------------------------------------------------
 def test_3_png_readable_printed_text(tmp_path):

@@ -345,3 +345,73 @@ def test_7_pdf_and_feedback_parity(tmp_path):
     pdf_path = Path(pdf_res["path"])
     assert pdf_path.exists()
     assert pdf_path.stat().st_size > 1000
+
+
+# ----------------------------------------------------------------------
+# Problem 1 — Radiology evidence uncertainty regression tests
+# ----------------------------------------------------------------------
+
+def _qualitative_finding(text: str, term: str) -> dict[str, Any]:
+    """Return the extracted qualitative finding for a term or fail clearly."""
+    result = structure_report_text(text)
+    matches = [
+        item for item in result.get("qualitative_findings", [])
+        if term.lower() in str(item.get("finding", "")).lower()
+    ]
+    assert matches, (
+        f"Expected radiology term {term!r} to be extracted. "
+        f"Got: {result.get('qualitative_findings', [])!r}"
+    )
+    return matches[0]
+
+
+@pytest.mark.parametrize(
+    ("text", "term", "expected"),
+    [
+        ("Impression: Possible non-displaced linear left parietal skull fracture.", "fracture", "UNCERTAIN"),
+        ("Impression: Findings are suggestive of right lower-lobe pneumonia.", "pneumonia", "UNCERTAIN"),
+        ("Findings: No significant pleural effusion.", "pleural effusion", "ABSENT"),
+        ("Findings: Acute fracture identified.", "fracture", "PRESENT"),
+    ],
+)
+def test_problem1_radiology_uncertainty_and_negation(text, term, expected):
+    """Uncertain impressions must not be promoted to confirmed findings."""
+    assert _qualitative_finding(text, term).get("state") == expected
+
+
+def test_problem1_radiology_conflicting_statements_are_not_silently_confirmed():
+    """A positive and negative statement for the same finding must retain conflict."""
+    text = (
+        "Findings: There is a pleural effusion. "
+        "Impression: No pleural effusion is identified."
+    )
+    result = structure_report_text(text)
+    findings = [
+        item for item in result.get("qualitative_findings", [])
+        if "pleural effusion" in str(item.get("finding", "")).lower()
+    ]
+    assert findings, "Expected pleural effusion to be extracted."
+    states = {str(item.get("state", "UNKNOWN")).upper() for item in findings}
+    assert "CONFLICTING" in states or {"PRESENT", "ABSENT"}.issubset(states), (
+        f"Conflicting report statements were lost: {findings!r}"
+    )
+
+
+def test_problem1_uncertain_radiology_does_not_enter_confirmed_supporting_evidence():
+    """UNCERTAIN findings must not be presented as confirmed supporting evidence."""
+    evidence = combine_evidence(
+        symptoms=[{"symptom": "cough", "state": "PRESENT", "domain": "respiratory"}],
+        qualitative_report_findings=[{
+            "finding": "pneumonia",
+            "category": "radiology",
+            "domain": "respiratory",
+            "state": "UNCERTAIN",
+            "source": "uploaded_radiology_report",
+        }],
+    )
+    supporting = " ".join(str(x).lower() for x in evidence.get("supporting", []))
+    assert "confirmed: pneumonia" not in supporting
+    serialized = repr(evidence).lower()
+    assert "pneumonia" in serialized and "uncertain" in serialized, (
+        f"Uncertain finding was not preserved in evidence: {evidence!r}"
+    )

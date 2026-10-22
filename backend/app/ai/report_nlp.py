@@ -245,6 +245,62 @@ def _is_new_test_or_section(line_text: str) -> bool:
     return False
 
 
+
+
+def classify_radiology_finding(text: str, term: str) -> str:
+    """Classify explicit radiology wording without upgrading uncertainty.
+
+    Returns PRESENT, ABSENT, UNCERTAIN, CONFLICTING, or UNKNOWN. This is a
+    conservative text rule, not a clinical-language model.
+    """
+    source = (text or "").lower()
+    target = (term or "").lower().strip()
+    if not source.strip() or not target:
+        return "UNKNOWN"
+
+    # Evaluate sentence/clause-sized contexts so a negation elsewhere in the
+    # report does not automatically negate every occurrence of this finding.
+    clauses = re.split(r"[\n;.!?]+|\b(?:but|however|whereas|although)\b", source)
+    states: list[str] = []
+    uncertain_re = re.compile(
+        r"\b(?:possible|possibly|probable|probably|suggestive of|suspicious for|"
+        r"cannot exclude|can't exclude|cannot be excluded|cannot rule out|"
+        r"may represent|might represent|could represent|questionable for|"
+        r"indeterminate|equivocal|concerning for|likely)\b"
+    )
+    negative_re = re.compile(
+        r"\b(?:no|without|absent|negative for|no evidence of|no sign of|"
+        r"free of|not seen|not identified|not demonstrated|not evident)\b"
+    )
+    for clause in clauses:
+        if not re.search(rf"(?<!\w){re.escape(target)}(?!\w)", clause):
+            continue
+        # Use only the local text before the finding, plus the short phrase
+        # following it for constructions such as 'fracture is possible'.
+        match = re.search(rf"(?<!\w){re.escape(target)}(?!\w)", clause)
+        assert match is not None
+        before = clause[max(0, match.start() - 90):match.start()]
+        after = clause[match.end():match.end() + 55]
+        local = before + " " + target + " " + after
+        if uncertain_re.search(local):
+            states.append("UNCERTAIN")
+        elif negative_re.search(before) or re.search(
+            r"\b(?:is|was|are|were)\s+not\s+(?:seen|identified|demonstrated|evident)\b", after
+        ):
+            states.append("ABSENT")
+        else:
+            states.append("PRESENT")
+
+    if not states:
+        return "UNKNOWN"
+    distinct = set(states)
+    if "PRESENT" in distinct and "ABSENT" in distinct:
+        return "CONFLICTING"
+    if "UNCERTAIN" in distinct:
+        return "UNCERTAIN" if distinct == {"UNCERTAIN"} else "CONFLICTING"
+    return states[0]
+
+
 def structure_report_text(
     text: str | None,
     tables: list[list[list[str]]] | None = None,
@@ -679,32 +735,15 @@ def structure_report_text(
                     "source": "medical_report_narrative",
                 })
 
-        # Explicit fracture assessment:
-        # "No fracture" -> ABSENT
-        # "Fracture identified" / "Fracture noted" -> PRESENT
-        # neither -> not added (remains UNKNOWN, not inferred from wrist injury)
-        has_no_fracture = bool(
-            re.search(r"\b(?:no|denies|negative for|free of|without)\s+(?:\w+\s+){0,3}fracture\b", lower_text)
-            or "no fracture" in lower_text
-        )
-        has_pos_fracture = bool(
-            re.search(r"\b(?:fracture identified|fracture seen|fracture noted|acute fracture|evidence of fracture)\b", lower_text)
-            or (re.search(r"\bfracture\b", lower_text) and not has_no_fracture)
-        )
-
-        if has_no_fracture:
+        # Explicit fracture assessment: preserve uncertainty and conflicts.
+        fracture_state = classify_radiology_finding(cleaned_text, "fracture")
+        if fracture_state != "UNKNOWN":
             qualitative_findings.append({
                 "finding": "fracture",
                 "category": "radiology/bone",
                 "domain": "musculoskeletal",
-                "state": "ABSENT",
-            })
-        elif has_pos_fracture:
-            qualitative_findings.append({
-                "finding": "fracture",
-                "category": "radiology/bone",
-                "domain": "musculoskeletal",
-                "state": "PRESENT",
+                "state": fracture_state,
+                "source": "radiology_report_text",
             })
 
         # Examination findings: tenderness, swelling, reduced range of motion
@@ -734,7 +773,10 @@ def structure_report_text(
                 "state": "PRESENT",
             })
 
-        # Respiratory qualitative findings
+        # Radiology findings: do not treat "possible/suggestive of" as confirmed.
+        # Keep this list scoped to radiology concepts. Include musculoskeletal
+        # findings as well as chest findings so uncertainty/negation/conflict
+        # handling is applied to the relevant body region.
         resp_terms = [
             ("pneumonia", "radiology", "respiratory"),
             ("consolidation", "radiology", "respiratory"),
@@ -742,15 +784,20 @@ def structure_report_text(
             ("cardiomegaly", "radiology", "cardiovascular"),
             ("infiltrate", "radiology", "respiratory"),
             ("clear lungs", "radiology", "respiratory"),
+            ("joint effusion", "radiology", "musculoskeletal"),
+            ("knee joint effusion", "radiology", "musculoskeletal"),
+            ("tibial plateau fracture", "radiology/bone", "musculoskeletal"),
+            ("dislocation", "radiology/bone", "musculoskeletal"),
         ]
         for term, cat, dom in resp_terms:
-            if term in lower_text:
-                neg = bool(re.search(rf"\b(?:no|denies|negative for|free of|without)\s+(?:\w+\s+){{0,3}}{term}\b", lower_text))
+            state = classify_radiology_finding(cleaned_text, term)
+            if state != "UNKNOWN":
                 qualitative_findings.append({
                     "finding": term,
                     "category": cat,
                     "domain": dom,
-                    "state": "ABSENT" if neg else "PRESENT",
+                    "state": state,
+                    "source": "radiology_report_text",
                 })
 
     has_content = bool(findings or qualitative_findings or narrative_findings)

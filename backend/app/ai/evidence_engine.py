@@ -30,62 +30,8 @@ def _state(record: dict[str, Any]) -> str:
 
 
 def _status(record: dict[str, Any]) -> str:
-    """Return a normalized lab status, falling back when status is not meaningful."""
-    recognized = {"HIGH", "LOW", "ABNORMAL", "NORMAL", "UNKNOWN", "RECORDED"}
-    status = str(record.get("status") or "").strip().upper()
-    interpretation = str(record.get("interpretation") or "").strip().upper()
-    if status in recognized:
-        return status
-    if interpretation in recognized:
-        return interpretation
-    return status or interpretation
-
-
-def _temperature_celsius(context: str) -> Optional[float]:
-    """Extract an explicitly Celsius temperature and return Celsius, if present."""
-    import re
-    match = re.search(r"(\d{2}(?:\.\d+)?)\s*(?:°\s*C|degrees?\s+C|\bCelsius\b)", context, re.IGNORECASE)
-    if not match:
-        return None
-    try:
-        value = float(match.group(1))
-    except ValueError:
-        return None
-    return value if 25.0 <= value <= 45.0 else None
-
-
-def _temperature_fahrenheit(context: str) -> Optional[float]:
-    """Extract Fahrenheit; bare values are accepted only in a plausible °F range."""
-    import re
-    match = re.search(r"(\d{2,3}(?:\.\d+)?)\s*(?:°\s*F|degrees?\s+F|\bFahrenheit\b)", context, re.IGNORECASE)
-    if match:
-        try:
-            value = float(match.group(1))
-        except ValueError:
-            return None
-        return value if 70.0 <= value <= 115.0 else None
-    match = re.search(r"(?<![\w.])(\d{2,3}(?:\.\d+)?)(?![\w.])", context)
-    if match:
-        try:
-            value = float(match.group(1))
-        except ValueError:
-            return None
-        return value if 70.0 <= value <= 115.0 else None
-    return None
-
-
-def _reported_body_regions(text: str) -> set[str]:
-    """Find explicit anatomical region terms in report text/filename."""
-    import re
-    aliases = {
-        "chest": r"(?:\b(?:chest|thorax|lungs?)\b|chest_)", "knee": r"\bknee\b",
-        "wrist": r"\bwrist\b", "hand": r"\bhand\b", "elbow": r"\belbow\b",
-        "shoulder": r"\bshoulder\b", "spine": r"\b(?:spine|spinal|cervical spine|thoracic spine|lumbar spine)\b",
-        "pelvis": r"\b(?:pelvis|pelvic)\b", "hip": r"\bhip\b",
-        "ankle": r"\bankle\b", "foot": r"\b(?:foot|feet)\b",
-        "skull": r"\b(?:skull|head)\b",
-    }
-    return {region for region, pattern in aliases.items() if re.search(pattern, text, re.IGNORECASE)}
+    """Normalize report flags while preserving explicit status over interpretation."""
+    return str(record.get("status") or record.get("interpretation") or "").strip().upper()
 
 
 def _lookup_symptom_domain(symptom_name: str | None) -> str:
@@ -131,15 +77,9 @@ def combine_evidence(
     xray_reports = _as_dict_list(xray_reports)
     medical_reports = _as_dict_list(medical_reports)
 
-    # Backward compatibility: promote only untyped qualitative records.
-    # Explicit radiology/X-ray records must stay in the radiology evidence channel.
+    # If qualitative findings are passed inside report_findings, normalize them
     for f in list(report_findings):
-        source_type = str(f.get("source_type") or f.get("document_type") or "").strip().upper()
-        is_radiology_record = any(
-            token in source_type for token in ("XRAY", "X-RAY", "RADIOLOGY", "RADIOGRAPH")
-        ) or bool(f.get("radiology_report_id") or f.get("xray_report_id"))
-        if ("finding" in f and not f.get("test_name") and not is_radiology_record
-                and f not in qualitative_report_findings):
+        if "finding" in f and "test_name" not in f and f not in qualitative_report_findings:
             qualitative_report_findings.append(dict(f))
 
     # Keep report categories separate. The legacy report_provided argument
@@ -207,19 +147,22 @@ def combine_evidence(
     absent_names = {str(s.get("symptom") or "").strip().lower() for s in symptoms_absent} - {""}
     all_known_names = present_names.union(absent_names).union({str(s.get("symptom") or "").strip().lower() for s in historical} - {""})
 
-    # 1. Contradiction Detection. Respect explicit units: 38°C is febrile.
+    # 1. Contradiction Detection
     has_fever_absent = "fever" in absent_names
     for s in current_present:
-        if str(s.get("symptom") or "").strip().lower() == "temperature":
+        if s.get("symptom") == "temperature":
             val_str = str(s.get("context") or "")
-            temp_c = _temperature_celsius(val_str)
-            temp_f = _temperature_fahrenheit(val_str) if temp_c is None else None
-            is_febrile = (temp_c is not None and temp_c >= 38.0) or (temp_f is not None and temp_f >= 100.4)
-            if is_febrile and has_fever_absent:
-                display_temp = f"{temp_c:g}°C" if temp_c is not None else f"{temp_f:g}°F"
-                contradictory.append(
-                    f"Contradiction: Patient reported absence of fever, but recorded temperature is {display_temp} (febrile range)."
-                )
+            import re
+            m = re.search(r"(\d{2,3}(?:\.\d+)?)", val_str)
+            if m:
+                try:
+                    t_val = float(m.group(1))
+                    if t_val >= 100.4 and has_fever_absent:
+                        contradictory.append(
+                            f"Contradiction: Patient reported absence of fever, but objective temperature is {t_val}°F (febrile range)."
+                        )
+                except ValueError:
+                    pass
 
     # Laboratory explicit flag vs reference range conflict detection
     for item in report_findings:
@@ -439,22 +382,12 @@ def combine_evidence(
                 unassessed.append(f"{img_label} status: {img_status.upper()}. Automated interpretation unavailable.")
 
         xray_region = ", ".join(sorted(all_regions)) if all_regions else "not declared"
-
-        if completed_preds and any_unavailable:
-            # Some images were interpreted, but at least one was not.
-            # Preserve the individual image statuses and mark the aggregate partial.
-            xray_finding_str = "; ".join(completed_preds)
-            xray_interpretation = "PARTIAL"
-            xray_evidence_status = "SUPPORTING"
-            xray_status_display = "PARTIAL"
-        elif completed_preds:
-            # At least one usable prediction exists and no image was unavailable.
+        if completed_preds:
             xray_finding_str = "; ".join(completed_preds)
             xray_interpretation = "AVAILABLE"
             xray_evidence_status = "SUPPORTING"
             xray_status_display = "COMPLETED"
         elif any_unavailable:
-            # Images were received, but none produced a usable prediction.
             xray_interpretation = "UNAVAILABLE"
             xray_evidence_status = "UNKNOWN"
             xray_status_display = "UNAVAILABLE"
@@ -484,110 +417,179 @@ def combine_evidence(
         }
         processed_xray_reports.append(xr_entry)
 
-        for qf in xr_qual:
-            q_name = str(qf.get("finding") or "")
-            q_lower = q_name.lower()
-            q_state = str(qf.get("state") or "PRESENT").strip().upper()
-            if q_state == "ABSENT" or any(neg in q_lower for neg in ["no fracture", "no acute fracture", "no dislocation", "intact", "unremarkable", "normal", "clear"]):
-                reassuring.append(f"Radiology report ({xr_fname}) explicitly confirms: {q_name}.")
-            else:
-                supporting.append(f"Radiology report ({xr_fname}) clinical finding: {q_name} ({q_state}).")
+        # Keep source statements in processed_xray_reports. Do not automatically
+        # promote each statement to supporting/reassuring evidence here.
+        # Classify radiology findings across all reports below, so conflicts
+        # between separate reports remain visible.
 
-        # Link a radiology report only when its text/filename identifies a single region.
-        # Unknown or ambiguous regions are left unlinked rather than called a mismatch.
+        # Check for body-region mismatch between X-ray images and radiology reports
         if processed_images:
-            rep_text = (str(xr.get("extracted_text") or "") + " " + str(xr_fname)).lower()
-            report_regions = _reported_body_regions(rep_text)
+            rep_text = str(xr.get("extracted_text") or "").lower() + " " + str(xr_fname).lower()
             for img in processed_images:
-                img_reg = str(img.get("region") or "").strip().lower()
-                if img_reg in {"not declared", "unknown", ""} or not report_regions:
-                    continue
-                normalized_img_region = "skull" if img_reg in {"head", "skull"} else img_reg
-                if len(report_regions) == 1 and normalized_img_region not in report_regions:
-                    report_region = next(iter(report_regions))
-                    contradictory.append(
-                        f"Body region mismatch: Image region is '{img_reg.capitalize()}', but radiology report '{xr_fname}' appears to refer to '{report_region.capitalize()}'. The items remain unlinked."
-                    )
-                    evidence_relationships.append({
-                        "source_a": f"xray_image ({img.get('file_name')})",
-                        "source_b": f"xray_report ({xr_fname})",
-                        "finding": "body_region_mismatch",
-                        "relationship": "POTENTIAL_CONFLICT",
-                        "reason": f"Image region '{img_reg}' differs from the single region '{report_region}' identified in the report text.",
-                    })
+                img_reg = img.get("region", "").lower()
+                if img_reg and img_reg not in {"not declared", "unknown"}:
+                    comp_regions = ["chest", "knee", "wrist", "hand", "elbow", "shoulder", "spine", "pelvis", "hip", "ankle", "foot"]
+                    for other_r in comp_regions:
+                        if other_r != img_reg and other_r in rep_text and img_reg not in rep_text:
+                            contradictory.append(
+                                f"Conflicting evidence / body region mismatch: Image region is '{img_reg.capitalize()}', but radiology report '{xr_fname}' indicates '{other_r.capitalize()}'. Evidence kept unlinked."
+                            )
+                            evidence_relationships.append({
+                                "source_a": f"xray_image ({img.get('file_name')})",
+                                "source_b": f"xray_report ({xr_fname})",
+                                "finding": "body_region_mismatch",
+                                "relationship": "CONFLICTING",
+                                "reason": f"Image anatomical region '{img_reg}' differs from radiology report '{other_r}'.",
+                            })
+                            break
 
-    # Cross-modal concordance: compare only when the anatomical region is confidently matched.
+    # Problem 1: classify radiology report findings across all reports before
+    # allowing them to support or reassure. Keep source statements intact.
+    radiology_groups: dict[str, list[dict[str, Any]]] = {}
+    radiology_conflicts: list[dict[str, Any]] = []
+    radiology_uncertain: list[dict[str, Any]] = []
+
+    def _radiology_key(value: Any) -> str:
+        import re
+        text = str(value or "").lower().strip()
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        return " ".join(text.split())
+
+    for rep in processed_xray_reports:
+        for qf in rep.get("qualitative_findings", []):
+            if not isinstance(qf, dict):
+                continue
+            finding_name = str(qf.get("finding") or "").strip()
+            if not finding_name:
+                continue
+            state = str(qf.get("state") or qf.get("status") or "UNKNOWN").strip().upper()
+            if state not in {"PRESENT", "ABSENT", "UNCERTAIN", "CONFLICTING", "UNKNOWN", "HISTORICAL"}:
+                state = "UNKNOWN"
+            statement = {
+                **qf,
+                "finding": finding_name,
+                "state": state,
+                "source": "radiology_report",
+                "source_file": rep.get("file_name"),
+                "source_report_id": rep.get("id"),
+            }
+            key = _radiology_key(finding_name)
+            if key:
+                radiology_groups.setdefault(key, []).append(statement)
+
+    for key, statements in radiology_groups.items():
+        states = {item["state"] for item in statements}
+        display_name = statements[0]["finding"]
+        is_conflicting = "CONFLICTING" in states or ("PRESENT" in states and "ABSENT" in states)
+        if is_conflicting:
+            radiology_conflicts.append({
+                "finding": display_name,
+                "state": "CONFLICTING",
+                "source": "radiology_report",
+                "source_statements": statements,
+                "message": "Conflicting radiology statements; finding remains unresolved and is not confirmed.",
+            })
+            contradictory.append(
+                f"Conflicting radiology evidence for '{display_name}': "
+                + " | ".join(f"{item['state']}: {item['finding']} (source: {item.get('source_file') or 'radiology report'})" for item in statements)
+                + ". Finding remains unresolved and is excluded from confirmed supporting evidence."
+            )
+            evidence_relationships.append({
+                "source_a": statements[0].get("source_file") or "radiology_report",
+                "source_b": statements[-1].get("source_file") or "radiology_report",
+                "finding": display_name,
+                "relationship": "CONFLICTING",
+                "reason": "Radiology sources contain both PRESENT and ABSENT statements, or an explicit CONFLICTING state.",
+                "source_statements": statements,
+            })
+            continue
+
+        if "UNCERTAIN" in states:
+            radiology_uncertain.append({
+                "finding": display_name,
+                "state": "UNCERTAIN",
+                "source": "radiology_report",
+                "source_statements": statements,
+                "message": "Uncertain radiology finding; not treated as confirmed supporting evidence.",
+            })
+            separate.append(
+                f"Radiology report finding remains UNCERTAIN: {display_name}; not counted as confirmed supporting evidence."
+            )
+            evidence_relationships.append({
+                "source_a": statements[0].get("source_file") or "radiology_report",
+                "source_b": "assessment_evidence",
+                "finding": display_name,
+                "relationship": "UNCERTAIN",
+                "reason": "Radiology wording/state is uncertain; excluded from confirmed supporting evidence.",
+                "source_statements": statements,
+            })
+            continue
+
+        if states == {"PRESENT"}:
+            supporting.append(
+                f"Radiology report finding: {display_name} (PRESENT; source: {statements[0].get('source_file') or 'radiology report'})."
+            )
+        elif states == {"ABSENT"}:
+            reassuring.append(
+                f"Radiology report explicitly records absence of: {display_name} (source: {statements[0].get('source_file') or 'radiology report'})."
+            )
+        else:
+            separate.append(
+                f"Radiology report finding '{display_name}' has state {', '.join(sorted(states)) or 'UNKNOWN'}; not used as confirmed evidence."
+            )
+
+    # Cross-modal concordance must not promote uncertain or conflicting report
+    # text into confirmed image/report support.
     cross_modal_concordance: list[dict[str, Any]] = []
     if processed_images and processed_xray_reports:
         for img in processed_images:
             img_pred = img.get("prediction")
             img_status = (img.get("status") or "").lower()
             img_file = img.get("file_name") or "xray_image"
-            img_reg = str(img.get("region") or "").strip().lower()
-            normalized_img_region = "skull" if img_reg in {"head", "skull"} else img_reg
             for rep in processed_xray_reports:
                 rep_file = rep.get("file_name") or "radiology_report.pdf"
-                struct = rep.get("structured_findings") or {}
-                struct_region = str(struct.get("region") or "") if isinstance(struct, dict) else ""
-                rep_text = " ".join([
-                    str(rep.get("file_name") or ""), struct_region,
-                    " ".join(str(q.get("finding") or "") for q in rep.get("qualitative_findings", []) if isinstance(q, dict)),
-                    " ".join(str(n.get("content") or "") for n in rep.get("narrative_findings", []) if isinstance(n, dict)),
-                ])
-                rep_regions = _reported_body_regions(rep_text)
-                # If the image model did not produce a usable prediction, concordance
-                # is not applicable. Region mismatch is still recorded separately above;
-                # do not mislabel an unavailable model as a region-linking failure.
-                if img_status != "completed" or not img_pred:
-                    region_matches = (
-                        img_reg not in {"", "not declared", "unknown"}
-                        and len(rep_regions) == 1
-                        and normalized_img_region in rep_regions
-                    )
-                    detail = (
-                        f"Automated image model interpretation is unavailable for '{img_file}'. "
-                        + ("The report identifies the same anatomical region; report findings are retained independently."
-                           if region_matches else
-                           "Image/report region linkage is uncertain; report findings are retained independently and no image concordance is inferred.")
-                    )
+                rep_records = [q for q in rep.get("qualitative_findings", []) if isinstance(q, dict)]
+                rep_findings = [
+                    q.get("finding", "").lower() for q in rep_records
+                    if str(q.get("state") or q.get("status") or "UNKNOWN").upper() == "PRESENT"
+                ]
+                rep_uncertain_or_conflicting = any(
+                    str(q.get("state") or q.get("status") or "UNKNOWN").upper() in {"UNCERTAIN", "CONFLICTING"}
+                    for q in rep_records
+                )
+                rep_narrative = " ".join([n.get("content", "").lower() for n in rep.get("narrative_findings", []) if isinstance(n, dict)])
+
+                if img_status == "completed" and img_pred:
+                    pred_lower = str(img_pred).lower()
+                    if rep_uncertain_or_conflicting and not any(pred_lower in rf for rf in rep_findings):
+                        status_str = "UNRESOLVED"
+                        reason = f"Radiology report '{rep_file}' contains uncertain or conflicting findings; no confirmed report corroboration is asserted."
+                    elif any(pred_lower in rf for rf in rep_findings) or pred_lower in rep_narrative:
+                        status_str = "CONCORDANT"
+                        reason = f"Image prediction '{img_pred}' is corroborated by findings in radiology report '{rep_file}'."
+                        supporting.append(f"Cross-modal concordance: Image finding '{img_pred}' is corroborated by radiology report '{rep_file}'.")
+                    elif any(f"no {pred_lower}" in rf or f"without {pred_lower}" in rf for rf in rep_findings) or f"no {pred_lower}" in rep_narrative:
+                        status_str = "DISCORDANT"
+                        reason = f"Image prediction '{img_pred}' contrasts with negative/absent finding in radiology report '{rep_file}'."
+                        contradictory.append(f"Cross-modal discordance: Image model detected '{img_pred}', but radiology report '{rep_file}' notes absence of this finding.")
+                    else:
+                        status_str = "INDEPENDENT"
+                        reason = f"Image model detected '{img_pred}'; radiology report '{rep_file}' does not explicitly confirm or rule out this specific finding."
+
+                    cross_modal_concordance.append({
+                        "image_file": img_file,
+                        "report_file": rep_file,
+                        "image_prediction": img_pred,
+                        "concordance_status": status_str,
+                        "details": reason,
+                    })
+                else:
                     cross_modal_concordance.append({
                         "image_file": img_file,
                         "report_file": rep_file,
                         "image_prediction": None,
                         "concordance_status": "NOT_APPLICABLE",
-                        "details": detail,
-                    })
-                    continue
-                if (img_reg in {"", "not declared", "unknown"} or len(rep_regions) != 1
-                        or normalized_img_region not in rep_regions):
-                    cross_modal_concordance.append({
-                        "image_file": img_file, "report_file": rep_file,
-                        "image_prediction": img_pred,
-                        "concordance_status": "NOT_LINKED",
-                        "details": "Image and radiology report were not compared because a matching anatomical region could not be established safely.",
-                    })
-                    continue
-                rep_findings = [str(q.get("finding") or "").lower() for q in rep.get("qualitative_findings", []) if isinstance(q, dict)]
-                rep_narrative = " ".join(str(n.get("content") or "").lower() for n in rep.get("narrative_findings", []) if isinstance(n, dict))
-                if img_status == "completed" and img_pred:
-                    pred_lower = str(img_pred).lower()
-                    if any(pred_lower in rf for rf in rep_findings) or pred_lower in rep_narrative:
-                        status_str = "CONCORDANT"
-                        reason = f"Image prediction '{img_pred}' is textually corroborated by radiology report '{rep_file}' for the same identified region."
-                        supporting.append(f"Cross-modal concordance: Image finding '{img_pred}' is textually corroborated by radiology report '{rep_file}'.")
-                    elif any(f"no {pred_lower}" in rf or f"without {pred_lower}" in rf for rf in rep_findings) or f"no {pred_lower}" in rep_narrative:
-                        status_str = "DISCORDANT"
-                        reason = f"Image prediction '{img_pred}' appears to contrast with a negative finding in radiology report '{rep_file}'."
-                        contradictory.append(f"Potential cross-modal discordance: Image model predicted '{img_pred}', while radiology report '{rep_file}' appears to describe its absence. Clinician review is needed.")
-                    else:
-                        status_str = "INDEPENDENT"
-                        reason = f"Image model detected '{img_pred}'; the matched-region radiology report does not explicitly confirm or rule out this finding."
-                    cross_modal_concordance.append({"image_file": img_file, "report_file": rep_file, "image_prediction": img_pred, "concordance_status": status_str, "details": reason})
-                else:
-                    cross_modal_concordance.append({
-                        "image_file": img_file, "report_file": rep_file, "image_prediction": None,
-                        "concordance_status": "NOT_APPLICABLE",
-                        "details": f"Automated image model interpretation is unavailable for '{img_file}'. Matched-region report findings are retained independently.",
+                        "details": f"Automated image model interpretation is unavailable for '{img_file}'. Relying on extracted radiology report findings from '{rep_file}'.",
                     })
 
     # 4. Missing critical information (context-sensitive, never generic across unrelated domains)
@@ -639,83 +641,31 @@ def combine_evidence(
     if not xray_received:
         missing.append("Radiographic imaging (radiographic status unassessed)")
 
-    # 5. Determine overall evidence state.
-    # A file being uploaded, an absent symptom, historical information, or an
-    # unavailable model is not by itself a meaningful clinical finding.
-    # Count only non-empty extracted findings/narratives; keep contradictory
-    # evidence at the highest priority so conflicting inputs remain visible.
-    import re
-
-    synthetic_instruction_re = re.compile(
-        r"\b(?:synthetic|demonstration|demo\s+only|sample\s+report|test\s+case|"
-        r"no\s+actual\s+clinical\s+findings|instructions?|placeholder|dummy\s+data|"
-        r"simulated|example\s+report)\b",
-        re.IGNORECASE,
-    )
-
-    def _has_meaningful_finding(record: Any, text_keys: tuple[str, ...]) -> bool:
-        if isinstance(record, str):
-            text_value = record.strip()
-        elif isinstance(record, dict):
-            text_value = ""
-            for key in text_keys:
-                value = record.get(key)
-                if value is not None and str(value).strip():
-                    text_value = str(value).strip()
-                    break
-        else:
-            return False
-        return bool(text_value) and not synthetic_instruction_re.search(text_value)
-
-    qualitative_signal_count = sum(
-        1 for item in qualitative_report_findings
-        if _has_meaningful_finding(item, ("finding", "interpretation", "description", "text"))
-    )
-    narrative_signal_count = sum(
-        1 for item in narrative_report_findings
-        if _has_meaningful_finding(item, ("content", "text", "narrative", "finding"))
-    )
-    radiology_qualitative_count = sum(
-        1
-        for rep in processed_xray_reports
-        for item in (rep.get("qualitative_findings", []) if isinstance(rep.get("qualitative_findings"), list) else [])
-        if _has_meaningful_finding(item, ("finding", "interpretation", "description", "text"))
-    )
-    radiology_narrative_count = sum(
-        1
-        for rep in processed_xray_reports
-        for item in (rep.get("narrative_findings", []) if isinstance(rep.get("narrative_findings"), list) else [])
-        if _has_meaningful_finding(item, ("content", "text", "narrative", "finding"))
-    )
-
+    # 5. Determine overall evidence state
     total_active_signals = (
         len(current_present)
         + len(report_abnormal)
-        + len(report_normal)
-        + qualitative_signal_count
-        + narrative_signal_count
-        + radiology_qualitative_count
-        + radiology_narrative_count
-        + (1 if xray_finding_str and str(xray_finding_str).strip() else 0)
+        + len(qualitative_report_findings)
+        + (1 if xray_finding_str else 0)
     )
 
     if contradictory:
         evidence_state = "CONFLICTING_EVIDENCE"
-    elif total_active_signals > 0:
+    elif (
+        total_active_signals > 0
+        or len(report_normal) > 0
+        or len(symptoms_absent) > 0
+        or len(historical) > 0
+        or is_report_provided
+        or (xray_received and xray_interpretation == "UNAVAILABLE")
+    ):
         evidence_state = "EVIDENCE_PRESENT"
     else:
         evidence_state = "INSUFFICIENT_EVIDENCE"
 
     report_evidence_status = (
         "SUPPORTING"
-        if (
-            report_abnormal
-            or report_normal
-            or qualitative_signal_count > 0
-            or narrative_signal_count > 0
-            or radiology_qualitative_count > 0
-            or radiology_narrative_count > 0
-        )
+        if (report_abnormal or report_normal or qualitative_report_findings or narrative_report_findings)
         else ("NOT_ASSESSED" if not is_medical_report_provided else "RECORDED")
     )
 
@@ -832,6 +782,8 @@ def combine_evidence(
             ],
             "qualitative_findings": qualitative_report_findings,
             "narrative_findings": narrative_report_findings,
+            "radiology_conflicts": radiology_conflicts,
+            "radiology_uncertain_findings": radiology_uncertain,
             "unknown_range_findings": report_unknown_range,
             "total_extracted": len(report_findings) + len(qualitative_report_findings) + len(narrative_report_findings),
         },

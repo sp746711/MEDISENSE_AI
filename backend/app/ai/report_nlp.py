@@ -263,7 +263,7 @@ def classify_radiology_finding(text: str, term: str) -> str:
     clauses = re.split(r"[\n;.!?]+|\b(?:but|however|whereas|although)\b", source)
     states: list[str] = []
     uncertain_re = re.compile(
-        r"\b(?:possible|possibly|probable|probably|suggestive of|suspicious for|"
+        r"\b(?:possible|possibly|probable|probably|may|might|could|suggestive of|suspicious for|"
         r"cannot exclude|can't exclude|cannot be excluded|cannot rule out|"
         r"may represent|might represent|could represent|questionable for|"
         r"indeterminate|equivocal|concerning for|likely)\b"
@@ -737,6 +737,25 @@ def structure_report_text(
 
         # Explicit fracture assessment: preserve uncertainty and conflicts.
         fracture_state = classify_radiology_finding(cleaned_text, "fracture")
+        # A report may describe a possible fracture-equivalent fragment without
+        # using the word "fracture" in that same sentence (e.g. "may be a small
+        # avulsion fragment"), then separately say no definite acute fracture.
+        # Do not let that negative sentence erase the explicitly uncertain fragment.
+        fragment_uncertainty = re.search(
+            r"(?is)(?:\b(?:possible|possibly|may|might|could|cannot exclude|cannot rule out|indeterminate|equivocal|questionable)\b[^.\n]{0,100}\b(?:avulsion|ossific|bone)\s+fragment\b|"
+            r"\b(?:avulsion|ossific|bone)\s+fragment\b[^.\n]{0,100}\b(?:possible|possibly|may|might|could|indeterminate|equivocal|old injury|age is indeterminate)\b)",
+            cleaned_text,
+        )
+        explicit_confirmed_fracture = any(
+            not re.search(r"(?i)\b(?:no|without|not|never|cannot exclude)\b", clause)
+            and re.search(
+                r"(?i)\b(?:acute|new|definite|confirmed)\s+(?:\w+\s+){0,2}fracture\b|\bfracture\s+(?:is|was)\s+(?:identified|confirmed|present)\b",
+                clause,
+            )
+            for clause in re.split(r"[\n;.!?]+", cleaned_text)
+        )
+        if fragment_uncertainty and not explicit_confirmed_fracture and fracture_state in {"ABSENT", "UNKNOWN"}:
+            fracture_state = "UNCERTAIN"
         if fracture_state != "UNKNOWN":
             qualitative_findings.append({
                 "finding": "fracture",
@@ -787,10 +806,14 @@ def structure_report_text(
             ("joint effusion", "radiology", "musculoskeletal"),
             ("knee joint effusion", "radiology", "musculoskeletal"),
             ("tibial plateau fracture", "radiology/bone", "musculoskeletal"),
+            ("avulsion fragment", "radiology/bone", "musculoskeletal"),
+            ("ossific fragment", "radiology/bone", "musculoskeletal"),
             ("dislocation", "radiology/bone", "musculoskeletal"),
         ]
         for term, cat, dom in resp_terms:
             state = classify_radiology_finding(cleaned_text, term)
+            if term in {"avulsion fragment", "ossific fragment"} and fragment_uncertainty and not explicit_confirmed_fracture:
+                state = "UNCERTAIN"
             if state != "UNKNOWN":
                 qualitative_findings.append({
                     "finding": term,

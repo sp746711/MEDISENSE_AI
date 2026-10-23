@@ -397,6 +397,38 @@ def test_problem1_radiology_conflicting_statements_are_not_silently_confirmed():
     )
 
 
+
+def test_problem1_uncertain_ossific_and_avulsion_fragments_are_extracted_as_uncertain():
+    """Possible/old ossific fragments must remain uncertain, not confirmed fractures."""
+    text = (
+        "Findings: A tiny ossific fragment is seen near the lateral tibial plateau; "
+        "this may be a small avulsion fragment or may reflect an old injury. "
+        "Its age is indeterminate. No definite acute fracture is identified."
+    )
+    result = structure_report_text(text)
+    states = {item["finding"]: item["state"] for item in result.get("qualitative_findings", [])}
+    assert states.get("fracture") == "UNCERTAIN"
+    assert states.get("avulsion fragment") == "UNCERTAIN"
+    assert states.get("ossific fragment") == "UNCERTAIN"
+
+
+def test_problem1_knee_effusion_opposing_statements_are_conflicting():
+    """Opposing statements for the same effusion must be retained as a conflict."""
+    text = (
+        "Findings: A small knee joint effusion is present. "
+        "Impression: No significant knee joint effusion is identified."
+    )
+    result = structure_report_text(text)
+    findings = [
+        item for item in result.get("qualitative_findings", [])
+        if item.get("finding") in {"joint effusion", "knee joint effusion"}
+    ]
+    assert findings, f"Expected knee effusion findings; got {result.get('qualitative_findings', [])!r}"
+    assert any(item.get("state") == "CONFLICTING" for item in findings) or (
+        any(item.get("state") == "PRESENT" for item in findings)
+        and any(item.get("state") == "ABSENT" for item in findings)
+    ), f"Opposing effusion statements were not preserved: {findings!r}"
+
 def test_problem1_uncertain_radiology_does_not_enter_confirmed_supporting_evidence():
     """UNCERTAIN findings must not be presented as confirmed supporting evidence."""
     evidence = combine_evidence(

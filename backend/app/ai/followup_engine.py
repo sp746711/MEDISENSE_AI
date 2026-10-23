@@ -731,20 +731,27 @@ def apply_followup_answer(
                     s.setdefault("answered_followups", []).append(question_id)
                     return updated
 
-        matched = False
-        for s in updated:
-            if s.get("state") == "PRESENT":
-                s_name = s.get("symptom", "").lower()
-                if s_name in {"headache", "migraine", "abdominal pain", "belly pain"} or s.get("domain") in {"neurological", "gi"}:
-                    s["onset"] = onset_val
-                    s.setdefault("answered_followups", []).append(question_id)
-                    matched = True
-        if not matched:
-            for s in updated:
-                if s.get("state") == "PRESENT" and s.get("type") != "HISTORICAL" and s.get("symptom") not in {"gradual onset", "sudden onset"}:
-                    s["onset"] = onset_val
-                    s.setdefault("answered_followups", []).append(question_id)
-                    break
+        # A follow-up answer must update one finding, not every finding in the
+        # same clinical domain. Prefer a present, non-historical primary finding.
+        eligible = [
+            s for s in updated
+            if s.get("state") == "PRESENT"
+            and str(s.get("type", "")).upper() != "HISTORICAL"
+            and (s.get("symptom") or s.get("finding")) not in {"gradual onset", "sudden onset"}
+        ]
+        preferred_names = {"headache", "migraine", "abdominal pain", "belly pain", "stomach pain"}
+        selected = next(
+            (s for s in eligible
+             if str(s.get("symptom") or s.get("finding") or "").strip().lower() in preferred_names),
+            None,
+        )
+        if selected is None and eligible:
+            selected = eligible[0]
+        if selected is not None:
+            selected["onset"] = onset_val
+            selected.setdefault("answered_followups", [])
+            if question_id not in selected["answered_followups"]:
+                selected["answered_followups"].append(question_id)
         return updated
 
     # 3. Abdominal location mapping
@@ -768,16 +775,38 @@ def apply_followup_answer(
             loc_val = ans_str.upper()
             lat_val = None
 
-        matched = False
-        for s in updated:
-            s_name = s.get("symptom", "").lower()
-            if "abdominal" in s_name or "belly" in s_name or s.get("domain") == "gi":
-                s["location"] = loc_val
-                if lat_val:
-                    s["laterality"] = lat_val
-                s.setdefault("answered_followups", []).append(question_id)
-                matched = True
-        if not matched:
+        # Apply the location to one relevant abdominal complaint only. A
+        # single answer must not be copied onto unrelated GI findings (e.g.
+        # vomiting and diarrhea) or repeated across multiple symptom records.
+        abdominal_candidates = [
+            s for s in updated
+            if s.get("state") == "PRESENT"
+            and (
+                "abdominal" in str(s.get("symptom") or s.get("finding") or "").lower()
+                or "belly" in str(s.get("symptom") or s.get("finding") or "").lower()
+                or "stomach pain" in str(s.get("symptom") or s.get("finding") or "").lower()
+            )
+            and str(s.get("type", "")).upper() != "HISTORICAL"
+        ]
+        selected = None
+        if target_symptom:
+            t_clean = target_symptom.strip().lower()
+            selected = next(
+                (s for s in abdominal_candidates
+                 if str(s.get("symptom") or s.get("finding") or "").strip().lower() == t_clean),
+                None,
+            )
+        if selected is None and abdominal_candidates:
+            selected = abdominal_candidates[0]
+
+        if selected is not None:
+            selected["location"] = loc_val
+            if lat_val:
+                selected["laterality"] = lat_val
+            selected.setdefault("answered_followups", [])
+            if question_id not in selected["answered_followups"]:
+                selected["answered_followups"].append(question_id)
+        else:
             updated.append({
                 "finding": "abdominal location",
                 "symptom": "abdominal location",

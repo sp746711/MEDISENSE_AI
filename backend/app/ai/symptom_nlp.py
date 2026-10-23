@@ -1091,7 +1091,9 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     item_body_area = meta["body_area"]
                     # Musculoskeletal & Wrist injury qualifiers
                     if meta.get("domain") in {"musculoskeletal", "injury/trauma"} and state == "PRESENT":
-                        if "wrist" in clause_lower or "wrist" in full_text_lower:
+                        # Use this clause only; a wrist mention elsewhere must not
+                        # change the body area of an unrelated symptom.
+                        if "wrist" in clause_lower:
                             if meta.get("body_area") in {"extremity/joints", "musculoskeletal", "upper extremity", "unspecified"}:
                                 item_body_area = "wrist"
                         if not item_laterality:
@@ -1099,8 +1101,12 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                                 item_laterality = "RIGHT"
                             elif "left" in clause_lower:
                                 item_laterality = "LEFT"
-                            elif global_laterality and ("wrist" in clause_lower or item_body_area in {"wrist", "hand", "upper extremity"}):
-                                item_laterality = global_laterality
+                            else:
+                                # Laterality must be supported by the current clause.
+                                for lat_re, lat_val in LATERALITY_PATTERNS:
+                                    if lat_re.search(clause):
+                                        item_laterality = lat_val
+                                        break
 
                         if "moving" in clause_lower or "gripping" in clause_lower:
                             item_trigger = "moving or gripping objects"
@@ -1113,42 +1119,54 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
 
                     # Headache specific rich qualifiers
                     if canonical in {"headache", "migraine"} and state == "PRESENT":
-                        item_laterality = global_laterality
-                        item_quality = global_quality
+                        # Do not copy headache qualifiers from a different sentence.
+                        item_laterality = None
+                        for lat_re, lat_val in LATERALITY_PATTERNS:
+                            if lat_re.search(clause):
+                                item_laterality = lat_val
+                                break
+                        item_quality = None
+                        for q_re, q_val in QUALITY_PATTERNS:
+                            if q_re.search(clause):
+                                item_quality = q_val
+                                break
                         triggers = []
-                        if "bright light" in full_text_lower:
+                        if "bright light" in clause_lower:
                             triggers.append("bright light")
-                        if "loud sound" in full_text_lower:
+                        if "loud sound" in clause_lower:
                             triggers.append("loud sounds")
                         if triggers:
                             item_trigger = ", ".join(triggers)
-                        if "right" in clause_lower or "right side" in clause_lower:
+                        if re.search(r"\bright(?:[- ]sided| side)?\b", clause_lower):
                             item_laterality = "RIGHT"
 
                     # Photophobia / Phonophobia specific qualifiers (quality must remain None)
                     if canonical == "photophobia":
                         item_quality = None
-                        if "bright light" in clause_lower or "bright light" in full_text_lower:
+                        if "bright light" in clause_lower:
                             item_trigger = "bright light"
                             item_context = "exposure to bright light"
 
                     if canonical == "phonophobia":
                         item_quality = None
-                        if "loud sound" in clause_lower or "loud sound" in full_text_lower:
+                        if "loud sound" in clause_lower:
                             item_trigger = "loud sounds"
                             item_context = "exposure to loud sounds"
 
                     # Chest discomfort specific qualifiers
                     if canonical == "chest discomfort" and state == "PRESENT":
-                        if not item_trigger and "cough" in full_text_lower and "when coughing" in full_text_lower:
+                        if not item_trigger and "cough" in clause_lower and ("when coughing" in clause_lower or "on coughing" in clause_lower):
                             item_trigger = "coughing"
                             item_context = "when coughing"
 
                     # Distinguish current symptoms from historical/contextual findings
+                    # Historical language only applies when it locally precedes this
+                    # finding (or the lexicon explicitly marks it historical).
+                    historical_prefix = clause[:start]
                     is_historical = (
                         meta.get("type") == "HISTORICAL"
                         or canonical == "previous similar headache"
-                        or bool(re.search(r"\b(?:previous|previously|once or twice before|in the past|history of|prior to this)\b", clause, re.IGNORECASE))
+                        or bool(re.search(r"\b(?:previous|previously|once or twice before|in the past|history of|prior to this)\b", historical_prefix, re.IGNORECASE))
                     )
 
                     if is_historical:
@@ -1183,7 +1201,8 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         "trigger": item_trigger,
                         "domain": meta["domain"],
                         "onset": None,
-                        "context": item_context or clause,
+                        # Keep the fallback context local to the matched finding.
+                        "context": item_context or match.group(0),
                         "source": "user_input",
                     }
                     if is_historical:

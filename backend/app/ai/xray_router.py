@@ -149,81 +149,72 @@ class XRayModelRegistryEntry:
     validation_status: str
 
     def check_availability(self) -> tuple[bool, str]:
-        """Verify whether the configured checkpoint exists on disk and contains verified compatible weights."""
+        """Check that this region has a configured compatible model checkpoint.
+
+        A registry flag by itself is never enough to mark a model available. Chest
+        may use TorchXRayVision or XRAY_CHEST_CHECKPOINT; other regions require an
+        explicit checkpoint path, architecture and non-empty class-label mapping.
+        """
         if not self.is_supported:
-            return (
-                False,
-                f"Automated interpretation for {self.canonical_region} radiography is currently unsupported (no computer-vision model configured for this anatomical region).",
+            return False, (
+                f"Automated interpretation for {self.canonical_region} radiography is currently unsupported "
+                "because no compatible trained model is configured for this region."
             )
-        if not self.checkpoint_location:
-            return False, "Checkpoint path not configured."
 
         settings = get_settings()
+        architecture = (self.model_architecture or "").strip().lower()
+        labels = self.class_label_mapping or []
+        if not architecture:
+            return False, "model_architecture_not_configured: No model architecture is configured."
+        if not labels:
+            return False, "class_labels_not_configured: No output class labels are configured."
 
-        # DenseNet121 from TorchXRayVision loads its published pretrained weights
-        # through the library; it does not use this project's five-class ResNet
-        # checkpoint. Treat package availability as a routing check only, not proof
-        # of clinical validation or model accuracy.
-        if _uses_torchxrayvision():
+        if self.canonical_region == "chest" and _uses_torchxrayvision():
             try:
-                import torchxrayvision as xrv  # noqa: F401
+                import torchxrayvision  # noqa: F401
             except Exception as exc:
                 return False, (
                     "torchxrayvision_unavailable: TorchXRayVision could not be imported. "
                     f"Install/repair the package before selecting DenseNet121: {type(exc).__name__}: {exc}"
                 )
             return True, (
-                "TorchXRayVision DenseNet121 package is available. Pretrained research-model "
-                "weights are loaded by the inference service; outputs are not calibrated "
-                "probabilities and are not a clinical diagnosis."
+                "TorchXRayVision DenseNet121 package is importable. Runtime model loading and inference "
+                "must still succeed; outputs are research scores, not a clinical diagnosis."
             )
 
-        configured_path = (settings.xray_chest_checkpoint or "").strip()
+        if self.canonical_region != "chest" and "resnet18" not in architecture:
+            return False, (
+                "unsupported_model_architecture: This inference service supports configured ResNet18 "
+                "state-dict models for non-chest regions; the requested architecture is not implemented."
+            )
 
-        # Match XRayModelService.load_model() path resolution exactly. Previously the
-        # registry always prefixed relative paths with xray_model_path, while the
-        # inference service first accepted a relative path valid from the process CWD.
-        # That disagreement could report UNAVAILABLE even when inference could load it.
+        configured_path = ""
+        if self.canonical_region == "chest":
+            configured_path = (getattr(settings, "xray_chest_checkpoint", "") or "").strip()
         if configured_path:
             p = Path(configured_path).expanduser()
-            if p.is_absolute():
-                pass
-            elif p.exists():
-                # Respect a relative path already valid from the process working directory.
-                pass
-            else:
+            if not p.is_absolute() and not p.exists():
+                p = Path(settings.xray_model_path) / p
+        elif self.checkpoint_location:
+            p = Path(self.checkpoint_location).expanduser()
+            if not p.is_absolute():
                 p = Path(settings.xray_model_path) / p
         else:
-            p = Path(settings.xray_model_path) / self.checkpoint_location
+            return False, "checkpoint_path_not_configured: No checkpoint path is configured for this region."
 
         try:
             p = p.resolve()
         except (OSError, RuntimeError):
             p = p.absolute()
-
         if not p.exists():
-            return (
-                False,
-                f"checkpoint_path_not_found: Checkpoint file not found at {p}. "
-                "Check XRAY_CHEST_CHECKPOINT or place the trained weights at the configured model path.",
-            )
-        if not p.is_file():
-            return False, f"checkpoint_path_invalid: Checkpoint path is not a file: {p}"
-        try:
-            if p.stat().st_size == 0:
-                return False, f"checkpoint_path_invalid: Checkpoint file is empty: {p}"
-        except OSError as exc:
-            return False, f"checkpoint_path_unreadable: Cannot inspect checkpoint file {p}: {exc}"
+            return False, f"checkpoint_path_not_found: Trained checkpoint was not found at {p}."
+        if not p.is_file() or p.stat().st_size == 0:
+            return False, f"checkpoint_path_invalid: Checkpoint is not a non-empty file: {p}"
 
-        # Check that weights can be safely deserialized and that the classifier output
-        # dimension matches this registry entry. This is a structural check only; it
-        # does not validate training provenance or clinical performance.
-        valid, reason = verify_checkpoint_integrity(
-            p, expected_classes=len(self.class_label_mapping)
-        )
+        valid, reason = verify_checkpoint_integrity(p, expected_classes=len(labels))
         if not valid:
             return False, f"checkpoint_integrity_failed: {reason}"
-        return True, reason
+        return True, f"Checkpoint structurally verified: {p}"
 
     def to_dict(self) -> dict[str, Any]:
         available, avail_msg = self.check_availability()
@@ -739,8 +730,7 @@ REGION_ALIASES: dict[str, str] = {
     "hand": "hand",
     "hand x-ray": "hand",
     "hand xray": "hand",
-    "fingers": "hand",
-    "metacarpal": "hand",
+        "metacarpal": "hand",
     # Forearm
     "forearm": "forearm",
     "radius": "forearm",
@@ -772,8 +762,7 @@ REGION_ALIASES: dict[str, str] = {
     # Foot
     "foot": "foot",
     "feet": "foot",
-    "toes": "foot",
-    "metatarsal": "foot",
+        "metatarsal": "foot",
     # Pelvis
     "pelvis": "pelvis",
     "pelvic": "pelvis",
@@ -787,24 +776,23 @@ REGION_ALIASES: dict[str, str] = {
     "spine": "spine",
     "vertebra": "spine",
     "back": "spine",
-    "cervical spine": "spine",
-    "c-spine": "spine",
-    "cervical": "spine",
-    "neck spine": "spine",
-    "thoracic spine": "spine",
-    "t-spine": "spine",
-    "thoracic": "spine",
-    "dorsal spine": "spine",
-    "lumbar spine": "spine",
-    "l-spine": "spine",
-    "lumbar": "spine",
+    "cervical spine": "cervical spine",
+    "c-spine": "cervical spine",
+    "cervical": "cervical spine",
+    "neck spine": "cervical spine",
+    "thoracic spine": "thoracic spine",
+    "t-spine": "thoracic spine",
+    "dorsal spine": "thoracic spine",
+    "lumbar spine": "lumbar spine",
+    "l-spine": "lumbar spine",
+    "lumbar": "lumbar spine",
     "lumbosacral": "spine",
     "lower back": "spine",
     "low back": "spine",
-    "sacrum": "spine",
-    "coccyx": "spine",
-    "tailbone": "spine",
-    "sacrococcygeal": "spine",
+    "sacrum": "sacrum",
+    "coccyx": "sacrum",
+    "tailbone": "sacrum",
+    "sacrococcygeal": "sacrum",
     # Head & Neck
     "head": "skull",
     "skull": "skull",
@@ -860,11 +848,12 @@ REGION_ALIASES: dict[str, str] = {
 
 
 def normalize_region_name(raw_region: Optional[str]) -> tuple[str, bool]:
-    """Normalize an anatomical region conservatively.
+    """Normalize a region without silently choosing between multiple body parts.
 
-    Exact aliases are preferred. Compound phrases use whole-word boundaries and
-    longest aliases first to avoid accidental substring matches. Ambiguous terms
-    such as plain ``thoracic`` are not silently treated as chest or spine.
+    Exact aliases are preferred. A descriptive phrase is accepted only when its
+    recognized anatomical aliases resolve to one canonical region. If a phrase
+    mentions more than one region (for example, "chest and knee X-ray"), it is
+    rejected instead of routing it to whichever alias happens to be checked first.
     """
     if raw_region is None:
         return "unknown", False
@@ -881,14 +870,26 @@ def normalize_region_name(raw_region: Optional[str]) -> tuple[str, bool]:
     if cleaned in XRAY_MODEL_REGISTRY:
         return cleaned, True
 
+    matches: list[tuple[int, str]] = []
     for alias in sorted(REGION_ALIASES, key=len, reverse=True):
-        if not alias:
-            continue
         pattern = rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])"
         if re.search(pattern, cleaned):
-            return REGION_ALIASES[alias], True
+            matches.append((len(alias), REGION_ALIASES[alias]))
+
+    # Reject phrases that refer to multiple distinct anatomical regions.
+    canonical_matches = {canonical for _, canonical in matches}
+    if len(canonical_matches) == 1:
+        return next(iter(canonical_matches)), True
+    if len(canonical_matches) > 1:
+        logger.warning(
+            "Ambiguous X-ray region phrase rejected: '%s' -> %s",
+            raw_region,
+            sorted(canonical_matches),
+        )
+        return "unknown", False
 
     return cleaned, False
+
 
 
 def get_model_registry_entry(region: str) -> Optional[XRayModelRegistryEntry]:

@@ -148,18 +148,63 @@ async def upload_xray(
             # DenseNet121 is multi-label: it returns a list of finding scores
             # and intentionally leaves `prediction=None`. Legacy ResNet models
             # may still return a single prediction. Validate either output form.
+            if not isinstance(analysis, dict):
+                analysis = {
+                    "status": "unavailable",
+                    "message": "The X-ray model returned an invalid response.",
+                    "reason_code": "invalid_model_response",
+                }
+
             findings = _validated_findings(analysis.get("findings"))
-            has_single_prediction = analysis.get("prediction") is not None
+            raw_prediction = analysis.get("prediction")
+            # A prediction must be a non-empty label string. Do not treat arbitrary
+            # objects, numbers, or booleans as valid model output.
+            prediction_is_valid = isinstance(raw_prediction, str) and bool(raw_prediction.strip())
+            if prediction_is_valid:
+                raw_prediction = raw_prediction.strip()
+
+            # Prevent a model response for a different body region from being
+            # stored as a valid result for the region selected/routed by the user.
+            model_region = analysis.get("region")
+            region_matches = (
+                not isinstance(model_region, str)
+                or not model_region.strip()
+                or model_region.strip().casefold() == resolved_region.casefold()
+            )
             has_multilabel_findings = bool(findings)
-            valid_output = has_single_prediction or has_multilabel_findings
-            if analysis.get("status") != "completed" or not valid_output:
+            valid_output = prediction_is_valid or has_multilabel_findings
+            if (
+                analysis.get("status") != "completed"
+                or not valid_output
+                or not region_matches
+            ):
                 analysis["status"] = "unavailable"
                 analysis["prediction"] = None
                 analysis["confidence_if_valid"] = None
                 analysis["findings"] = []
+                if not region_matches:
+                    analysis["reason_code"] = "model_region_mismatch"
+                    analysis["message"] = (
+                        "The model response did not match the selected X-ray body region. "
+                        "No prediction was saved."
+                    )
             else:
                 # Use the normalized/validated representation from this point on.
+                analysis["prediction"] = raw_prediction if prediction_is_valid else None
                 analysis["findings"] = findings
+
+            # Confidence is optional metadata. Reject malformed or non-finite values
+            # rather than returning misleading confidence information.
+            raw_confidence = analysis.get("confidence_if_valid")
+            try:
+                confidence_num = float(raw_confidence) if raw_confidence is not None else None
+            except (TypeError, ValueError, OverflowError):
+                confidence_num = None
+            if confidence_num is not None and (
+                not math.isfinite(confidence_num) or confidence_num < 0.0 or confidence_num > 1.0
+            ):
+                confidence_num = None
+            analysis["confidence_if_valid"] = confidence_num
 
             # If the model service returns a generic unavailable message, keep
             # the registry's specific checkpoint/routing diagnosis visible.
@@ -177,6 +222,10 @@ async def upload_xray(
 
         analysis_status = analysis.get("status") or "unavailable"
         prediction = analysis.get("prediction")
+        if not isinstance(prediction, str) or not prediction.strip():
+            prediction = None
+        else:
+            prediction = prediction.strip()
         findings = _validated_findings(analysis.get("findings"))
         successful_inference = analysis_status == "completed" and (
             prediction is not None or bool(findings)
@@ -188,7 +237,15 @@ async def upload_xray(
             source = "unavailable"
             analysis_status = "unavailable"
         else:
-            confidence = analysis.get("confidence_if_valid")
+            raw_confidence = analysis.get("confidence_if_valid")
+            try:
+                confidence = float(raw_confidence) if raw_confidence is not None else None
+            except (TypeError, ValueError, OverflowError):
+                confidence = None
+            if confidence is not None and (
+                not math.isfinite(confidence) or confidence < 0.0 or confidence > 1.0
+            ):
+                confidence = None
             source = "trained_model"
 
         # Do not silently discard DenseNet121's output. The DB model must expose

@@ -1,56 +1,94 @@
+
 /**
  * Backend-Driven X-Ray Body Region Utility.
  *
- * All anatomical regions, canonical identifiers, search aliases, and model capabilities
- * are fetched dynamically from the backend API (/assessments/xray/catalogue).
- * This module provides case-insensitive search and filtering helpers without hardcoding
- * a separate master catalogue.
+ * Region names, canonical identifiers, aliases, and model capabilities are supplied
+ * by the backend catalogue endpoint. This module only normalizes, searches, and
+ * resolves those supplied records; it does not invent regions or model support.
  */
+
+function toText(value) {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : '';
+}
+
+function normalizeSearchText(value) {
+  return toText(value)
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function getRegionSearchFields(region) {
+  if (!region || typeof region !== 'object' || Array.isArray(region)) {
+    return [];
+  }
+
+  const aliases = Array.isArray(region.aliases)
+    ? region.aliases
+    : typeof region.aliases === 'string'
+      ? [region.aliases]
+      : [];
+
+  return [
+    region.name,
+    region.id,
+    region.canonical_region,
+    ...aliases,
+  ]
+    .map(normalizeSearchText)
+    .filter(Boolean);
+}
 
 /**
- * Filter a backend-provided list of body regions based on a user's search query.
- * Matches against region name, canonical identifier, and backend aliases.
- *
- * @param {Array} regions - List of region objects returned from backend
- * @param {string} query - Search string entered by user
- * @returns {Array} Matching region items (empty when query is blank)
+ * Search backend-provided region records.
+ * Every query token must match at least one searchable field.
  */
 export function filterBackendRegions(regions = [], query = '') {
-  const cleanQ = (query || '').toLowerCase().trim();
-  if (!cleanQ) return [];
+  if (!Array.isArray(regions)) return [];
 
-  // Split query into tokens for multi-term search
-  const tokens = cleanQ.split(/\s+/).filter(Boolean);
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) return [];
 
-  return (regions || []).filter((reg) => {
-    const nameNorm = (reg.name || '').toLowerCase();
-    const idNorm = (reg.id || '').toLowerCase();
-    const canonNorm = (reg.canonical_region || '').toLowerCase();
-    const aliases = (reg.aliases || []).map((a) => (a || '').toLowerCase());
+  const tokens = normalizedQuery.split(' ').filter(Boolean);
+  if (!tokens.length) return [];
 
-    return tokens.every((token) => {
-      return (
-        nameNorm.includes(token) ||
-        idNorm.includes(token) ||
-        canonNorm.includes(token) ||
-        aliases.some((alias) => alias.includes(token))
-      );
-    });
+  return regions.filter((region) => {
+    const fields = getRegionSearchFields(region);
+    if (!fields.length) return false;
+
+    return tokens.every((token) =>
+      fields.some((field) => field.includes(token))
+    );
   });
 }
 
 /**
- * Find a specific region item from the backend-provided list by canonical region or ID.
+ * Find a region by canonical identifier, ID, name, or alias.
+ * Exact normalized matches prevent accidental region substitutions.
  */
 export function findRegionInList(regions = [], target = '') {
-  if (!target) return null;
-  const clean = target.toLowerCase().trim();
-  return (
-    (regions || []).find(
-      (r) =>
-        (r.canonical_region && r.canonical_region.toLowerCase() === clean) ||
-        (r.id && r.id.toLowerCase() === clean) ||
-        (r.name && r.name.toLowerCase() === clean)
-    ) || null
+  if (!Array.isArray(regions)) return null;
+
+  const normalizedTarget = normalizeSearchText(target);
+  if (!normalizedTarget) return null;
+
+  const validRegions = regions.filter(
+    (region) =>
+      region &&
+      typeof region === 'object' &&
+      !Array.isArray(region)
   );
+
+  const exactMatch = validRegions.find((region) =>
+    getRegionSearchFields(region).some(
+      (field) => field === normalizedTarget
+    )
+  );
+
+  return exactMatch || null;
 }

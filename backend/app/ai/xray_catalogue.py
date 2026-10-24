@@ -631,7 +631,8 @@ def get_xray_catalogue_with_model_status() -> list[dict[str, Any]]:
                 if reg_entry and reg_entry.is_supported:
                     is_avail, avail_msg = reg_entry.check_availability()
                     status_label = "available" if is_avail else "configured_unavailable"
-                    badge_label = "Available (ResNet-18)" if is_avail else "Model Configured — Weights Unavailable"
+                    architecture = (reg_entry.model_architecture or "configured model").replace("_", " ").replace("-", " ").strip() if reg_entry else "configured model"
+                    badge_label = f"Available ({architecture})" if is_avail else "Model Configured — Weights Unavailable"
                     if is_avail:
                         notice = (
                             f"A vision model is available for {reg_entry.display_name} radiography. "
@@ -675,152 +676,121 @@ def get_xray_catalogue_with_model_status() -> list[dict[str, Any]]:
     return enriched_catalogue
 
 
-# Clean, simplified searchable body-regions catalogue for streamlined user search
-SEARCHABLE_BODY_REGIONS: list[dict[str, Any]] = [
-    {
-        "id": "skull",
-        "name": "Skull / Cranium X-Ray",
-        "canonical_region": "skull",
-        "aliases": ["skull", "head x-ray", "cranium", "calvarium", "braincase", "skull x-ray"],
-    },
-    {
-        "id": "chest",
-        "name": "Chest",
-        "canonical_region": "chest",
-        "aliases": ["chest", "lungs", "cxr", "thorax", "pulmonary", "ribs", "sternum", "breathing", "heart"],
-    },
-    {
-        "id": "spine",
-        "name": "Spine",
-        "canonical_region": "spine",
-        "aliases": [
-            "spine", "back", "neck", "cervical", "c-spine", "thoracic",
-            "t-spine", "lumbar", "l-spine", "low back", "lower back",
-            "sacrum", "tailbone", "coccyx"
-        ],
-    },
-    {
-        "id": "arm",
-        "name": "Arm",
-        "canonical_region": "humerus",
-        "aliases": ["arm", "upper arm", "humerus", "bicep"],
-    },
-    {
-        "id": "shoulder",
-        "name": "Shoulder",
-        "canonical_region": "shoulder",
-        "aliases": ["shoulder", "clavicle", "collarbone", "scapula", "rotator cuff"],
-    },
-    {
-        "id": "elbow",
-        "name": "Elbow",
-        "canonical_region": "elbow",
-        "aliases": ["elbow", "olecranon", "cubital"],
-    },
-    {
-        "id": "forearm",
-        "name": "Forearm",
-        "canonical_region": "forearm",
-        "aliases": ["forearm", "radius", "ulna", "lower arm"],
-    },
-    {
-        "id": "wrist",
-        "name": "Wrist",
-        "canonical_region": "wrist",
-        "aliases": ["wrist", "carpal", "scaphoid", "colles"],
-    },
-    {
-        "id": "hand",
-        "name": "Hand",
-        "canonical_region": "hand",
-        "aliases": ["hand", "palm", "metacarpal", "boxer"],
-    },
-    {
-        "id": "fingers",
-        "name": "Fingers / Thumb",
-        "canonical_region": "fingers",
-        "aliases": ["fingers", "finger", "thumb", "digits", "pinky", "phalanges"],
-    },
-    {
-        "id": "abdomen",
-        "name": "Abdomen",
-        "canonical_region": "abdomen",
-        "aliases": ["abdomen", "belly", "stomach", "tummy", "kub", "bowel", "gut"],
-    },
-    {
-        "id": "pelvis",
-        "name": "Pelvis",
-        "canonical_region": "pelvis",
-        "aliases": ["pelvis", "pelvic", "iliac", "pubic", "pelvic ring"],
-    },
-    {
-        "id": "hip",
-        "name": "Hip",
-        "canonical_region": "hip",
-        "aliases": ["hip", "groin", "femoral neck", "acetabulum"],
-    },
-    {
-        "id": "femur",
-        "name": "Femur / Thigh",
-        "canonical_region": "femur",
-        "aliases": ["femur", "thigh", "upper leg"],
-    },
-    {
-        "id": "knee",
-        "name": "Knee",
-        "canonical_region": "knee",
-        "aliases": ["knee", "patella", "kneecap"],
-    },
-    {
-        "id": "lower_leg",
-        "name": "Lower Leg",
-        "canonical_region": "lower leg",
-        "aliases": ["lower leg", "shin", "tibia", "fibula", "leg"],
-    },
-    {
-        "id": "ankle",
-        "name": "Ankle",
-        "canonical_region": "ankle",
-        "aliases": ["ankle", "malleolus", "mortise"],
-    },
-    {
-        "id": "foot",
-        "name": "Foot",
-        "canonical_region": "foot",
-        "aliases": ["foot", "feet", "metatarsal", "midfoot", "foot x-ray"],
-    },
-    {
-        "id": "sinuses",
-        "name": "Sinuses",
-        "canonical_region": "sinuses",
-        "aliases": ["sinus", "sinuses", "paranasal", "nasal"],
-    },
-    {
-        "id": "facial_bones",
-        "name": "Facial Bones",
-        "canonical_region": "facial bones",
-        "aliases": ["face", "facial", "cheekbone", "jaw", "mandible", "chin", "orbits"],
-    },
-    {
-        "id": "ribs",
-        "name": "Ribs",
-        "canonical_region": "ribs",
-        "aliases": ["ribs", "rib", "ribcage", "chest wall"],
-    },
-]
+# Searchable body-region catalogue.
+#
+# IMPORTANT:
+# - canonical_region values must match the model router registry exactly.
+# - This list is generated from the detailed catalogue to prevent the UI's
+#   autocomplete list drifting out of sync with available examination types.
+# - Catalogue presence is NOT model support; runtime support is checked below.
+_REGION_DISPLAY_NAMES: dict[str, str] = {
+    "skull": "Skull / Cranium",
+    "chest": "Chest",
+    "ribs": "Ribs",
+    "sternum": "Sternum",
+    "clavicle": "Clavicle",
+    "cervical spine": "Cervical Spine",
+    "thoracic spine": "Thoracic Spine",
+    "lumbar spine": "Lumbar Spine",
+    "sacrum": "Sacrum & Coccyx",
+    "shoulder": "Shoulder",
+    "humerus": "Humerus / Upper Arm",
+    "elbow": "Elbow",
+    "forearm": "Forearm",
+    "wrist": "Wrist",
+    "hand": "Hand",
+    "fingers": "Fingers / Thumb",
+    "abdomen": "Abdomen",
+    "pelvis": "Pelvis",
+    "hip": "Hip",
+    "femur": "Femur / Thigh",
+    "knee": "Knee",
+    "lower leg": "Lower Leg",
+    "ankle": "Ankle",
+    "foot": "Foot",
+    "calcaneus": "Calcaneus / Heel",
+    "toes": "Toes",
+    "facial bones": "Facial Bones",
+    "mandible": "Mandible / Jaw",
+    "sinuses": "Paranasal Sinuses",
+    "neck": "Soft Tissue Neck",
+}
+
+
+def _normalise_search_text(value: Any) -> str:
+    """Normalise search text without turning a partial query into a region."""
+    import re
+
+    text = str(value or "").strip().lower()
+    text = text.replace("&", " and ")
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _build_searchable_body_regions() -> list[dict[str, Any]]:
+    """Flatten all exam types into unique canonical regions with merged aliases."""
+    by_region: dict[str, dict[str, Any]] = {}
+
+    for main_region in ANATOMICAL_CATALOGUE:
+        for subregion in main_region.get("subregions", []):
+            for xray_type in subregion.get("xray_types", []):
+                canonical = str(xray_type.get("canonical_region") or "").strip().lower()
+                if not canonical:
+                    continue
+
+                item = by_region.setdefault(
+                    canonical,
+                    {
+                        "id": canonical.replace(" ", "_"),
+                        "name": _REGION_DISPLAY_NAMES.get(
+                            canonical, canonical.replace("_", " ").title()
+                        ),
+                        "canonical_region": canonical,
+                        "aliases": [],
+                    },
+                )
+                aliases = item["aliases"]
+                for alias in (
+                    canonical,
+                    xray_type.get("name"),
+                    *xray_type.get("aliases", []),
+                    subregion.get("name"),
+                    *subregion.get("aliases", []),
+                    main_region.get("name"),
+                    *main_region.get("aliases", []),
+                ):
+                    if isinstance(alias, str) and alias.strip():
+                        if alias not in aliases:
+                            aliases.append(alias)
+
+    return sorted(by_region.values(), key=lambda item: (item["name"].lower(), item["canonical_region"]))
+
+
+SEARCHABLE_BODY_REGIONS: list[dict[str, Any]] = _build_searchable_body_regions()
 
 
 def get_backend_body_regions() -> list[dict[str, Any]]:
-    """Return backend-driven list of distinct body regions with live model status and search aliases."""
-    results = []
+    """Return all catalogue regions, exact registry keys, and live model status."""
+    results: list[dict[str, Any]] = []
+
     for item in SEARCHABLE_BODY_REGIONS:
         canon = item["canonical_region"]
         entry = get_model_registry_entry(canon)
-        is_sup = bool(entry and entry.is_supported)
-        is_avail = False
-        if entry and is_sup:
-            is_avail, _ = entry.check_availability()
-            if is_avail:
+        is_supported = bool(entry and entry.is_supported)
+        is_available = False
+
+        if entry and is_supported:
+            try:
+                is_available, availability_message = entry.check_availability()
+            except Exception as exc:
+                # A catalogue request should remain usable even if optional model
+                # dependencies are broken. Never represent the model as available.
+                is_available = False
+                availability_message = (
+                    f"Model availability check failed: {type(exc).__name__}."
+                )
+
+            if is_available:
                 notice = (
                     f"A vision model is available for {entry.display_name} radiography. "
                     "Its output is assistive screening, not a confirmed diagnosis."
@@ -828,29 +798,38 @@ def get_backend_body_regions() -> list[dict[str, Any]]:
                 model_status = "available"
             else:
                 notice = (
-                    f"A model is configured for {entry.display_name} radiography, but usable weights "
-                    "or runtime availability were not confirmed. No image interpretation should be claimed."
+                    f"A model is configured for {entry.display_name} radiography, but usable "
+                    "weights or runtime availability were not confirmed. No image interpretation "
+                    "should be claimed."
                 )
                 model_status = "configured_unavailable"
         else:
+            availability_message = (
+                "No compatible trained model is configured for this anatomical region."
+            )
             notice = (
-                f"Automated AI vision inference is unsupported for {item['name']} radiography. "
-                "The image may be retained for the assessment, but no AI image finding will be generated."
+                f"Automated AI vision inference is currently unsupported for {item['name']} "
+                "radiography. The image may be retained for the assessment, but no AI image "
+                "finding will be generated."
             )
             model_status = "unsupported"
 
-        results.append({
-            "id": item["id"],
-            "name": item["name"],
-            "canonical_region": canon,
-            "aliases": item["aliases"],
-            "is_supported": is_sup,
-            "is_available": is_avail,
-            "model_status": model_status,
-            "model_notice": notice,
-            "status_note": (
-                "Model availability is checked at request time; catalogue inclusion does not imply model support."
-            ),
-        })
-    return results
+        results.append(
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "canonical_region": canon,
+                "aliases": item["aliases"],
+                "is_supported": is_supported,
+                "is_available": bool(is_available),
+                "model_status": model_status,
+                "model_notice": notice,
+                "availability_message": availability_message,
+                "status_note": (
+                    "Catalogue inclusion does not imply model support. Model availability is "
+                    "checked at request time."
+                ),
+            }
+        )
 
+    return results

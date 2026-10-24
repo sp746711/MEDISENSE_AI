@@ -153,7 +153,7 @@ def build_resnet18(num_classes: int = len(CHEST_CLASSES)) -> nn.Module:
 
 
 class XRayModelService:
-    """Region-aware chest X-ray model service.
+    """Region-aware X-ray model service with strict model/region compatibility guards.
 
     Configure XRAY_DEFAULT_MODEL=chest_densenet121 to use TorchXRayVision's
     pretrained multi-label model. The default remains chest_resnet18 to avoid
@@ -172,29 +172,61 @@ class XRayModelService:
         self._checkpoint_path: Optional[str] = None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._xrv = None
+        self._active_region = "chest"
+        self._active_classes = list(CHEST_CLASSES)
 
     @property
     def configured_model(self) -> str:
         value = getattr(self.settings, "xray_default_model", None) or "chest_resnet18"
         return str(value).strip().lower()
 
-    def load_model(self) -> bool:
-        """Load only the selected provider; never silently swap model types."""
+    def load_model(self, region: str = "chest") -> bool:
+        """Load a model explicitly configured for the requested anatomical region.
+
+        TorchXRayVision is chest-only. Other regions may use a region-specific
+        ResNet18 state_dict only when the registry declares labels, preprocessing,
+        architecture and a checkpoint. No model is silently reused across regions.
+        """
+        canonical_region, recognized = normalize_region_name(region)
+        entry = get_model_registry_entry(canonical_region) if recognized else None
         self._load_failure_code = None
         self._load_failure_reason = None
         self._model = None
         self._loaded = False
+        self._provider = None
+        self._xrv = None
+        self.model_version = None
+        # Clear region-specific diagnostics so a failed load cannot expose a
+        # checkpoint path left over from a previous region.
+        self._checkpoint_path = None
+        self._active_region = canonical_region
+        self._active_classes = list(entry.class_label_mapping) if entry else []
 
-        if self.configured_model in {"chest_densenet121", "densenet121", "torchxrayvision"}:
-            return self._load_torchxrayvision()
-        if self.configured_model not in {"chest_resnet18", "resnet18"}:
-            self._load_failure_code = "unknown_model_provider"
+        if not entry or not entry.is_supported:
+            self._load_failure_code = "unsupported_region"
             self._load_failure_reason = (
-                f"Unsupported XRAY_DEFAULT_MODEL value: {self.configured_model}"
+                f"No compatible trained image model is configured for region '{canonical_region}'."
             )
-            logger.warning("%s", self._load_failure_reason)
             return False
-        return self._load_resnet_checkpoint()
+
+        if canonical_region == "chest" and self.configured_model in {
+            "chest_densenet121", "densenet121", "torchxrayvision",
+            "torch_xray_vision", "xrv_densenet121",
+        }:
+            return self._load_torchxrayvision()
+
+        architecture = (entry.model_architecture or "").strip().lower()
+        if "resnet18" not in architecture:
+            self._load_failure_code = "unsupported_model_architecture"
+            self._load_failure_reason = (
+                f"Model architecture '{entry.model_architecture}' is not implemented for {canonical_region}."
+            )
+            return False
+        if not self._active_classes:
+            self._load_failure_code = "class_labels_not_configured"
+            self._load_failure_reason = f"No class labels are configured for {canonical_region}."
+            return False
+        return self._load_resnet_checkpoint(entry)
 
     def _load_torchxrayvision(self) -> bool:
         """Load pretrained TorchXRayVision DenseNet121 and its published labels."""
@@ -232,40 +264,46 @@ class XRayModelService:
             logger.warning("TorchXRayVision DenseNet121 unavailable: %s", exc)
             return False
 
-    def _load_resnet_checkpoint(self) -> bool:
-        """Load the existing 5-class ResNet only from a verified local checkpoint."""
-        configured_checkpoint = (getattr(self.settings, "xray_chest_checkpoint", "") or "").strip()
-        model_root = Path(self.settings.xray_model_path).expanduser()
+    def _load_resnet_checkpoint(self, entry=None) -> bool:
+        """Load a region-specific ResNet18 state_dict after structural validation."""
+        region = self._active_region
+        classes = self._active_classes
+        if entry is None:
+            entry = get_model_registry_entry(region)
+        if not entry or not classes:
+            self._load_failure_code = "model_configuration_incomplete"
+            self._load_failure_reason = f"Missing registry entry or class labels for {region}."
+            return False
 
+        configured_checkpoint = ""
+        if region == "chest":
+            configured_checkpoint = (getattr(self.settings, "xray_chest_checkpoint", "") or "").strip()
+        model_root = Path(self.settings.xray_model_path).expanduser()
         if configured_checkpoint:
             configured_path = Path(configured_checkpoint).expanduser()
-            if configured_path.is_absolute():
-                path = configured_path
-            elif configured_path.exists():
+            if configured_path.is_absolute() or configured_path.exists():
                 path = configured_path
             else:
                 path = model_root / configured_path
+        elif entry.checkpoint_location:
+            configured_path = Path(entry.checkpoint_location).expanduser()
+            path = configured_path if configured_path.is_absolute() else model_root / configured_path
         else:
-            path = model_root / "chest" / "model.pt"
+            self._load_failure_code = "checkpoint_path_not_configured"
+            self._load_failure_reason = f"No checkpoint path is configured for region '{region}'."
+            return False
 
         self._checkpoint_path = str(path.resolve(strict=False))
         if not path.exists():
-            self._load_failure_code = (
-                "checkpoint_path_not_found" if configured_checkpoint else "missing_checkpoint"
-            )
-            self._load_failure_reason = (
-                f"Configured X-ray checkpoint does not exist: {self._checkpoint_path}"
-                if configured_checkpoint
-                else f"No X-ray checkpoint is configured and the default checkpoint does not exist at {self._checkpoint_path}."
-            )
+            self._load_failure_code = "checkpoint_path_not_found"
+            self._load_failure_reason = f"Configured {region} X-ray checkpoint does not exist: {self._checkpoint_path}"
             logger.info("%s", self._load_failure_reason)
             return False
-
-        valid, reason = verify_checkpoint_integrity(path, expected_classes=len(CHEST_CLASSES))
+        valid, reason = verify_checkpoint_integrity(path, expected_classes=len(classes))
         if not valid:
             self._load_failure_code = "checkpoint_integrity_failed"
             self._load_failure_reason = str(reason)
-            logger.warning("Checkpoint integrity verification failed: %s", reason)
+            logger.warning("Checkpoint integrity verification failed for %s: %s", region, reason)
             return False
 
         try:
@@ -275,25 +313,21 @@ class XRayModelService:
             try:
                 import torchvision.models as models
                 model = models.resnet18(weights=None)
-                model.fc = nn.Linear(model.fc.in_features, len(CHEST_CLASSES))
+                model.fc = nn.Linear(model.fc.in_features, len(classes))
             except Exception:
-                model = build_resnet18(num_classes=len(CHEST_CLASSES))
-
+                model = build_resnet18(num_classes=len(classes))
             if not isinstance(loaded, dict):
                 raise ValueError("Checkpoint must be a state_dict or contain one.")
             state_dict = loaded.get("state_dict", loaded.get("model_state_dict", loaded))
             if not isinstance(state_dict, dict) or not state_dict:
                 raise ValueError("Checkpoint does not contain a valid state dictionary.")
             if all(isinstance(key, str) for key in state_dict):
-                state_dict = {
-                    key[7:] if key.startswith("module.") else key: value
-                    for key, value in state_dict.items()
-                }
+                state_dict = {key[7:] if key.startswith("module.") else key: value for key, value in state_dict.items()}
             model.load_state_dict(state_dict, strict=True)
             self._model = model.to(self.device)
             self._model.eval()
             self._provider = "resnet18"
-            self.model_version = f"chest_resnet18@{path.name}"
+            self.model_version = f"{region}_resnet18@{path.name}"
             self._loaded = True
             self._load_failure_code = None
             self._load_failure_reason = None
@@ -301,17 +335,20 @@ class XRayModelService:
         except Exception as exc:
             self._load_failure_code = "checkpoint_load_failed"
             self._load_failure_reason = f"{type(exc).__name__}: {exc}"
-            logger.error("Failed to load ResNet checkpoint: %s", exc)
+            logger.error("Failed to load %s ResNet checkpoint: %s", region, exc)
             self._model = None
             self._loaded = False
             self.model_version = None
             self._provider = None
             return False
 
-    def is_available(self) -> bool:
-        if not self._loaded:
-            self.load_model()
-        return self._loaded
+    def is_available(self, region: str = "chest") -> bool:
+        canonical, recognized = normalize_region_name(region)
+        if not recognized:
+            return False
+        if self._loaded and self._active_region == canonical:
+            return True
+        return self.load_model(canonical)
 
     def preprocess_image(self, image_path: str) -> Optional[torch.Tensor]:
         """Preprocess an image for the existing RGB/ImageNet ResNet model."""
@@ -379,14 +416,41 @@ class XRayModelService:
 
     def analyze(self, image_path: str, region: Optional[str] = None) -> dict[str, Any]:
         """Run the selected model or return an explicit unavailable result."""
-        raw_region = (region or "").strip().lower()
-        canonical_region, _ = normalize_region_name(raw_region)
-        registry_entry = get_model_registry_entry(canonical_region)
+        raw_region = (region or "").strip()
+        canonical_region, recognized = normalize_region_name(raw_region)
+        registry_entry = get_model_registry_entry(canonical_region) if recognized else None
         display_region = (
             registry_entry.display_name
             if registry_entry
-            else (canonical_region if canonical_region != "unknown" else "unknown")
+            else (canonical_region if canonical_region != "unknown" else "the selected anatomical region")
         )
+
+        if not recognized or not registry_entry:
+            return self._unavailable(
+                canonical_region,
+                "unrecognized_region",
+                "The selected X-ray body region is missing or could not be recognized.",
+                message=(
+                    f"X-ray received. The selected body region '{raw_region or 'unknown'}' could not be matched "
+                    "to a configured region. Please select a specific body region."
+                ),
+            )
+
+        if not registry_entry.is_supported:
+            return self._unavailable(
+                canonical_region,
+                "unsupported_region",
+                f"Automated interpretation for {display_region} radiography is not configured.",
+                message=(
+                    f"X-ray received. Automated image interpretation for {display_region} is currently unavailable "
+                    "because no compatible trained model is configured for this region. The image is not being "
+                    "sent through the chest model. Upload the associated radiology report for text-based analysis."
+                ),
+            )
+
+        # A non-chest region can only reach inference if its registry entry
+        # explicitly declares a compatible region-specific model and checkpoint.
+        # The chest-only TorchXRayVision provider is checked again before inference.
 
         try:
             image_file = Path(image_path)
@@ -402,36 +466,30 @@ class XRayModelService:
                 message="The uploaded X-ray file could not be read. Please upload a valid PNG or JPEG image.",
             )
 
-        if not registry_entry or not registry_entry.is_supported:
-            region_name = display_region if display_region != "unknown" else "this anatomical region"
-            return self._unavailable(
-                canonical_region,
-                "unsupported_region",
-                f"Automated interpretation for {region_name} radiography is not supported.",
-                message=(
-                    f"X-ray received. Automated interpretation for {region_name} X-ray is currently unavailable. "
-                    "If you have the associated radiology report, upload it for supported text-based analysis."
-                ),
-            )
-
-        if not self.is_available():
+        if not self.is_available(canonical_region):
             failure_code = self._load_failure_code or "model_unavailable"
             failure_reason = self._load_failure_reason or "Model could not be loaded."
             is_development = str(getattr(self.settings, "app_env", "development")).lower() in {
                 "development", "dev", "local"
             }
-            message = DEFAULT_UNAVAILABLE_MESSAGE
+            message = (
+                f"X-ray received. The {display_region} image model is not available. "
+                "No prediction was generated; verify the region-specific trained checkpoint and model configuration."
+            )
             if is_development:
                 message += f" Diagnostic: {failure_code}: {failure_reason}"
             result = self._unavailable(
-                "chest", failure_code, failure_reason, message=message
+                canonical_region, failure_code, failure_reason, message=message
             )
             result["checkpoint_path"] = self._checkpoint_path
             return result
 
         if self._provider == "torchxrayvision":
+            # This provider is only valid for chest radiographs.
+            if canonical_region != "chest":
+                return self._unavailable(canonical_region, "provider_region_mismatch", "TorchXRayVision provider is chest-only.")
             return self._analyze_torchxrayvision(image_path)
-        return self._analyze_resnet(image_path)
+        return self._analyze_resnet(image_path, canonical_region, list(self._active_classes))
 
     def _analyze_torchxrayvision(self, image_path: str) -> dict[str, Any]:
         tensor = self.preprocess_torchxrayvision(image_path)
@@ -508,11 +566,12 @@ class XRayModelService:
                 self.model_version,
             )
 
-    def _analyze_resnet(self, image_path: str) -> dict[str, Any]:
+    def _analyze_resnet(self, image_path: str, region: str = "chest", classes: Optional[list[str]] = None) -> dict[str, Any]:
         tensor = self.preprocess_image(image_path)
+        classes = list(classes or self._active_classes or CHEST_CLASSES)
         if tensor is None:
             return self._unavailable(
-                "chest", "preprocessing_failed",
+                region, "preprocessing_failed",
                 "Unable to decode and preprocess image pixels.", self.model_version,
                 "Image preprocessing failed. Please verify the image file format.",
             )
@@ -521,10 +580,10 @@ class XRayModelService:
                 outputs = self._model(tensor)
                 if not isinstance(outputs, torch.Tensor) or outputs.ndim != 2:
                     raise ValueError("Model output must be shaped [batch, classes].")
-                if outputs.shape[0] != 1 or outputs.shape[1] != len(CHEST_CLASSES):
+                if outputs.shape[0] != 1 or outputs.shape[1] != len(classes):
                     raise ValueError(
                         f"Model output shape {tuple(outputs.shape)} does not match "
-                        f"one image and {len(CHEST_CLASSES)} configured classes."
+                        f"one image and {len(classes)} configured classes for {region}."
                     )
                 probs_tensor = torch.softmax(outputs, dim=1)[0]
                 if not torch.isfinite(probs_tensor).all():
@@ -534,7 +593,7 @@ class XRayModelService:
                 confidence = float(probs[pred_idx])
                 if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
                     raise ValueError("Model produced an invalid confidence score.")
-                finding = CHEST_CLASSES[pred_idx]
+                finding = classes[pred_idx]
 
             artifact = None
             try:
@@ -547,7 +606,7 @@ class XRayModelService:
 
             return {
                 "status": "completed",
-                "region": "chest",
+                "region": region,
                 "model_version": self.model_version,
                 "prediction": finding,
                 "findings": [{"label": finding, "model_score": round(confidence, 5)}],
@@ -562,7 +621,7 @@ class XRayModelService:
         except Exception as exc:
             logger.warning("ResNet inference failed: %s", exc)
             return self._unavailable(
-                "chest", "inference_failed",
+                region, "inference_failed",
                 "Inference could not be completed. No prediction or confidence score is available.",
                 self.model_version,
             )

@@ -12,11 +12,12 @@ import re
 from typing import Any
 
 PATHWAYS = ("EMERGENCY", "CONSULTATION", "MILD")
-RULES_VERSION = "triage-rules-v2.2"
+RULES_VERSION = "triage-rules-v2.6"
 
 ALL_RULES = [
     "rule_e1_chest_pain_present",
     "rule_e2_dyspnea_with_chest_pain",
+    "rule_c6_breathing_difficulty_needs_assessment",
     "rule_e3_severe_acute_presentation",
     "rule_e4_critical_glycemic_emergency",
     "rule_e4_severe_critical_anemia",
@@ -34,11 +35,119 @@ def _text(value: Any) -> str:
     return value.strip().lower() if isinstance(value, str) else ""
 
 
+def _symptom_key(value: Any) -> str:
+    """Normalize common wording variants without inferring clinical state."""
+    text = _text(value)
+    text = re.sub(r"[_-]+", " ", text)
+    text = re.sub(r"\\s+", " ", text).strip()
+    aliases = {
+        "shortness of breath": "difficulty breathing",
+        "breathlessness": "difficulty breathing",
+        "dyspnea": "difficulty breathing",
+        "sob": "difficulty breathing",
+        "chest discomfort": "chest pain",
+        "syncope": "fainting",
+    }
+    return aliases.get(text, text)
+
+
+def _is_unavailable_prediction(value: Any) -> bool:
+    text = _text(value)
+    return not text or text in {
+        "unavailable", "none", "unknown", "not assessed", "not available",
+        "processing", "failed", "error", "unsupported", "no model",
+        "inference unavailable", "not run",
+    }
+
+
+def _is_non_finding_prediction(value: Any) -> bool:
+    """Recognize explicit non-finding labels; do not infer from arbitrary text."""
+    text = _text(value)
+    return text in {
+        "normal", "clear", "no finding", "no findings", "negative",
+        "no acute finding", "no acute findings", "no acute cardiopulmonary abnormality",
+        "no acute cardiopulmonary abnormalities", "no evidence of acute disease",
+    }
+
+
 def _records(value: Any) -> list[dict[str, Any]]:
     """Keep valid record dictionaries; ignore malformed items safely."""
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
+
+
+def _xray_finding_records(xray_meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect only explicitly actionable findings, never raw model score lists.
+
+    DenseNet121 may return scores for every label. A label plus score alone is
+    not evidence that the model selected a positive finding. Such records are
+    ignored unless upstream explicitly marks them actionable or explicitly
+    marks the finding as detected/positive. Scores remain model scores, not
+    calibrated probabilities or diagnoses.
+    """
+    candidates: list[dict[str, Any]] = []
+    candidates.extend(_records(xray_meta.get("findings")))
+    for image in _records(xray_meta.get("images")):
+        image_status = _text(image.get("status")).upper()
+        # Never use findings from a failed, unsupported, or unfinished image.
+        if image_status and image_status not in {"COMPLETED", "PARTIAL", "AVAILABLE"}:
+            continue
+        candidates.extend(_records(image.get("findings")))
+
+    accepted: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    nonfinding_labels = {
+        "normal", "clear", "no finding", "no findings", "negative",
+        "no finding detected", "no acute finding", "no acute findings",
+        "no acute cardiopulmonary abnormality",
+        "no acute cardiopulmonary abnormalities", "no evidence of acute disease",
+    }
+    for item in candidates:
+        label = str(item.get("label") or item.get("name") or item.get("finding") or "").strip()
+        if not label or _text(label) in nonfinding_labels:
+            continue
+
+        status = _text(item.get("status") or item.get("state")).upper()
+        if item.get("detected") is False or item.get("is_positive") is False:
+            continue
+        if status in {"ABSENT", "NEGATIVE", "NORMAL", "NOT_DETECTED", "NOT DETECTED", "FALSE"}:
+            continue
+
+        score = item.get("score", item.get("model_score", item.get("confidence")))
+        score_number = _number(score)
+
+        # Raw score-only DenseNet labels must not become positive evidence.
+        # Accept only explicit actionability or an explicit positive detection.
+        explicitly_positive = (
+            item.get("is_actionable_finding") is True
+            or item.get("detected") is True
+            or item.get("is_positive") is True
+            or status in {"PRESENT", "POSITIVE", "DETECTED"}
+        )
+        if not explicitly_positive:
+            continue
+
+        key = (label.casefold(), str(score_number) if score_number is not None else "")
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized = dict(item)
+        normalized["label"] = label
+        if score_number is not None:
+            normalized["model_score"] = score_number
+        accepted.append(normalized)
+    return accepted
+
+
+def _format_xray_finding(item: dict[str, Any]) -> str:
+    """Format an X-ray model output without presenting it as a diagnosis."""
+    label = str(item.get("label") or item.get("name") or item.get("finding") or "Unlabelled finding")
+    score = item.get("model_score", item.get("score", item.get("confidence")))
+    score_number = _number(score)
+    if score_number is not None:
+        return f"{label} (model score: {score_number:.3f})"
+    return label
 
 
 def _number(value: Any) -> float | None:
@@ -67,6 +176,8 @@ def _result(
     rationale: str,
     guidance: str,
     next_steps: str,
+    follow_up_required: bool = False,
+    critical_unknowns: list[Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "pathway": pathway,
@@ -81,6 +192,11 @@ def _result(
         "why_this_pathway": rationale,
         "guidance": guidance,
         "next_steps": next_steps,
+        # Unknown red-flag answers are never treated as absent. The caller/UI
+        # can use these fields to request clarification before presenting a
+        # non-emergency pathway as final.
+        "follow_up_required": bool(follow_up_required),
+        "critical_unknowns": list(critical_unknowns or []),
         "clinically_validated": False,
     }
 
@@ -94,7 +210,7 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
     symptoms_meta = symptoms_meta if isinstance(symptoms_meta, dict) else {}
     present = _records(symptoms_meta.get("present", []))
     present_names = {
-        _text(s.get("symptom") or s.get("finding")) for s in present
+        _symptom_key(s.get("symptom") or s.get("finding")) for s in present
     }
     present_names.discard("")
 
@@ -106,6 +222,10 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
     xray_meta = evidence.get("xray")
     xray_meta = xray_meta if isinstance(xray_meta, dict) else {}
     xray_prediction = _text(xray_meta.get("prediction"))
+    xray_findings = _xray_finding_records(xray_meta)
+    usable_xray_prediction = not _is_unavailable_prediction(xray_prediction)
+    usable_xray_findings = bool(xray_findings)
+    usable_xray_evidence = usable_xray_prediction or usable_xray_findings
 
     missing_raw = evidence.get("missing", [])
     missing_info = (
@@ -113,6 +233,50 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
         if isinstance(missing_raw, list)
         else [str(missing_raw)] if missing_raw else []
     )
+
+    # Preserve explicitly UNKNOWN symptoms as a separate state. Do not
+    # convert them to ABSENT or count them as present clinical evidence.
+    unknown_symptom_records = _records(symptoms_meta.get("unknown", []))
+    unknown_symptom_names = [
+        _symptom_key(item.get("symptom") or item.get("finding") or item.get("question"))
+        for item in unknown_symptom_records
+    ]
+    unknown_symptom_names = [name for name in unknown_symptom_names if name]
+    # If the same safety question is explicitly answered, stale/duplicate
+    # UNKNOWN metadata must not override the recorded PRESENT/ABSENT answer.
+    absent_records = _records(symptoms_meta.get("absent", []))
+    known_symptom_keys = set(present_names)
+    known_symptom_keys.update(
+        _symptom_key(item.get("symptom") or item.get("finding"))
+        for item in absent_records
+    )
+
+    # Identify unresolved red-flag questions by their wording. This is only a
+    # follow-up signal; unknown answers do NOT trigger emergency rules by
+    # themselves. Emergency rules based on confirmed findings run first below.
+    critical_terms = (
+        "difficulty breathing", "breathing difficulty", "shortness of breath",
+        "dyspnea", "chest pain", "chest discomfort", "high fever",
+        "severe fever", "fainting", "syncope",
+    )
+    critical_unknowns: list[Any] = []
+    for item in [*missing_info, *unknown_symptom_records, *unknown_symptom_names]:
+        if isinstance(item, dict):
+            label = " ".join(
+                str(item.get(key) or "")
+                for key in ("symptom", "finding", "question", "question_text", "label", "detail", "message")
+            ).strip()
+        else:
+            label = str(item or "").strip()
+        lowered = label.lower()
+        normalized_label = _symptom_key(label)
+        if normalized_label in known_symptom_keys:
+            continue
+        if label and any(term in lowered for term in critical_terms):
+            if label not in critical_unknowns:
+                critical_unknowns.append(label)
+
+    follow_up_required = bool(critical_unknowns)
 
     contradictions = evidence.get("contradictory", [])
     if not isinstance(contradictions, list):
@@ -127,7 +291,7 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
     has_acute_chest_pain = False
 
     for symptom in present:
-        name = _text(symptom.get("symptom") or symptom.get("finding"))
+        name = _symptom_key(symptom.get("symptom") or symptom.get("finding"))
         severity = _text(symptom.get("severity"))
         context = " ".join(
             filter(
@@ -159,10 +323,10 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
 
     # E2: severe breathing difficulty or dyspnea with concerning chest pain.
     has_severe_dyspnea = any(
-        _text(s.get("symptom") or s.get("finding"))
+        _symptom_key(s.get("symptom") or s.get("finding"))
         in {"severe breathing difficulty", "severe shortness of breath"}
         or (
-            _text(s.get("symptom") or s.get("finding"))
+            _symptom_key(s.get("symptom") or s.get("finding"))
             in {"shortness of breath", "difficulty breathing", "dyspnea"}
             and _text(s.get("severity")) == "severe"
         )
@@ -170,7 +334,7 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
     )
 
     has_sob = any(
-        _text(s.get("symptom") or s.get("finding"))
+        _symptom_key(s.get("symptom") or s.get("finding"))
         in {"shortness of breath", "difficulty breathing", "dyspnea"}
         for s in present
     )
@@ -183,19 +347,19 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
 
     # E3: severe headache with vomiting/dizziness, or fainting/syncope.
     severe_headache = any(
-        _text(s.get("symptom") or s.get("finding")) == "headache"
+        _symptom_key(s.get("symptom") or s.get("finding")) == "headache"
         and _text(s.get("severity")) == "severe"
         for s in present
     )
 
     vomiting_or_dizziness = any(
-        _text(s.get("symptom") or s.get("finding"))
+        _symptom_key(s.get("symptom") or s.get("finding"))
         in {"vomiting", "dizziness"}
         for s in present
     )
 
     fainting = any(
-        _text(s.get("symptom") or s.get("finding"))
+        _symptom_key(s.get("symptom") or s.get("finding"))
         in {"fainting", "syncope"}
         for s in present
     )
@@ -250,6 +414,8 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
             ignored=[r for r in ALL_RULES if r not in emergency],
             supporting=supporting,
             unknown=missing_info,
+            follow_up_required=follow_up_required,
+            critical_unknowns=critical_unknowns,
             rationale=(
                 "Potentially serious red-flag indicators were identified. "
                 "Immediate clinical evaluation is required."
@@ -277,6 +443,8 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
             ],
             supporting=[str(item) for item in contradictions],
             unknown=missing_info,
+            follow_up_required=follow_up_required,
+            critical_unknowns=critical_unknowns,
             rationale=(
                 "The provided inputs contain contradictory information "
                 "that requires clinical clarification."
@@ -292,11 +460,18 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
         )
 
     # Incomplete evidence must not fall through to MILD.
+    # Normal reports or an unavailable image model are not, by themselves,
+    # enough to classify the user's current condition as MILD.
     has_any_clinical_evidence = bool(
-        present or abnormal_reports or normal_reports or xray_prediction
+        present or abnormal_reports or normal_reports or usable_xray_evidence
     )
+    has_actionable_evidence = bool(present or abnormal_reports or usable_xray_evidence)
 
-    if state == "INSUFFICIENT_EVIDENCE" or not has_any_clinical_evidence:
+    if (
+        state == "INSUFFICIENT_EVIDENCE"
+        or not has_any_clinical_evidence
+        or not has_actionable_evidence
+    ):
         unknown = missing_info or [
             "No confirmed active symptoms or interpretable clinical findings were available."
         ]
@@ -307,6 +482,8 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
             ignored=ALL_RULES.copy(),
             supporting=[],
             unknown=unknown,
+            follow_up_required=follow_up_required,
+            critical_unknowns=critical_unknowns,
             rationale=(
                 "Available clinical evidence is insufficient to determine "
                 "a triage pathway."
@@ -321,6 +498,35 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
             ),
         )
 
+    # If a potentially critical safety question remains unanswered, do not
+    # finalize a non-emergency pathway (including MILD/CONSULTATION) yet.
+    # This branch is reached only after confirmed emergency rules have run.
+    # It asks for clarification without assuming the unknown symptom is present.
+    if follow_up_required:
+        return _result(
+            pathway=None,
+            status="INSUFFICIENT_EVIDENCE",
+            triggered=[],
+            ignored=ALL_RULES.copy(),
+            supporting=[],
+            unknown=missing_info or critical_unknowns,
+            critical_unknowns=critical_unknowns,
+            follow_up_required=True,
+            rationale=(
+                "One or more safety-critical symptom questions remain unanswered. "
+                "The system cannot safely finalize a non-emergency pathway from the available information."
+            ),
+            guidance=(
+                "Please answer the highlighted safety questions. An unknown answer does not mean the symptom is absent. "
+                "If you currently have severe breathing difficulty, severe or persistent chest pain, fainting, or rapidly worsening symptoms, "
+                "seek emergency medical care now rather than waiting for this assessment."
+            ),
+            next_steps=(
+                "Complete the unanswered safety questions before the non-emergency assessment is finalized. "
+                "If you cannot answer or are concerned, contact a qualified healthcare professional."
+            ),
+        )
+
     # C1: abnormal medical report findings.
     if abnormal_reports:
         consult.append("rule_c1_abnormal_laboratory_findings")
@@ -331,14 +537,34 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
             for r in abnormal_reports
         )
 
-    # C2: positive imaging prediction; ignore explicit non-finding labels.
-    if xray_prediction and xray_prediction not in {
-        "normal", "clear", "no finding", "unavailable", "none", "unknown"
-    }:
+    # C2: positive imaging output. Raw DenseNet121 scores across all labels
+    # are not positive findings. Only explicit actionable/positive findings
+    # from upstream may trigger this rule; legacy ResNet prediction remains
+    # supported for compatibility. Outputs are not confirmed diagnoses.
+    positive_prediction = (
+        usable_xray_prediction and not _is_non_finding_prediction(xray_prediction)
+    )
+    positive_findings = [
+        item for item in xray_findings
+        if not _is_non_finding_prediction(item.get("label"))
+    ]
+    if positive_prediction or positive_findings:
         consult.append("rule_c2_positive_imaging_finding")
-        supporting.append(
-            f"Radiographic model finding recorded: {xray_meta.get('prediction')}."
-        )
+        if positive_prediction:
+            supporting.append(
+                f"Radiographic model output for clinician review: {xray_meta.get('prediction')} "
+                "(not a confirmed diagnosis)."
+            )
+        if positive_findings:
+            displayed = [_format_xray_finding(item) for item in positive_findings[:18]]
+            extra_count = len(positive_findings) - len(displayed)
+            summary = "; ".join(displayed)
+            if extra_count > 0:
+                summary += f"; and {extra_count} additional model finding(s)"
+            supporting.append(
+                "X-ray model findings for clinician review: "
+                f"{summary}. Model scores are not confirmed diagnoses or calibrated probabilities."
+            )
 
     # C3: persistent symptoms, supporting numeric day/week/month formats.
     for symptom in present:
@@ -365,6 +591,15 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
         supporting.append(
             f"Multiple active findings or moderate severity identified "
             f"({len(present_names)} distinct symptom(s))."
+        )
+
+    # C5: breathing difficulty that is not already an emergency still needs
+    # prompt professional assessment. Do not let an unknown severity fall
+    # through to MILD. Severe cases were handled by the emergency rule above.
+    if has_sob:
+        consult.append("rule_c6_breathing_difficulty_needs_assessment")
+        supporting.append(
+            "Breathing difficulty was reported; severity and cause require clinical assessment."
         )
 
     # C5: symptom terms configured for professional assessment.
@@ -399,11 +634,37 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
             ),
             guidance=(
                 "A qualified healthcare professional should review the "
-                "symptoms and available medical reports."
+                "symptoms and available medical reports. This rules-based pathway "
+                "is decision support, not a diagnosis."
             ),
             next_steps=(
                 "Arrange a consultation with a suitable clinician and bring "
                 "the available reports."
+            ),
+        )
+
+    # MILD requires at least one confirmed active symptom and no configured
+    # emergency/consultation trigger. Normal reports alone do not establish MILD.
+    if not present:
+        return _result(
+            pathway=None,
+            status="INSUFFICIENT_EVIDENCE",
+            triggered=[],
+            ignored=ALL_RULES.copy(),
+            supporting=[],
+            unknown=missing_info or [
+                "No current active symptoms were confirmed; normal findings alone do not establish a mild condition."
+            ],
+            rationale=(
+                "The available information does not support assigning a MILD pathway "
+                "without confirmed current symptoms or another actionable finding."
+            ),
+            guidance=(
+                "Confirm the current symptoms and review the submitted reports. "
+                "Seek professional advice if you are concerned."
+            ),
+            next_steps=(
+                "Provide the missing current-symptom information or consult a clinician."
             ),
         )
 

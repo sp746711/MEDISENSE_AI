@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import os
+import re
 from typing import Any, Optional
 
 from app.core.config import get_settings
@@ -29,69 +31,106 @@ CHEST_CLASSES = [
 ]
 
 
+# TorchXRayVision DenseNet121 label set. These are research-model outputs, not
+# calibrated probabilities or a clinically validated diagnosis.
+TORCHXRAYVISION_CLASSES = [
+    "Atelectasis", "Consolidation", "Infiltration", "Pneumothorax", "Edema",
+    "Emphysema", "Fibrosis", "Effusion", "Pneumonia", "Pleural_Thickening",
+    "Cardiomegaly", "Nodule", "Mass", "Hernia", "Lung Lesion", "Fracture",
+    "Lung Opacity", "Enlarged Cardiomediastinum",
+]
+
+
+def _configured_model_name() -> str:
+    """Return the model selected by environment/configuration, conservatively."""
+    try:
+        settings = get_settings()
+        value = getattr(settings, "xray_default_model", None)
+    except Exception:
+        value = None
+    return str(value or os.getenv("XRAY_DEFAULT_MODEL", "chest_resnet18")).strip().lower()
+
+
+def _uses_torchxrayvision() -> bool:
+    return _configured_model_name() in {
+        "chest_densenet121", "densenet121", "torchxrayvision",
+        "torch_xray_vision", "xrv_densenet121",
+    }
+
+
 def verify_checkpoint_integrity(
     checkpoint_path: Path, expected_classes: int = len(CHEST_CLASSES)
 ) -> tuple[bool, str]:
-    """Verify that a checkpoint file is a valid, deserializable PyTorch model/state_dict with matching class architecture."""
-    if not checkpoint_path.exists():
-        return False, f"Checkpoint file missing: {checkpoint_path}"
-    if not checkpoint_path.is_file() or checkpoint_path.stat().st_size == 0:
-        return False, f"Checkpoint file is empty: {checkpoint_path}"
+    """Safely validate checkpoint structure and classifier size.
 
+    Only weights-only deserialization is allowed. Checkpoint validation does not
+    establish model accuracy, training provenance, or clinical suitability.
+    """
     try:
+        if not checkpoint_path.exists():
+            return False, f"Checkpoint file missing: {checkpoint_path}"
+        if not checkpoint_path.is_file() or checkpoint_path.stat().st_size == 0:
+            return False, f"Checkpoint is not a non-empty file: {checkpoint_path}"
+
         import torch
         import torch.nn as nn
 
-        # 1. Attempt deserialization
         try:
             loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=True)
-        except Exception:
-            try:
-                loaded = torch.load(str(checkpoint_path), map_location="cpu", weights_only=False)
-            except Exception as load_exc:
-                return False, f"Checkpoint loading failed (corrupted or invalid PyTorch file): {load_exc}"
+        except Exception as load_exc:
+            return False, (
+                "Safe checkpoint loading failed. Use a compatible weights-only state_dict; "
+                f"details: {load_exc}"
+            )
 
-        # 2. Check architecture compatibility if nn.Module
         if isinstance(loaded, nn.Module):
-            if hasattr(loaded, "fc") and hasattr(loaded.fc, "out_features"):
-                if loaded.fc.out_features != expected_classes:
-                    return (
-                        False,
-                        f"Checkpoint output dimension mismatch: model has {loaded.fc.out_features} classes, expected {expected_classes}.",
+            classifier = getattr(loaded, "fc", None)
+            out_features = getattr(classifier, "out_features", None)
+            if out_features is not None and int(out_features) != expected_classes:
+                return False, (
+                    f"Checkpoint output dimension mismatch: model has {out_features} "
+                    f"classes, expected {expected_classes}."
+                )
+            return True, f"Checkpoint module structurally verified: {checkpoint_path}"
+
+        if not isinstance(loaded, dict) or not loaded:
+            return False, (
+                f"Unsupported checkpoint object type: {type(loaded).__name__}; "
+                "expected a state_dict or checkpoint dictionary."
+            )
+
+        state_dict = loaded.get("state_dict", loaded.get("model_state_dict", loaded))
+        if not isinstance(state_dict, dict) or not state_dict:
+            return False, "Checkpoint does not contain a non-empty state_dict."
+
+        normalized = {
+            (key[7:] if isinstance(key, str) and key.startswith("module.") else key): value
+            for key, value in state_dict.items()
+        }
+        if not all(isinstance(key, str) for key in normalized):
+            return False, "Checkpoint state_dict contains invalid parameter keys."
+
+        for key in ("fc.weight", "fc.bias"):
+            if key in normalized:
+                value = normalized[key]
+                shape = getattr(value, "shape", None)
+                if shape is None or len(shape) < 1:
+                    return False, f"Checkpoint parameter {key} is not tensor-like."
+                if int(shape[0]) != expected_classes:
+                    return False, (
+                        f"Checkpoint output dimension mismatch: {key} has {shape[0]} "
+                        f"classes, expected {expected_classes}."
                     )
-            return True, f"Trained checkpoint module verified at: {checkpoint_path}"
+        has_tensor_weights = any(
+            hasattr(value, "shape") and hasattr(value, "dtype")
+            for value in normalized.values()
+        )
+        if not has_tensor_weights:
+            return False, "Checkpoint state_dict contains no tensor weights."
 
-        # 3. Check architecture compatibility if state_dict
-        if isinstance(loaded, dict):
-            sd = loaded.get("state_dict", loaded)
-            if not isinstance(sd, dict) or not sd:
-                return False, f"Checkpoint dictionary does not contain valid state_dict tensor mapping."
-
-            # Verify classification head weight shape
-            if "fc.weight" in sd:
-                out_classes = sd["fc.weight"].shape[0]
-                if out_classes != expected_classes:
-                    return (
-                        False,
-                        f"Checkpoint output dimension mismatch: fc.weight has {out_classes} classes, expected {expected_classes}.",
-                    )
-            elif "fc.bias" in sd:
-                out_classes = sd["fc.bias"].shape[0]
-                if out_classes != expected_classes:
-                    return (
-                        False,
-                        f"Checkpoint output dimension mismatch: fc.bias has {out_classes} classes, expected {expected_classes}.",
-                    )
-            else:
-                has_weights = any(k.endswith(".weight") for k in sd.keys())
-                if not has_weights:
-                    return False, "Checkpoint state_dict contains no tensor weights."
-
-            return True, f"Trained checkpoint weights verified at: {checkpoint_path}"
-
-        return False, f"Unsupported checkpoint object type: {type(loaded).__name__} (expected nn.Module or dict state_dict)."
+        return True, f"Checkpoint state_dict structurally verified: {checkpoint_path}"
     except Exception as exc:
-        return False, f"Checkpoint integrity check failed: {exc}"
+        return False, f"Checkpoint integrity check failed: {type(exc).__name__}: {exc}"
 
 
 @dataclass(frozen=True)
@@ -120,33 +159,112 @@ class XRayModelRegistryEntry:
             return False, "Checkpoint path not configured."
 
         settings = get_settings()
-        configured_path = (settings.xray_chest_checkpoint or "").strip()
-        if configured_path:
-            p = Path(configured_path)
-            if not p.is_absolute():
-                p = settings.xray_model_path / p
-        else:
-            p = settings.xray_model_path / self.checkpoint_location
 
-        if not p.exists() or not p.is_file() or p.stat().st_size == 0:
-            return (
-                False,
-                f"Model checkpoint not configured on disk; place PyTorch weights in {p} or set XRAY_CHEST_CHECKPOINT in .env.",
+        # DenseNet121 from TorchXRayVision loads its published pretrained weights
+        # through the library; it does not use this project's five-class ResNet
+        # checkpoint. Treat package availability as a routing check only, not proof
+        # of clinical validation or model accuracy.
+        if _uses_torchxrayvision():
+            try:
+                import torchxrayvision as xrv  # noqa: F401
+            except Exception as exc:
+                return False, (
+                    "torchxrayvision_unavailable: TorchXRayVision could not be imported. "
+                    f"Install/repair the package before selecting DenseNet121: {type(exc).__name__}: {exc}"
+                )
+            return True, (
+                "TorchXRayVision DenseNet121 package is available. Pretrained research-model "
+                "weights are loaded by the inference service; outputs are not calibrated "
+                "probabilities and are not a clinical diagnosis."
             )
 
-        # Deep verification of deserialization, architecture, and class mapping
-        return verify_checkpoint_integrity(p, expected_classes=len(self.class_label_mapping))
+        configured_path = (settings.xray_chest_checkpoint or "").strip()
+
+        # Match XRayModelService.load_model() path resolution exactly. Previously the
+        # registry always prefixed relative paths with xray_model_path, while the
+        # inference service first accepted a relative path valid from the process CWD.
+        # That disagreement could report UNAVAILABLE even when inference could load it.
+        if configured_path:
+            p = Path(configured_path).expanduser()
+            if p.is_absolute():
+                pass
+            elif p.exists():
+                # Respect a relative path already valid from the process working directory.
+                pass
+            else:
+                p = Path(settings.xray_model_path) / p
+        else:
+            p = Path(settings.xray_model_path) / self.checkpoint_location
+
+        try:
+            p = p.resolve()
+        except (OSError, RuntimeError):
+            p = p.absolute()
+
+        if not p.exists():
+            return (
+                False,
+                f"checkpoint_path_not_found: Checkpoint file not found at {p}. "
+                "Check XRAY_CHEST_CHECKPOINT or place the trained weights at the configured model path.",
+            )
+        if not p.is_file():
+            return False, f"checkpoint_path_invalid: Checkpoint path is not a file: {p}"
+        try:
+            if p.stat().st_size == 0:
+                return False, f"checkpoint_path_invalid: Checkpoint file is empty: {p}"
+        except OSError as exc:
+            return False, f"checkpoint_path_unreadable: Cannot inspect checkpoint file {p}: {exc}"
+
+        # Check that weights can be safely deserialized and that the classifier output
+        # dimension matches this registry entry. This is a structural check only; it
+        # does not validate training provenance or clinical performance.
+        valid, reason = verify_checkpoint_integrity(
+            p, expected_classes=len(self.class_label_mapping)
+        )
+        if not valid:
+            return False, f"checkpoint_integrity_failed: {reason}"
+        return True, reason
 
     def to_dict(self) -> dict[str, Any]:
         available, avail_msg = self.check_availability()
         d = asdict(self)
+        if self.canonical_region == "chest" and _uses_torchxrayvision():
+            d["model_architecture"] = "TorchXRayVision DenseNet121"
+            d["class_label_mapping"] = list(TORCHXRAYVISION_CLASSES)
+            d["expected_preprocessing"] = {
+                "target_size": [224, 224],
+                "color_mode": "grayscale",
+                "input_shape": [1, 224, 224],
+                "preprocessing": "TorchXRayVision load_image + XRayCenterCrop + XRayResizer",
+                "normalization": "TorchXRayVision-specific; not ImageNet RGB normalization",
+            }
+            d["model_version"] = "torchxrayvision_densenet121_res224_all"
+            d["source_provenance"] = (
+                "TorchXRayVision published pretrained research model; local clinical validation "
+                "and suitability have not been established"
+            )
+            d["supported_prediction_task"] = (
+                "Multi-label chest radiograph research scoring across 18 labels; not a diagnosis"
+            )
+            d["validation_status"] = "RESEARCH_MODEL_NOT_CLINICALLY_VALIDATED"
         d["is_available"] = available
         d["availability_message"] = avail_msg
-        d["availability_status"] = (
-            "AVAILABLE"
-            if available
-            else ("UNAVAILABLE_MISSING_CHECKPOINT" if self.is_supported else "UNSUPPORTED_REGION")
-        )
+        if available:
+            d["availability_status"] = "AVAILABLE"
+        elif not self.is_supported:
+            d["availability_status"] = "UNSUPPORTED_REGION"
+        else:
+            message = str(avail_msg).lower()
+            if "torchxrayvision_unavailable" in message:
+                d["availability_status"] = "UNAVAILABLE_TORCHXRAYVISION"
+            elif "checkpoint_path_not_found" in message:
+                d["availability_status"] = "UNAVAILABLE_MISSING_CHECKPOINT"
+            elif "checkpoint_path_invalid" in message or "checkpoint_path_unreadable" in message:
+                d["availability_status"] = "UNAVAILABLE_INVALID_CHECKPOINT_PATH"
+            elif "checkpoint_integrity_failed" in message:
+                d["availability_status"] = "UNAVAILABLE_CHECKPOINT_INTEGRITY_FAILED"
+            else:
+                d["availability_status"] = "UNAVAILABLE_CHECKPOINT_VERIFICATION_FAILED"
         return d
 
 
@@ -172,7 +290,7 @@ XRAY_MODEL_REGISTRY: dict[str, XRayModelRegistryEntry] = {
         class_label_mapping=CHEST_CLASSES,
         expected_preprocessing=STANDARD_PREPROCESSING,
         model_version="chest_resnet18@v1.0",
-        source_provenance="NIH ChestX-ray14 / CheXpert benchmark reference",
+        source_provenance="Benchmark references only; actual checkpoint provenance requires independent verification",
         supported_prediction_task="Thoracic pathology classification (Normal vs Consolidation/Pneumothorax/Effusion/Cardiomegaly)",
         is_supported=True,
         validation_status="PENDING_VERIFIED_CHECKPOINT",
@@ -609,7 +727,6 @@ REGION_ALIASES: dict[str, str] = {
     "chest-xray": "chest",
     "chest radiograph": "chest",
     "thorax": "chest",
-    "thoracic": "chest",
     "lungs": "chest",
     "pulmonary": "chest",
     # Wrist aliases
@@ -693,7 +810,6 @@ REGION_ALIASES: dict[str, str] = {
     "skull": "skull",
     "cranium": "skull",
     "calvarium": "skull",
-    "brain": "skull",
     "head x-ray": "skull",
     "head xray": "skull",
     "skull x-ray": "skull",
@@ -744,27 +860,33 @@ REGION_ALIASES: dict[str, str] = {
 
 
 def normalize_region_name(raw_region: Optional[str]) -> tuple[str, bool]:
-    """Normalize input region string to its canonical registry identifier.
+    """Normalize an anatomical region conservatively.
 
-    Returns:
-        tuple[str, bool]: (canonical_region, is_recognized)
+    Exact aliases are preferred. Compound phrases use whole-word boundaries and
+    longest aliases first to avoid accidental substring matches. Ambiguous terms
+    such as plain ``thoracic`` are not silently treated as chest or spine.
     """
-    if not raw_region or not str(raw_region).strip():
+    if raw_region is None:
         return "unknown", False
 
-    cleaned = str(raw_region).strip().lower()
-    cleaned = cleaned.replace("_", " ").strip()
+    cleaned = str(raw_region).strip().lower().replace("_", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"[^a-z0-9\s-]", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return "unknown", False
 
     if cleaned in REGION_ALIASES:
         return REGION_ALIASES[cleaned], True
-
     if cleaned in XRAY_MODEL_REGISTRY:
         return cleaned, True
 
-    # Substring heuristic for compound inputs like "x-ray of the right knee"
-    for alias, canonical in REGION_ALIASES.items():
-        if alias in cleaned:
-            return canonical, True
+    for alias in sorted(REGION_ALIASES, key=len, reverse=True):
+        if not alias:
+            continue
+        pattern = rf"(?<![a-z0-9]){re.escape(alias)}(?![a-z0-9])"
+        if re.search(pattern, cleaned):
+            return REGION_ALIASES[alias], True
 
     return cleaned, False
 
@@ -811,11 +933,47 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
             "is_available": True,
             "is_recognized": True,
             "registry_entry": entry.to_dict(),
-            "message": f"Routed to {entry.display_name} model adapter ({entry.model_architecture}).",
+            "message": (
+                f"Routed to {entry.display_name} model adapter "
+                f"({'TorchXRayVision DenseNet121' if _uses_torchxrayvision() else entry.model_architecture}). "
+                + (
+                    "Research-model scores are not calibrated probabilities or a diagnosis; "
+                    "clinical interpretation by a qualified professional is required."
+                    if _uses_torchxrayvision()
+                    else ""
+                )
+            ),
         }
 
     if is_supported and not is_available:
-        # Region is supported by pipeline architecture, but weights are absent on disk
+        # Do not report every failure as a missing checkpoint: the file may exist but
+        # be empty, unreadable, incompatible, or fail safe deserialization.
+        lower_reason = str(avail_reason).lower()
+        if "checkpoint_path_not_found" in lower_reason:
+            reason_code = "missing_checkpoint"
+            user_reason = "the trained model checkpoint was not found at the configured path"
+        elif "checkpoint_path_invalid" in lower_reason:
+            reason_code = "invalid_checkpoint_path"
+            user_reason = "the configured model checkpoint path is invalid or the file is empty"
+        elif "checkpoint_path_unreadable" in lower_reason:
+            reason_code = "checkpoint_unreadable"
+            user_reason = "the configured model checkpoint could not be read"
+        elif "checkpoint_integrity_failed" in lower_reason:
+            reason_code = "checkpoint_integrity_failed"
+            user_reason = "the checkpoint failed safe integrity or class-dimension validation"
+        elif "torchxrayvision_unavailable" in lower_reason:
+            reason_code = "torchxrayvision_unavailable"
+            user_reason = "the selected TorchXRayVision model dependency is unavailable"
+        else:
+            reason_code = "checkpoint_verification_failed"
+            user_reason = "the checkpoint could not be verified for this model"
+
+        logger.warning(
+            "X-ray model unavailable for region=%s reason_code=%s detail=%s",
+            canonical_region,
+            reason_code,
+            avail_reason,
+        )
         return {
             "region": canonical_region,
             "canonical_region": canonical_region,
@@ -824,10 +982,12 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
             "is_available": False,
             "is_recognized": True,
             "registry_entry": entry.to_dict(),
-            "reason_code": "missing_checkpoint",
+            "reason_code": reason_code,
+            "diagnostic_message": str(avail_reason),
             "message": (
-                f"X-ray received successfully. Automated interpretation for {entry.display_name} X-ray is currently unavailable "
-                "as model weights are not configured on disk. If you have the associated radiology report, upload it for supported text-based analysis."
+                f"X-ray received successfully. Automated interpretation for {entry.display_name} X-ray "
+                f"is currently unavailable because {user_reason}. "
+                "If you have the associated radiology report, upload it for supported text-based analysis."
             ),
         }
 
@@ -842,8 +1002,7 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
         "registry_entry": entry.to_dict(),
         "reason_code": "unsupported_region",
         "message": (
-            f"X-ray received. Automated interpretation for {entry.display_name} X-ray is currently unavailable "
-            "as the diagnostic vision model is specialized for chest radiography. "
+            f"X-ray received. Automated image interpretation for {entry.display_name} is not configured. "
             "If you have the associated radiology report, upload it for supported text-based analysis."
         ),
     }

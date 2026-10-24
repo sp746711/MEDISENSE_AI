@@ -178,6 +178,9 @@ class XrayResult(Base):
     region: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     model_version: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     prediction: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # Multi-label DenseNet121 output; each item stores a label and its score.
+    # Kept nullable for existing rows and legacy single-label models.
+    findings: Mapped[Any] = mapped_column(JSONType, nullable=True)
     confidence_if_valid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     uncertainty: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     explainability_artifact: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)

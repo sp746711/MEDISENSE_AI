@@ -25,13 +25,66 @@ def _as_dict_list(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
+def _normalize_xray_findings(value: Any) -> list[dict[str, Any]]:
+    """Normalize multi-label model outputs without treating scores as diagnoses."""
+    findings: list[dict[str, Any]] = []
+    if not isinstance(value, (list, tuple)):
+        return findings
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or item.get("finding") or item.get("name") or "").strip()
+        if not label:
+            continue
+        normalized = dict(item)
+        normalized["label"] = label
+        # Keep the original model score field and value; it is not a calibrated
+        # probability and must not be presented as diagnostic certainty.
+        findings.append(normalized)
+    return findings
+
+
+def _xray_finding_label(item: dict[str, Any]) -> str:
+    return str(item.get("label") or item.get("finding") or item.get("name") or "").strip()
+
+
+def _xray_finding_is_actionable(item: dict[str, Any]) -> bool:
+    """Only explicit, model/service-designated positives can support clinical evidence.
+
+    DenseNet multi-label scores are raw model outputs unless an upstream validated
+    thresholding/interpretation layer explicitly marks them actionable.
+    """
+    if not isinstance(item, dict):
+        return False
+    if item.get("is_actionable_finding") is True:
+        return True
+    if item.get("detected") is True or item.get("is_positive") is True:
+        return True
+    state = str(item.get("state") or item.get("status") or "").strip().upper()
+    return state in {"PRESENT", "POSITIVE", "DETECTED"}
+
+
 def _state(record: dict[str, Any]) -> str:
-    return str(record.get("state") or "").strip().upper()
+    """Normalize symptom state without converting unanswered findings to negatives."""
+    raw = str(record.get("state") or record.get("status") or "").strip().upper()
+    aliases = {
+        "YES": "PRESENT", "TRUE": "PRESENT", "POSITIVE": "PRESENT",
+        "NO": "ABSENT", "FALSE": "ABSENT", "NEGATIVE": "ABSENT",
+        "NOT_SURE": "UNKNOWN", "NOT SURE": "UNKNOWN", "UNSURE": "UNKNOWN",
+        "UNANSWERED": "UNKNOWN", "UNASSESSED": "UNKNOWN", "": "UNKNOWN",
+    }
+    return aliases.get(raw, raw if raw in {"PRESENT", "ABSENT", "UNKNOWN"} else "UNKNOWN")
 
 
 def _status(record: dict[str, Any]) -> str:
-    """Normalize report flags while preserving explicit status over interpretation."""
-    return str(record.get("status") or record.get("interpretation") or "").strip().upper()
+    """Normalize lab status, prioritizing explicit interpretation/flag over workflow status."""
+    # Some records use `status=RECORDED` for workflow state while the actual
+    # clinical flag is in `interpretation` or `explicit_flag`.
+    for key in ("explicit_flag", "interpretation", "calculated_status", "status"):
+        value = str(record.get(key) or "").strip().upper()
+        if value in {"HIGH", "LOW", "ABNORMAL", "NORMAL", "UNKNOWN"}:
+            return value
+    return "RECORDED" if any(record.get(k) for k in ("value", "test_name")) else "UNKNOWN"
 
 
 def _lookup_symptom_domain(symptom_name: str | None) -> str:
@@ -186,7 +239,7 @@ def combine_evidence(
 
     # 2. Supporting Clinical Correlations & Reassuring Evidence
     has_respiratory_symptom = bool(
-        present_names.intersection({"cough", "dry cough", "productive cough", "shortness of breath", "dyspnea", "wheezing", "chest discomfort"})
+        present_names.intersection({"cough", "dry cough", "productive cough", "shortness of breath", "difficulty breathing", "breathing difficulty", "dyspnea", "wheezing", "chest discomfort", "chest pain"})
     )
     has_fever = "fever" in present_names or "temperature" in present_names
 
@@ -307,11 +360,14 @@ def combine_evidence(
         re.IGNORECASE,
     )
     for nf in narrative_report_findings:
-        sec = nf.get("section", "")
-        cnt = nf.get("content", "")
+        sec = str(nf.get("section") or "").strip()
+        cnt = str(nf.get("content") or "").strip()
+        # Narrative text may be history, a disclaimer, or imperfect OCR. Do not
+        # automatically treat every narrative sentence as clinical support.
+        # Preserve it as contextual information; structured findings retain states.
         if cnt and not synthetic_instruction_re.search(cnt) and not synthetic_instruction_re.search(sec):
-            short_cnt = cnt[:100] + "..." if len(cnt) > 100 else cnt
-            supporting.append(f"Report narrative ({sec}): {short_cnt}")
+            short_cnt = cnt[:240] + "..." if len(cnt) > 240 else cnt
+            separate.append(f"Report narrative for review ({sec or 'section unspecified'}): {short_cnt}")
 
     # 3. Truthful X-ray Status and Interpretation (Multi-Image & Multi-Report Aware)
     processed_images: list[dict[str, Any]] = []
@@ -337,6 +393,8 @@ def combine_evidence(
             img_fname = img.get("file_name") or img.get("source_file") or f"xray_image_{idx+1}"
             img_label = f"{img_reg.capitalize()} X-ray ({img_fname})" if img_reg not in {"not declared", "unknown"} else f"X-ray ({img_fname})"
             pred = img.get("prediction")
+            findings = _normalize_xray_findings(img.get("findings"))
+            has_model_output = bool(pred) or bool(findings)
 
             p_entry = {
                 "id": img.get("id") or img.get("xray_result_id"),
@@ -344,6 +402,7 @@ def combine_evidence(
                 "region": img_reg,
                 "status": img_status.upper(),
                 "prediction": pred,
+                "findings": findings,
                 "model_version": img.get("model_version") or "N/A",
                 "confidence": img.get("confidence_if_valid"),
                 "uncertainty": img.get("uncertainty"),
@@ -354,26 +413,64 @@ def combine_evidence(
             }
             processed_images.append(p_entry)
 
-            # Check anatomical alignment with primary complaints
+            # Check anatomical alignment with primary complaints.
             is_anatomically_aligned = True
             if has_respiratory_symptom and img_reg in {"wrist", "hand", "ankle", "knee", "extremity"}:
                 is_anatomically_aligned = False
             elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present) and not has_respiratory_symptom and img_reg == "chest":
                 is_anatomically_aligned = False
 
-            if img_status == "completed" and pred:
-                completed_preds.append(pred)
-                if is_anatomically_aligned:
-                    supporting.append(f"{img_label} deep learning model identified radiographic pattern: {pred}.")
-                else:
-                    separate.append(f"{img_label} finding ({pred}) is separate from the primary clinical complaint.")
-                    evidence_relationships.append({
-                        "source_a": "symptoms",
-                        "source_b": "xray_image",
-                        "finding": f"{img_label}: {pred}",
-                        "relationship": "SEPARATE",
-                        "reason": f"Anatomical region ({img_reg}) does not directly explain the primary presenting symptoms."
-                    })
+            if img_status == "completed" and has_model_output:
+                # A legacy single prediction is retained for compatibility.
+                # Multi-label score records are NOT clinical findings unless the
+                # model/service explicitly marks them actionable.
+                actionable_findings = [f for f in findings if _xray_finding_is_actionable(f)]
+                labels = [str(pred).strip()] if pred else [
+                    _xray_finding_label(f) for f in actionable_findings
+                ]
+                labels = [label for label in labels if label]
+                raw_score_labels = [
+                    _xray_finding_label(f)
+                    for f in findings
+                    if not _xray_finding_is_actionable(f) and _xray_finding_label(f)
+                ]
+
+                if labels:
+                    completed_preds.extend(labels)
+                    if is_anatomically_aligned:
+                        supporting.append(
+                            f"{img_label} model/service returned explicitly actionable candidate finding(s): "
+                            f"{', '.join(labels[:18])}."
+                            + (f" And {len(labels) - 18} more." if len(labels) > 18 else "")
+                            + " This is not a confirmed diagnosis and requires clinical interpretation."
+                        )
+                    else:
+                        separate.append(
+                            f"{img_label} actionable model output ({', '.join(labels[:18])}) is anatomically separate from the primary clinical complaint."
+                        )
+                        evidence_relationships.append({
+                            "source_a": "symptoms",
+                            "source_b": "xray_image",
+                            "finding": f"{img_label}: {', '.join(labels[:18])}",
+                            "relationship": "SEPARATE",
+                            "reason": f"Anatomical region ({img_reg}) does not directly explain the primary presenting symptoms."
+                        })
+
+                if raw_score_labels:
+                    # Preserve raw scores in processed_images for transparent display,
+                    # but never promote them to clinical support, diagnosis, or triage.
+                    score_preview = ", ".join(raw_score_labels[:18])
+                    unassessed.append(
+                        f"{img_label} inference completed and returned raw, unthresholded model scores "
+                        f"({score_preview}{'; and more' if len(raw_score_labels) > 18 else ''}). "
+                        "These scores are not calibrated diagnostic probabilities and are not counted as actionable clinical evidence."
+                    )
+
+                if not labels and not raw_score_labels:
+                    any_unavailable = True
+                    unassessed.append(
+                        f"{img_label} was marked completed but contained no usable prediction or findings; interpretation cannot be verified."
+                    )
             elif img_status == "unavailable":
                 any_unavailable = True
                 unassessed.append(f"{img_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
@@ -385,8 +482,26 @@ def combine_evidence(
         if completed_preds:
             xray_finding_str = "; ".join(completed_preds)
             xray_interpretation = "AVAILABLE"
-            xray_evidence_status = "SUPPORTING"
-            xray_status_display = "COMPLETED"
+            aligned_prediction_added = any(
+                "explicitly actionable candidate finding" in item
+                for item in supporting
+            )
+            xray_evidence_status = "SUPPORTING" if aligned_prediction_added else "RECORDED"
+            xray_status_display = "PARTIAL" if any_unavailable else "COMPLETED"
+            if any_unavailable:
+                unassessed.append(
+                    "Some uploaded X-ray images were interpreted, while one or more images remain unavailable or unprocessed."
+                )
+        elif any(
+            str(img.get("status") or "").strip().lower() == "completed"
+            and (img.get("prediction") or _normalize_xray_findings(img.get("findings")))
+            for img in xray_images
+        ):
+            # Inference completed, but only raw non-actionable scores were returned.
+            # This is recorded as model output, not as an interpreted clinical finding.
+            xray_interpretation = "RECORDED_UNINTERPRETED"
+            xray_evidence_status = "RECORDED"
+            xray_status_display = "PARTIAL" if any_unavailable else "COMPLETED"
         elif any_unavailable:
             xray_interpretation = "UNAVAILABLE"
             xray_evidence_status = "UNKNOWN"
@@ -544,6 +659,12 @@ def combine_evidence(
     if processed_images and processed_xray_reports:
         for img in processed_images:
             img_pred = img.get("prediction")
+            img_findings = _normalize_xray_findings(img.get("findings"))
+            img_labels = [str(img_pred).strip()] if img_pred else [
+                _xray_finding_label(f)
+                for f in img_findings
+                if _xray_finding_label(f) and _xray_finding_is_actionable(f)
+            ]
             img_status = (img.get("status") or "").lower()
             img_file = img.get("file_name") or "xray_image"
             for rep in processed_xray_reports:
@@ -559,27 +680,39 @@ def combine_evidence(
                 )
                 rep_narrative = " ".join([n.get("content", "").lower() for n in rep.get("narrative_findings", []) if isinstance(n, dict)])
 
-                if img_status == "completed" and img_pred:
-                    pred_lower = str(img_pred).lower()
-                    if rep_uncertain_or_conflicting and not any(pred_lower in rf for rf in rep_findings):
+                if img_status == "completed" and img_labels:
+                    labels_lower = [label.lower() for label in img_labels]
+                    matches = [
+                        label for label in labels_lower
+                        if any(label in rf for rf in rep_findings) or label in rep_narrative
+                    ]
+                    absent_matches = [
+                        label for label in labels_lower
+                        if any(f"no {label}" in rf or f"without {label}" in rf for rf in rep_findings)
+                        or f"no {label}" in rep_narrative
+                    ]
+                    if rep_uncertain_or_conflicting and not matches:
                         status_str = "UNRESOLVED"
                         reason = f"Radiology report '{rep_file}' contains uncertain or conflicting findings; no confirmed report corroboration is asserted."
-                    elif any(pred_lower in rf for rf in rep_findings) or pred_lower in rep_narrative:
-                        status_str = "CONCORDANT"
-                        reason = f"Image prediction '{img_pred}' is corroborated by findings in radiology report '{rep_file}'."
-                        supporting.append(f"Cross-modal concordance: Image finding '{img_pred}' is corroborated by radiology report '{rep_file}'.")
-                    elif any(f"no {pred_lower}" in rf or f"without {pred_lower}" in rf for rf in rep_findings) or f"no {pred_lower}" in rep_narrative:
+                    elif matches:
+                        status_str = "PARTIALLY_CONCORDANT" if len(matches) < len(labels_lower) else "CONCORDANT"
+                        reason = (
+                            f"Model candidate pattern(s) {', '.join(matches)} overlap with radiology report '{rep_file}'. "
+                            "This is text-level overlap, not independent diagnostic confirmation."
+                        )
+                        supporting.append(f"Cross-modal text-level overlap: model candidate pattern(s) {', '.join(matches)} also appear in radiology report '{rep_file}'; this does not establish a diagnosis.")
+                    elif absent_matches:
                         status_str = "DISCORDANT"
-                        reason = f"Image prediction '{img_pred}' contrasts with negative/absent finding in radiology report '{rep_file}'."
-                        contradictory.append(f"Cross-modal discordance: Image model detected '{img_pred}', but radiology report '{rep_file}' notes absence of this finding.")
+                        reason = f"Model candidate pattern(s) {', '.join(absent_matches)} contrast with negative/absent wording in radiology report '{rep_file}'. Manual clinical review is needed."
+                        contradictory.append(f"Cross-modal discordance: X-ray model candidate(s) {', '.join(absent_matches)} contrast with absence wording in radiology report '{rep_file}'; neither source is treated as definitive.")
                     else:
                         status_str = "INDEPENDENT"
-                        reason = f"Image model detected '{img_pred}'; radiology report '{rep_file}' does not explicitly confirm or rule out this specific finding."
-
+                        reason = f"Model candidate pattern(s) {', '.join(img_labels[:18])} are not explicitly confirmed or ruled out by radiology report '{rep_file}'."
                     cross_modal_concordance.append({
                         "image_file": img_file,
                         "report_file": rep_file,
                         "image_prediction": img_pred,
+                        "image_findings": img_findings,
                         "concordance_status": status_str,
                         "details": reason,
                     })
@@ -588,20 +721,24 @@ def combine_evidence(
                         "image_file": img_file,
                         "report_file": rep_file,
                         "image_prediction": None,
+                        "image_findings": img_findings,
                         "concordance_status": "NOT_APPLICABLE",
                         "details": f"Automated image model interpretation is unavailable for '{img_file}'. Relying on extracted radiology report findings from '{rep_file}'.",
                     })
 
     # 4. Missing critical information (context-sensitive, never generic across unrelated domains)
     relevant_critical_checks: list[str] = []
-    if has_respiratory_symptom:
+    # Use independent domain checks rather than an elif chain so a patient with
+    # symptoms from more than one domain does not lose relevant safety checks.
+    if has_respiratory_symptom or present_names.intersection({"chest pain", "chest discomfort", "difficulty breathing", "shortness of breath", "dyspnea"}):
         relevant_critical_checks.extend(["difficulty breathing", "chest pain", "high fever"])
-    elif "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
-        relevant_critical_checks.extend(["sudden onset", "weakness", "speech difficulty", "fever", "chest pain"])
-    elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
+    if "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
+        relevant_critical_checks.extend(["sudden onset", "weakness", "speech difficulty", "fever"])
+    if any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
         relevant_critical_checks.extend(["severe swelling/deformity", "numbness", "severe bleeding"])
-    elif any(s.get("domain") in {"gi", "gastrointestinal", "abdominal"} for s in current_present) or any("abdominal" in s.get("symptom", "").lower() for s in current_present):
+    if any(s.get("domain") in {"gi", "gastrointestinal", "abdominal"} for s in current_present) or any("abdominal" in str(s.get("symptom") or "").lower() for s in current_present):
         relevant_critical_checks.extend(["sudden onset", "vomiting", "blood in stool", "fever"])
+    relevant_critical_checks = list(dict.fromkeys(relevant_critical_checks))
 
     for crit in relevant_critical_checks:
         addressed = False
@@ -642,10 +779,24 @@ def combine_evidence(
         missing.append("Radiographic imaging (radiographic status unassessed)")
 
     # 5. Determine overall evidence state
+    definite_qualitative_signals = sum(
+        1 for item in qualitative_report_findings
+        if isinstance(item, dict)
+        and str(item.get("state") or item.get("status") or "").strip().upper() in {"PRESENT", "ABSENT"}
+    )
+    # Radiology PDFs are a distinct input stream; their extracted findings must
+    # also count as evidence, without treating UNKNOWN/UNCERTAIN as confirmed.
+    definite_qualitative_signals += sum(
+        1
+        for report in processed_xray_reports
+        for item in report.get("qualitative_findings", [])
+        if isinstance(item, dict)
+        and str(item.get("state") or item.get("status") or "UNKNOWN").strip().upper() in {"PRESENT", "ABSENT"}
+    )
     total_active_signals = (
         len(current_present)
         + len(report_abnormal)
-        + len(qualitative_report_findings)
+        + definite_qualitative_signals
         + (1 if xray_finding_str else 0)
     )
 
@@ -663,9 +814,17 @@ def combine_evidence(
     else:
         evidence_state = "INSUFFICIENT_EVIDENCE"
 
+    has_definite_report_evidence = bool(
+        report_abnormal
+        or report_normal
+        or any(
+            isinstance(item, dict)
+            and str(item.get("state") or item.get("status") or "").strip().upper() in {"PRESENT", "ABSENT"}
+            for item in qualitative_report_findings
+        )
+    )
     report_evidence_status = (
-        "SUPPORTING"
-        if (report_abnormal or report_normal or qualitative_report_findings or narrative_report_findings)
+        "SUPPORTING" if has_definite_report_evidence
         else ("NOT_ASSESSED" if not is_medical_report_provided else "RECORDED")
     )
 
@@ -743,8 +902,14 @@ def combine_evidence(
                     "state": "UNKNOWN",
                     "type": "UNCERTAIN",
                     "body_area": s.get("body_area") if isinstance(s, dict) else None,
+                    "laterality": s.get("laterality") if isinstance(s, dict) else None,
+                    "quality": s.get("quality") if isinstance(s, dict) else None,
+                    "duration": s.get("duration") if isinstance(s, dict) else None,
+                    "severity": (s.get("severity") or "UNKNOWN").upper() if isinstance(s, dict) else "UNKNOWN",
+                    "onset": s.get("onset") if isinstance(s, dict) else None,
+                    "trigger": s.get("trigger") if isinstance(s, dict) else None,
                     "context": s.get("context") if isinstance(s, dict) else None,
-                    "domain": _lookup_symptom_domain(s.get("symptom") if isinstance(s, dict) else str(s)),
+                    "domain": (s.get("domain") or _lookup_symptom_domain(s.get("symptom") if isinstance(s, dict) else str(s))) if isinstance(s, dict) else _lookup_symptom_domain(str(s)),
                     "source": "user_input",
                     "provenance": "symptom_nlp",
                 }
@@ -785,7 +950,15 @@ def combine_evidence(
             "radiology_conflicts": radiology_conflicts,
             "radiology_uncertain_findings": radiology_uncertain,
             "unknown_range_findings": report_unknown_range,
-            "total_extracted": len(report_findings) + len(qualitative_report_findings) + len(narrative_report_findings),
+            "total_extracted": (
+                len(report_findings)
+                + len(qualitative_report_findings)
+                + len(narrative_report_findings)
+                + sum(
+                    len(rep.get("qualitative_findings", [])) + len(rep.get("narrative_findings", []))
+                    for rep in processed_xray_reports
+                )
+            ),
         },
         "xray": {
             "received": xray_received,
@@ -810,6 +983,24 @@ def combine_evidence(
         "unassessed": unassessed,
         "contradictory": contradictory,
         "missing": missing,
+        # These are unanswered safety checks, not confirmed negative symptoms.
+        # Downstream triage/follow-up layers can consume them without parsing prose.
+        "critical_unknowns": [
+            item for item in missing
+            if any(term in item.lower() for term in (
+                "difficulty breathing", "chest pain", "high fever", "severe bleeding",
+                "sudden onset", "speech difficulty", "weakness", "numbness",
+                "severe swelling/deformity", "vomiting", "blood in stool", "fever",
+            ))
+        ],
+        "follow_up_required": any(
+            any(term in item.lower() for term in (
+                "difficulty breathing", "chest pain", "high fever", "severe bleeding",
+                "sudden onset", "speech difficulty", "weakness", "numbness",
+                "severe swelling/deformity", "vomiting", "blood in stool", "fever",
+            ))
+            for item in missing
+        ),
         "evidence_relationships": evidence_relationships,
         "message": (
             "Multimodal evidence compiled successfully."

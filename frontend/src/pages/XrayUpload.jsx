@@ -326,73 +326,101 @@ export default function XrayUpload() {
 
   const addImages = (fileList) => {
     if (!fileList || fileList.length === 0) return;
-    setError('');
-    const newItems = [];
+
+    const accepted = [];
+    const rejected = [];
+
     for (let i = 0; i < fileList.length; i++) {
-      const f = fileList[i];
-      const ext = '.' + f.name.split('.').pop().toLowerCase();
-      const isAllowed = ALLOWED_IMAGE_EXTS.includes(ext) || ALLOWED_IMAGE_TYPES.includes(f.type);
-      if (!isAllowed) {
-        setError('Please select a PNG, JPG, or JPEG image.');
-        return;
+      const file = fileList[i];
+      const ext = `.${(file.name.split('.').pop() || '').toLowerCase()}`;
+      const validExtension = ALLOWED_IMAGE_EXTS.includes(ext);
+      const validMime = ALLOWED_IMAGE_TYPES.includes((file.type || '').toLowerCase());
+
+      // Accept a known image extension when browsers provide an empty MIME type,
+      // but reject files whose extension and declared MIME type both look invalid.
+      if (!validExtension || (file.type && !validMime)) {
+        rejected.push(file.name);
+        continue;
       }
-      const exists = xrayImages.some(
-        (existing) => existing.file.name === f.name && existing.file.size === f.size
-      );
-      if (!exists) {
-        newItems.push({
-          id: `img-${f.name}-${f.size}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-          file: f,
-          name: f.name,
-          size: f.size,
-          type: f.type,
-          status: 'READY',
-          error: null,
-        });
-      }
+
+      accepted.push({
+        id: `img-${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).substring(2, 9)}`,
+        file,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        status: 'READY',
+        error: null,
+      });
     }
-    if (newItems.length > 0) {
-      setXrayImages((prev) => [...prev, ...newItems]);
+
+    setXrayImages((previous) => {
+      const existingKeys = new Set(
+        previous.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`)
+      );
+      const additions = accepted.filter((item) => {
+        const key = `${item.file.name}|${item.file.size}|${item.file.lastModified}`;
+        if (existingKeys.has(key)) return false;
+        existingKeys.add(key);
+        return true;
+      });
+      return [...previous, ...additions];
+    });
+
+    if (rejected.length > 0) {
+      setError(`Skipped unsupported image file(s): ${rejected.join(', ')}. Please use PNG, JPG, or JPEG images.`);
+    } else {
       setError('');
     }
   };
 
   const addReports = (fileList) => {
     if (!fileList || fileList.length === 0) return;
-    setError('');
-    const newItems = [];
+
+    const accepted = [];
+    const rejected = [];
+
     for (let i = 0; i < fileList.length; i++) {
-      const f = fileList[i];
-      const ext = '.' + f.name.split('.').pop().toLowerCase();
-      if (ext !== '.pdf' && f.type !== 'application/pdf') {
-        setError('Please select a PDF radiology report.');
-        return;
+      const file = fileList[i];
+      const ext = `.${(file.name.split('.').pop() || '').toLowerCase()}`;
+      const validExtension = ext === '.pdf';
+      const validMime = !file.type || file.type.toLowerCase() === 'application/pdf';
+
+      if (!validExtension || !validMime) {
+        rejected.push(`${file.name} (not a PDF)`);
+        continue;
       }
-      const fnameLower = f.name.toLowerCase();
-      const isMedicalReport = ['medical_report', 'medical-report', 'blood_report', 'lab_report', 'cbc', 'liver_report', 'kidney_report'].some(
-        (m) => fnameLower.includes(m)
-      );
-      if (isMedicalReport) {
-        setError(`This file appears to be a general medical report (${f.name}). Please upload it in the Medical Reports section, not X-Ray / Radiology Reports.`);
-        return;
-      }
-      const exists = xrayReports.some(
-        (existing) => existing.file.name === f.name && existing.file.size === f.size
-      );
-      if (!exists) {
-        newItems.push({
-          id: `rep-${f.name}-${f.size}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-          file: f,
-          name: f.name,
-          size: f.size,
-          type: f.type,
-          status: 'READY',
-          error: null,
-        });
-      }
+
+      // Filename keywords are not reliable proof of document content.
+      // Let report processing classify the actual document rather than blocking
+      // a valid radiology PDF because its filename happens to contain "CBC", etc.
+      accepted.push({
+        id: `rep-${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).substring(2, 9)}`,
+        file,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        status: 'READY',
+        error: null,
+      });
     }
-    if (newItems.length > 0) {
-      setXrayReports((prev) => [...prev, ...newItems]);
+
+    setXrayReports((previous) => {
+      const existingKeys = new Set(
+        previous.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`)
+      );
+      const additions = accepted.filter((item) => {
+        const key = `${item.file.name}|${item.file.size}|${item.file.lastModified}`;
+        if (existingKeys.has(key)) return false;
+        existingKeys.add(key);
+        return true;
+      });
+      return [...previous, ...additions];
+    });
+
+    if (rejected.length > 0) {
+      setError(`Skipped unsupported report file(s): ${rejected.join(', ')}. Please use PDF radiology reports.`);
+    } else {
       setError('');
     }
   };
@@ -465,7 +493,7 @@ export default function XrayUpload() {
     let anyFailed = false;
 
     // 1. Process Images
-    const updatedImages = [...xrayImages];
+    const updatedImages = xrayImages.map((item) => ({ ...item }));
     for (let i = 0; i < updatedImages.length; i++) {
       const item = updatedImages[i];
       if (item.status === 'COMPLETED') continue;
@@ -486,7 +514,7 @@ export default function XrayUpload() {
     }
 
     // 2. Process X-Ray / Radiology Reports
-    const updatedReports = [...xrayReports];
+    const updatedReports = xrayReports.map((item) => ({ ...item }));
     for (let i = 0; i < updatedReports.length; i++) {
       const item = updatedReports[i];
       if (item.status === 'COMPLETED') continue;
@@ -589,6 +617,11 @@ export default function XrayUpload() {
           }}
           required={xrayImages.length > 0}
         />
+        {xrayReports.length > 0 && xrayImages.length === 0 ? (
+          <p className="upload-hint-text" role="note">
+            A body region is not required for PDF reports. The report will be processed as radiology-report text, separately from image inference.
+          </p>
+        ) : null}
 
 
         {/* 2. X-RAY IMAGES SECTION */}
@@ -603,7 +636,7 @@ export default function XrayUpload() {
           </button>
         </div>
         <p className="upload-hint-text" style={{ textAlign: 'left', margin: '0 0 0.5rem 0' }}>
-          Accepted: PNG, JPG, JPEG
+          Accepted: PNG, JPG, JPEG. The selected body region applies to every image in this upload batch; upload images from one region at a time.
         </p>
 
         <input
@@ -662,7 +695,7 @@ export default function XrayUpload() {
                       {img.status === 'READY' ? (
                         <span className="status-ready">Ready for upload</span>
                       ) : img.status === 'UPLOADING' ? (
-                        <span className="status-uploading">Uploading &amp; Analyzing...</span>
+                        <span className="status-uploading">Uploading...</span>
                       ) : img.status === 'COMPLETED' ? (
                         <span className="status-completed">✓ Uploaded</span>
                       ) : (
@@ -814,7 +847,7 @@ export default function XrayUpload() {
             onClick={onContinue}
             disabled={submitting || (xrayImages.length === 0 && xrayReports.length === 0)}
           >
-            <span>{submitting ? 'Uploading & Analyzing...' : 'Continue'}</span>
+            <span>{submitting ? 'Uploading...' : 'Continue'}</span>
             <span className="na-btn-arrow">
               <ArrowRightIcon size={18} color="#ffffff" />
             </span>
@@ -824,7 +857,7 @@ export default function XrayUpload() {
             <span className="na-security-icon">
               <ShieldLockIcon size={15} color="#10b981" />
             </span>
-            <span>Independent Verification · HIPAA-Compliant Vision AI &amp; OCR</span>
+            <span>Secure Upload · AI-assisted processing · Not a medical diagnosis</span>
           </div>
         </div>
       </section>

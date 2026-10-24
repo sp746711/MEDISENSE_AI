@@ -31,7 +31,7 @@ try:
 except ImportError:
     pytesseract = None
 
-OCR_VERSION = "report-ocr-v3.0"
+OCR_VERSION = "report-ocr-v3.2-task1"
 
 
 def find_tesseract_binary() -> str | None:
@@ -54,7 +54,7 @@ def find_tesseract_binary() -> str | None:
     candidate_dirs = [
         Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Tesseract-OCR",
         Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Tesseract-OCR",
-        Path(os.environ.get("LOCALAPPDATA", r"C:\Users\Hp\AppData\Local")) / "Programs" / "Tesseract-OCR",
+        Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "Programs" / "Tesseract-OCR",
         Path(r"C:\Tesseract-OCR"),
     ]
     for d in candidate_dirs:
@@ -69,11 +69,18 @@ def find_tesseract_binary() -> str | None:
 
 
 def is_ocr_engine_available() -> bool:
-    """Return True if pytesseract is installed and a working tesseract executable is detected."""
+    """Return True only when pytesseract and a runnable Tesseract binary are available."""
     if pytesseract is None:
         return False
     bin_path = find_tesseract_binary()
-    return bin_path is not None
+    if not bin_path:
+        return False
+    try:
+        # File existence alone is insufficient (bad permissions or broken installations).
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
 
 
 def normalize_ocr_text(text: str | None) -> str:
@@ -103,19 +110,71 @@ def normalize_ocr_text(text: str | None) -> str:
     return result
 
 
+def _result(
+    *,
+    status: str,
+    file_path: str,
+    message: str,
+    extracted_text: str | None = None,
+    tables: list[Any] | None = None,
+    pages: int | None = None,
+    ocr_engine: str = "none",
+) -> dict[str, Any]:
+    """Build a consistent, non-clinical extraction result without leaking exceptions."""
+    result: dict[str, Any] = {
+        "status": status,
+        "extracted_text": extracted_text,
+        "tables": tables if tables is not None else [],
+        "message": message,
+        "ocr_version": OCR_VERSION,
+        "ocr_engine": ocr_engine,
+        "file_path": file_path,
+    }
+    if pages is not None:
+        result["pages"] = pages
+    return result
+
+
+def _needs_ocr(page_text: str) -> bool:
+    """Identify pages with absent or sparse selectable text (common in hybrid PDFs)."""
+    text = (page_text or "").strip()
+    alnum_count = sum(ch.isalnum() for ch in text)
+    # A selectable header alone is not evidence that the report body/table was extracted.
+    return len(text) < 80 or alnum_count < 35
+
+
+def _merge_page_text(digital_text: str, ocr_text: str) -> str:
+    """Merge a page's digital and OCR text while removing obvious repeated lines.
+
+    Keep distinct OCR lines (often the scanned table body) and never silently replace
+    the selectable text layer. This is a conservative duplicate-line filter, not a
+    guarantee that OCR output is clinically accurate.
+    """
+    digital = (digital_text or "").strip()
+    ocr = (ocr_text or "").strip()
+    if not digital:
+        return ocr
+    if not ocr:
+        return digital
+
+    def key(line: str) -> str:
+        return re.sub(r"\s+", " ", line).strip().casefold()
+
+    digital_keys = {key(line) for line in digital.splitlines() if key(line)}
+    extra_lines = [line for line in ocr.splitlines() if key(line) and key(line) not in digital_keys]
+    if not extra_lines:
+        return digital
+    return digital + "\n" + "\n".join(extra_lines)
+
+
 def extract_text_from_file(file_path: str) -> dict[str, Any]:
     """Extract text and tables from an uploaded PDF or image report file."""
     path = Path(file_path)
     if not path.exists():
-        return {
-            "status": "unavailable",
-            "extracted_text": None,
-            "tables": [],
-            "message": f"File does not exist: {file_path}",
-            "ocr_version": OCR_VERSION,
-            "ocr_engine": "none",
-            "file_path": file_path,
-        }
+        return _result(
+            status="unavailable", file_path=file_path,
+            message="The uploaded report file could not be found on the server.",
+        )
 
     ext = path.suffix.lower()
 
@@ -168,17 +227,22 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
 
                         if page_text:
                             has_digital_text = True
+
+                        # Hybrid PDFs may have a selectable header but scanned tables/body.
+                        # Keep the digital layer and OCR sparse pages; never replace original text.
+                        if page_text and not _needs_ocr(page_text):
                             extracted_pages.append(page_text)
                             continue
 
-                        # OCR only pages that have no selectable text.
                         if not ocr_available:
+                            # A sparse digital layer may omit scanned tables or body content.
+                            # Report that OCR could not complete this page even if a header exists.
                             ocr_unavailable_pages.append(page_num + 1)
-                            extracted_pages.append("")
+                            extracted_pages.append(page_text)
                             continue
 
                         try:
-                            pix = page.get_pixmap(dpi=200)
+                            pix = page.get_pixmap(dpi=250, alpha=False)
                             img_bytes = pix.tobytes("png")
                             with Image.open(io.BytesIO(img_bytes)) as pil_img:
                                 if pil_img.mode in ("RGBA", "P", "LA"):
@@ -190,17 +254,24 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
                                     page_ocr = pytesseract.image_to_string(pil_img)
 
                             page_ocr = (page_ocr or "").strip()
-                            extracted_pages.append(page_ocr)
                             if page_ocr:
                                 ocr_used = True
+                                # Preserve the digital text layer and add OCR text only when
+                                # useful; duplicates are possible, so downstream NLP must not
+                                # treat repeated text as independent evidence.
+                                extracted_pages.append(_merge_page_text(page_text, page_ocr))
+                            elif page_text:
+                                extracted_pages.append(page_text)
+                                ocr_unavailable_pages.append(page_num + 1)
                             else:
+                                extracted_pages.append("")
                                 ocr_unavailable_pages.append(page_num + 1)
                         except Exception:
-                            extracted_pages.append("")
+                            extracted_pages.append(page_text)
                             ocr_unavailable_pages.append(page_num + 1)
 
                 # Join non-empty page text in original document order.
-                full_text = "\\n\\n".join(
+                full_text = "\n\n".join(
                     page_text for page_text in extracted_pages if page_text
                 ).strip()
 
@@ -250,8 +321,10 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
                     "pages": total_doc_pages,
                     "ocr_engine": "pytesseract" if ocr_used else "none",
                     "message": (
-                        "No legible medical report text was detected. If the PDF is scanned, "
-                        "verify that Tesseract OCR is installed and configured."
+                        "No legible medical report text was detected. "
+                        + ("Tesseract OCR was unavailable or failed for scanned pages; verify its installation and configuration." 
+                           if not (pytesseract is not None and is_ocr_engine_available())
+                           else "OCR ran but did not recover readable text; inspect the original PDF or try a clearer scan.")
                     ),
                     "ocr_version": OCR_VERSION,
                     "file_path": file_path,
@@ -264,7 +337,7 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
                 page_text = (page.extract_text() or "").strip()
                 extracted_pages.append(page_text)
 
-            full_text = "\\n\\n".join(
+            full_text = "\n\n".join(
                 page_text for page_text in extracted_pages if page_text
             ).strip()
             if not full_text:
@@ -301,7 +374,7 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
                 "status": "error",
                 "extracted_text": None,
                 "tables": [],
-                "message": f"Failed to parse PDF document: {exc}",
+                "message": "The PDF could not be parsed. Verify that it is a valid, readable PDF and try again.",
                 "ocr_version": OCR_VERSION,
                 "ocr_engine": "none",
                 "file_path": file_path,
@@ -313,6 +386,13 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
     if ext in {".png", ".jpg", ".jpeg"}:
         try:
             with Image.open(file_path) as img:
+                # Apply camera orientation metadata before OCR and normalize palette/alpha/gray modes.
+                try:
+                    from PIL import ImageOps
+                    img = ImageOps.exif_transpose(img)
+                except Exception:
+                    pass
+                img.load()
                 # Basic sanity check
                 width, height = img.size
                 if width < 10 or height < 10:
@@ -346,12 +426,19 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
                         "file_path": file_path,
                     }
 
-                # Convert image for robust OCR processing
-                proc_img = img
-                if proc_img.mode in ("RGBA", "P", "LA"):
-                    proc_img = proc_img.convert("RGB")
+                # Prepare a readable OCR copy; keep the uploaded original untouched.
+                from PIL import ImageOps, ImageEnhance
+                proc_img = img.convert("L")
+                proc_img = ImageOps.autocontrast(proc_img)
+                if max(proc_img.size) < 1800:
+                    scale = min(2.0, 1800 / max(proc_img.size))
+                    proc_img = proc_img.resize(
+                        (max(1, int(proc_img.width * scale)), max(1, int(proc_img.height * scale))),
+                        Image.Resampling.LANCZOS,
+                    )
+                proc_img = ImageEnhance.Sharpness(proc_img).enhance(1.2)
 
-                # Perform OCR
+                # Perform OCR. OCR output remains unverified text, not a validated lab result.
                 raw_ocr = pytesseract.image_to_string(proc_img, config="--oem 3 --psm 6")
                 if not raw_ocr or len(raw_ocr.strip()) < 5:
                     raw_ocr = pytesseract.image_to_string(proc_img)
@@ -375,7 +462,7 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
                     "tables": [],
                     "pages": 1,
                     "ocr_engine": "pytesseract",
-                    "message": "Successfully extracted text from image report via OCR.",
+                    "message": "Successfully extracted text from image report via OCR. Verify recognized values, units, and reference ranges against the original image.",
                     "ocr_version": OCR_VERSION,
                     "file_path": file_path,
                 }
@@ -387,7 +474,7 @@ def extract_text_from_file(file_path: str) -> dict[str, Any]:
                 "tables": [],
                 "pages": 1,
                 "ocr_engine": "none",
-                "message": f"Failed to process image document: {exc}",
+                "message": "The image report could not be processed. Verify that the file is a valid PNG/JPG image and try again.",
                 "ocr_version": OCR_VERSION,
                 "file_path": file_path,
             }

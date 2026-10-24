@@ -25,10 +25,11 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_MODEL_DIR = BACKEND_DIR / "models" / "conditions"
 MODEL_PIPELINE_FILE = "condition_pipeline.joblib"
 MODEL_CLASSES_FILE = "condition_classes.json"
-MODEL_VERSION = "condition_pred_v1.0"
+MODEL_VERSION = "condition_pred_v1.1-task1"
 
 REJECTION_THRESHOLD = 0.25
 MIN_CANDIDATE_SCORE = 0.04
+MAX_DISPLAY_CANDIDATES = 10
 
 # Explainability metadata. These profiles are not diagnostic criteria.
 CONDITION_SYMPTOM_MAP: dict[str, dict[str, Any]] = {
@@ -256,24 +257,50 @@ def _phrase_matches(profile_phrase: str, patient_phrase: str) -> bool:
     if profile == patient:
         return True
 
-    # Allow a phrase to be embedded in a longer phrase, but only at word
-    # boundaries. This avoids matching "pain" inside an unrelated word.
-    return (
-        re.search(r"(?<!\w)" + re.escape(profile) + r"(?!\w)", patient) is not None
-        or re.search(r"(?<!\w)" + re.escape(patient) + r"(?!\w)", profile) is not None
-    )
+    # A configured profile phrase may appear inside a more specific patient
+    # phrase (e.g. "chest pain" in "severe chest pain"). Do not reverse this
+    # comparison: a generic patient phrase such as "pain" must not match every
+    # specific profile phrase such as "chest pain" or "abdominal pain".
+    return re.search(
+        r"(?<!\w)" + re.escape(profile) + r"(?!\w)", patient
+    ) is not None
 
 
 def _get_state(item: Any) -> str:
+    """Normalize symptom state aliases without treating unknown as positive."""
     if not isinstance(item, dict):
         return ""
-    return str(item.get("state") or "").strip().upper()
+    raw = item.get("state")
+    if raw is None or str(raw).strip() == "":
+        raw = item.get("status")
+    state = re.sub(r"[\s-]+", "_", str(raw or "").strip().upper())
+
+    aliases = {
+        "YES": "PRESENT",
+        "TRUE": "PRESENT",
+        "POSITIVE": "PRESENT",
+        "CURRENT": "PRESENT",
+        "NO": "ABSENT",
+        "FALSE": "ABSENT",
+        "NEGATIVE": "ABSENT",
+        "NOT_PRESENT": "ABSENT",
+        "NOT_SURE": "UNKNOWN",
+        "UNSURE": "UNKNOWN",
+        "UNKNOWN": "UNKNOWN",
+        "UNANSWERED": "UNKNOWN",
+        "UNASSESSED": "UNKNOWN",
+        "NOT_ASSESSED": "UNKNOWN",
+        "HISTORICAL": "HISTORICAL",
+        "PAST": "HISTORICAL",
+    }
+    return aliases.get(state, state)
 
 
 def _is_historical(item: Any) -> bool:
     if not isinstance(item, dict):
         return False
-    return str(item.get("type") or "").strip().upper() == "HISTORICAL"
+    item_type = str(item.get("type") or item.get("temporal_status") or "").strip().upper()
+    return item_type in {"HISTORICAL", "HISTORY", "PAST", "PREVIOUS"} or _get_state(item) == "HISTORICAL"
 
 
 def _match_profile(
@@ -382,9 +409,11 @@ class ConditionPredictionService:
         """Return ranked, evidence-supported candidates.
 
         raw_text is intentionally not used to build model features. Use the
-        structured, validated symptom lists instead.
-        top_k is retained for API compatibility; supported candidates are not
-        truncated to the top three.
+        structured, validated symptom lists instead. This classifier is
+        symptom-text based; it does not directly consume lab or imaging data.
+        Those sources must be integrated by the assessment/evidence layer.
+        top_k is retained for API compatibility; output is capped at the model's
+        supported 24-class limit rather than an arbitrary top-three list.
         """
         del raw_text, top_k
 
@@ -400,7 +429,8 @@ class ConditionPredictionService:
                 "conditions": [],
                 "message": (
                     "Condition prediction is unavailable because the trained model "
-                    "could not be loaded. Check backend/models/conditions/."
+                    "could not be loaded. Check the trained pipeline, its dependencies, "
+                    "and backend/models/conditions/."
                 ),
                 "is_experimental": True,
                 "safety_notice": safety_notice,
@@ -420,7 +450,13 @@ class ConditionPredictionService:
 
             if isinstance(item, dict):
                 state = _get_state(item)
-                if state in {"ABSENT", "UNKNOWN", "HISTORICAL"}:
+                # Items supplied in symptoms_present may omit state for legacy
+                # callers, but any explicit non-positive state must be excluded.
+                if state in {"ABSENT", "UNKNOWN", "HISTORICAL", "NO", "FALSE", "NEGATIVE"}:
+                    continue
+                if state and state != "PRESENT":
+                    # Fail closed for unrecognized explicit states: never turn
+                    # an unfamiliar state into a positive model feature.
                     continue
 
                 name = _extract_name(item)
@@ -468,12 +504,16 @@ class ConditionPredictionService:
             _extract_name(item)
             for item in absent_items
             if _extract_name(item)
+            and not _is_historical(item)
+            and (not isinstance(item, dict) or _get_state(item) in {"", "ABSENT"})
         }
 
         unknown_names = {
             _extract_name(item)
             for item in unknown_items
             if _extract_name(item)
+            and not _is_historical(item)
+            and (not isinstance(item, dict) or _get_state(item) in {"", "UNKNOWN"})
         }
 
         # A symptom marked absent/unknown must not be treated as present,
@@ -554,6 +594,14 @@ class ConditionPredictionService:
             if np.any(probabilities < 0) or np.any(probabilities > 1):
                 raise ValueError("Model returned probabilities outside [0, 1].")
 
+            # predict_proba should return a normalized distribution. Reject
+            # malformed output rather than silently ranking invalid scores.
+            score_sum = float(probabilities.sum())
+            if score_sum <= 0 or not np.isclose(score_sum, 1.0, atol=1e-3):
+                raise ValueError(
+                    f"Model probability scores are not normalized (sum={score_sum:.6f})."
+                )
+
             # Accommodate minor naming/capitalization differences in metadata.
             metadata_by_normalized_name = {
                 _normalize(name): metadata
@@ -567,9 +615,9 @@ class ConditionPredictionService:
                 condition_name = classes[int(index)]
                 score = float(probabilities[int(index)])
 
-                # Retain low scores only until a candidate has been accepted;
-                # do not stop ranking before checking evidence alignment.
-                if score < MIN_CANDIDATE_SCORE and conditions:
+                # Apply the minimum score consistently to every candidate.
+                # Never let the first candidate bypass the configured floor.
+                if score < MIN_CANDIDATE_SCORE:
                     continue
 
                 metadata = metadata_by_normalized_name.get(
@@ -603,17 +651,27 @@ class ConditionPredictionService:
                     )
                 ][:3]
 
+                # These are model score bands, not calibrated clinical
+                # confidence levels. Keep the legacy field for API compatibility
+                # while making that limitation explicit in the returned payload.
                 if score >= 0.50:
-                    confidence_tier = "Moderate Alignment"
+                    confidence_tier = "Higher model score (not clinical confidence)"
                 elif score >= REJECTION_THRESHOLD:
-                    confidence_tier = "Possible Alignment"
+                    confidence_tier = "Possible model match (not clinical confidence)"
                 else:
-                    confidence_tier = "Low Alignment / Differential"
+                    confidence_tier = "Low model score (not clinical confidence)"
 
                 conditions.append({
                     "rank": len(conditions) + 1,
                     "condition": condition_name,
+                    # Retain the legacy key used by the frontend. This is the
+                    # model's predict_proba score, not a validated disease risk.
                     "probability_score": round(score, 4),
+                    "model_score": round(score, 4),
+                    "score_interpretation": (
+                        "Unvalidated model score; not a calibrated probability "
+                        "of having this condition."
+                    ),
                     "confidence_tier": confidence_tier,
                     "supporting_symptoms": supporting,
                     "contradictory_findings": contradictory,
@@ -636,11 +694,13 @@ class ConditionPredictionService:
                     ),
                 })
 
-            # Keep candidate order consistent with descending model probability.
+            # Keep candidate order consistent with descending model score and
+            # cap output at the model's supported class limit (normally 24).
             conditions.sort(
-                key=lambda candidate: candidate["probability_score"],
+                key=lambda candidate: candidate["model_score"],
                 reverse=True,
             )
+            conditions = conditions[: min(MAX_DISPLAY_CANDIDATES, len(classes))]
 
             for rank, candidate in enumerate(conditions, start=1):
                 candidate["rank"] = rank
@@ -684,10 +744,26 @@ class ConditionPredictionService:
                 "status": "completed",
                 "model_version": self.model_version,
                 "conditions": conditions,
+                "total_model_classes": len(classes),
                 "total_candidates_evaluated": len(ranked_indices),
+                "total_candidates_returned": len(conditions),
+                "maximum_candidates_displayed": MAX_DISPLAY_CANDIDATES,
+                "candidate_limit_note": (
+                    "Up to 10 candidates are returned only when they pass the model-score "
+                    "and structured symptom-evidence filters; fewer results are valid."
+                ),
+                "prediction_basis": "active_present_symptoms_only",
+                "input_sources_used": ["validated_present_symptoms"],
+                "input_sources_not_used_directly": [
+                    "laboratory_reports", "radiology_report_text", "xray_images"
+                ],
+                "score_interpretation": (
+                    "Model scores are not clinically validated probabilities and "
+                    "must not be interpreted as confirmed disease likelihoods."
+                ),
                 "message": (
-                    f"Generated {len(conditions)} evidence-supported possible "
-                    "condition candidate(s). These are not diagnoses."
+                    f"Generated {len(conditions)} possible condition candidate(s) "
+                    "with matching symptom-profile evidence. These are not diagnoses."
                 ),
                 "is_experimental": True,
                 "safety_notice": safety_notice,

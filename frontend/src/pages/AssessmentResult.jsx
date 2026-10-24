@@ -5,8 +5,47 @@ import EvidenceCard from '../components/EvidenceCard';
 import ErrorMessage from '../components/ErrorMessage';
 import LoadingScreen from '../components/LoadingScreen';
 import { getAssessment, getAssessmentResult } from '../services/assessmentService';
-import { formatDate, inputTypesLabel } from '../utils/formatters';
+import { inputTypesLabel } from '../utils/formatters';
 import { MEDICAL_DISCLAIMER } from '../utils/constants';
+
+// Assessment timestamps are stored by the backend; render them consistently in India Standard Time.
+// ISO timestamps with an explicit offset are converted correctly. Invalid/missing values remain clear.
+function formatAssessmentDate(value) {
+  if (!value) return 'Not available';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Date unavailable';
+  return `${new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  }).format(date)} IST`;
+}
+
+/** Normalize possibly malformed API payload sections without inventing evidence. */
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function displayText(value, fallback = '') {
+  if (value === null || value === undefined) return fallback;
+  if (typeof value === 'string' || typeof value === 'number') return String(value);
+  return fallback;
+}
+
+function formatCandidateList(value) {
+  return asArray(value)
+    .map((item) => (typeof item === 'string' ? item : displayText(item?.symptom || item?.finding || item?.name)))
+    .filter(Boolean);
+}
+
 
 export default function AssessmentResult() {
   const { id } = useParams();
@@ -56,7 +95,7 @@ export default function AssessmentResult() {
       document.body.appendChild(a);
       a.click();
       a.remove();
-      window.URL.revokeObjectURL(url);
+      window.setTimeout(() => window.URL.revokeObjectURL(url), 1000);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -66,41 +105,67 @@ export default function AssessmentResult() {
 
   if (loading) return <LoadingScreen message="Loading assessment..." />;
 
-  const pathway = result?.pathway || assessment?.pathway;
+  const pathway = result?.pathway || assessment?.pathway || null;
   const upper = String(pathway || '').toUpperCase();
-  const payload = result?.result || assessment?.result_payload || {};
-  const evidence = payload.evidence || {};
-  const triage = payload.triage || {};
+  const payload = asObject(result?.result || assessment?.result_payload);
+  const feedback = asObject(payload.feedback);
+  const evidence = asObject(payload.evidence);
+  const symptomEvidence = asObject(evidence.symptoms);
+  const reportEvidence = asObject(evidence.report);
+  const xrayData = asObject(evidence.xray);
+  const triage = asObject(payload.triage);
+  const predictions = asObject(payload.condition_predictions);
 
-  const symptomsPresent = evidence.symptoms?.present || [];
-  const symptomsAbsent = evidence.symptoms?.absent || [];
-  const historicalSymptoms =
-    payload.feedback?.historical_symptoms ||
-    payload.feedback?.historical_context ||
-    evidence.symptoms?.historical ||
-    [];
-  const reportFindings = payload.feedback?.medical_report_findings?.length
-    ? payload.feedback.medical_report_findings
-    : (evidence.report?.abnormal_findings || [])
-        .concat(evidence.report?.normal_findings || [])
-        .concat(evidence.report?.unknown_range_findings || []);
-  const medicalReportsList =
-    payload.feedback?.medical_reports || evidence.report?.medical_reports || [];
-  const xrayImagesList =
-    payload.feedback?.xray_images || evidence.xray?.images || [];
-  const xrayReportsList =
-    payload.feedback?.xray_reports || evidence.xray?.reports || [];
-  const xrayData = evidence.xray;
-  const possibleConditions =
-    payload.feedback?.possible_conditions ||
-    payload.condition_predictions?.conditions ||
-    [];
-  const conditionStatus =
-    payload.condition_predictions?.status ||
-    payload.feedback?.condition_prediction_status;
-  const conditionMessage =
-    payload.condition_predictions?.message ||
-    payload.feedback?.condition_prediction_message;
+  const symptomsPresent = asArray(symptomEvidence.present);
+  const symptomsAbsent = asArray(symptomEvidence.absent);
+  const symptomsUnknown = asArray(symptomEvidence.unknown);
+  const historicalSymptoms = asArray(
+    feedback.historical_symptoms?.length
+      ? feedback.historical_symptoms
+      : feedback.historical_context?.length
+        ? feedback.historical_context
+        : symptomEvidence.historical
+  );
+  const feedbackReportFindings = asArray(feedback.medical_report_findings);
+  const reportFindings = feedbackReportFindings.length
+    ? feedbackReportFindings
+    : [
+        ...asArray(reportEvidence.abnormal_findings),
+        ...asArray(reportEvidence.normal_findings),
+        ...asArray(reportEvidence.unknown_range_findings),
+      ];
+  const medicalReportsList = asArray(
+    feedback.medical_reports?.length ? feedback.medical_reports : reportEvidence.medical_reports
+  );
+  const xrayImagesList = asArray(
+    feedback.xray_images?.length ? feedback.xray_images : xrayData.images
+  );
+  const xrayReportsList = asArray(
+    feedback.xray_reports?.length ? feedback.xray_reports : xrayData.reports
+  );
+
+  // Display only actual candidate records; do not fabricate missing matches.
+  // The current Task 1 candidate display cap is 10, matching the backend change.
+  const feedbackCandidates = asArray(feedback.possible_conditions);
+  const predictionCandidates = asArray(predictions.conditions);
+  const rawPossibleConditions = feedbackCandidates.length
+    ? feedbackCandidates
+    : predictionCandidates;
+  const possibleConditions = rawPossibleConditions
+    .filter((candidate) => candidate && typeof candidate === 'object' &&
+      displayText(candidate.condition || candidate.name || candidate.label).trim())
+    .slice(0, 10);
+  const conditionStatus = predictions.status || feedback.condition_prediction_status;
+  const conditionMessage = predictions.message || feedback.condition_prediction_message;
+
+  // Use the recorded input list to distinguish 'not supplied' from 'supplied but not processed'.
+  const inputTypes = Array.isArray(assessment?.input_types)
+    ? assessment.input_types.map((v) => String(v).toLowerCase())
+    : String(assessment?.input_types || '').toLowerCase().split(/[;,|]/).map((v) => v.trim()).filter(Boolean);
+  const hasInputType = (...needles) => inputTypes.some((type) => needles.some((needle) => type.includes(needle)));
+  const symptomsWereProvided = hasInputType('symptom');
+  const medicalReportWasProvided = hasInputType('medical_report', 'medical report', 'lab', 'blood report');
+  const xrayWasProvided = hasInputType('xray', 'x-ray', 'radiology', 'image');
 
   return (
     <div className="page">
@@ -108,7 +173,7 @@ export default function AssessmentResult() {
       <ErrorMessage message={error} onDismiss={() => setError('')} />
 
       <div className="meta-strip">
-        <p><strong>Assessment Date:</strong> {formatDate(assessment?.created_at)}</p>
+        <p><strong>Assessment Date:</strong> {formatAssessmentDate(assessment?.created_at)}</p>
         <p><strong>Inputs Provided:</strong> {inputTypesLabel(assessment?.input_types)}</p>
       </div>
 
@@ -122,24 +187,24 @@ export default function AssessmentResult() {
       ) : null}
 
       {/* DYNAMIC ASSESSMENT SUMMARY */}
-      {payload.feedback?.assessment_summary ? (
+      {feedback.assessment_summary ? (
         <div className="card" style={{ marginBottom: '1.5rem', borderLeft: '4px solid #2563eb', background: '#f8fafc' }}>
           <h3 style={{ marginTop: 0, color: '#1e40af', fontSize: '1.1rem' }}>Clinical Assessment Summary</h3>
-          <p style={{ lineHeight: '1.6', margin: 0, color: '#1e293b' }}>{payload.feedback.assessment_summary}</p>
+          <p style={{ lineHeight: '1.6', margin: 0, color: '#1e293b' }}>{feedback.assessment_summary}</p>
         </div>
       ) : null}
 
-      <div className="evidence-grid">
+      <div className="evidence-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))', alignItems: 'start', gap: '1rem', width: '100%' }}>
         {/* 1. SYMPTOMS */}
         <EvidenceCard title="SYMPTOMS EVIDENCE">
-          {symptomsPresent.length === 0 && symptomsAbsent.length === 0 ? (
-            <p className="muted">No symptoms provided or structured.</p>
+          {symptomsPresent.length === 0 && symptomsAbsent.length === 0 && symptomsUnknown.length === 0 ? (
+            <p className="muted">{symptomsWereProvided ? (feedback.symptom_message || 'Symptoms were submitted, but no structured symptom findings are available in this result. Check processing status or assessment details.') : 'No symptoms were provided for this assessment.'}</p>
           ) : (
             <div className="symptoms-list">
               {symptomsPresent.map((s, idx) => (
                 <div key={idx} className="evidence-pill present">
                   <span className="badge badge-present">PRESENT</span>
-                  <strong>{s.symptom}</strong>
+                  <strong>{s.symptom || s.finding || 'Unnamed symptom'}</strong>
                   {s.duration ? <span className="pill-detail">({s.duration})</span> : null}
                   {s.severity ? <span className="pill-detail severity">[{s.severity}]</span> : null}
                   {s.laterality ? <span className="pill-detail">[{s.laterality}-sided]</span> : null}
@@ -160,7 +225,14 @@ export default function AssessmentResult() {
               {symptomsAbsent.map((s, idx) => (
                 <div key={idx} className="evidence-pill absent">
                   <span className="badge badge-absent">ABSENT</span>
-                  <span>{s.symptom}</span>
+                  <span>{s.symptom || s.finding || 'Unnamed symptom'}</span>
+                </div>
+              ))}
+              {symptomsUnknown.map((s, idx) => (
+                <div key={`unknown-${idx}`} className="evidence-pill" style={{ background: '#fffbeb', borderColor: '#f59e0b' }}>
+                  <span className="badge" style={{ background: '#b45309', color: '#fff' }}>UNKNOWN</span>
+                  <span>{s.symptom || s.finding || 'Unanswered symptom'}</span>
+                  {s.context ? <span className="pill-detail">{s.context}</span> : null}
                 </div>
               ))}
             </div>
@@ -188,7 +260,7 @@ export default function AssessmentResult() {
         {/* 2. MEDICAL REPORT */}
         <EvidenceCard title="MEDICAL REPORT FINDINGS">
           {reportFindings.length === 0 && medicalReportsList.length === 0 ? (
-            <p className="muted">{payload.feedback?.medical_report_message || 'Medical Report: Not provided.'}</p>
+            <p className="muted">{feedback.medical_report_message || (medicalReportWasProvided ? 'A medical/laboratory report was submitted, but no structured findings are available in this result. Check the upload and extraction status.' : 'No medical/laboratory report was provided for this assessment.')}</p>
           ) : (
             <div>
               {medicalReportsList.length > 0 ? (
@@ -242,7 +314,7 @@ export default function AssessmentResult() {
         {/* 3. X-RAY & RADIOLOGY EVIDENCE */}
         <EvidenceCard title="X-RAY & RADIOLOGY EVIDENCE">
           {(!xrayData || !xrayData.received) && xrayImagesList.length === 0 && xrayReportsList.length === 0 ? (
-            <p className="muted">X-Ray: Not provided.</p>
+            <p className="muted">{feedback.xray_message || (xrayWasProvided ? 'An X-ray image or radiology report was submitted, but its detailed evidence is not available in this result. Check processing status and assessment details.' : 'No X-ray image or radiology report was provided for this assessment.')}</p>
           ) : (
             <div>
               {/* Images */}
@@ -261,7 +333,7 @@ export default function AssessmentResult() {
                             </span>
                           ) : (
                             <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>
-                              Reason: automated interpretation unavailable
+                              Reason: {img.message || img.description || 'Automated interpretation unavailable'}
                             </span>
                           )}
                         </div>
@@ -329,13 +401,13 @@ export default function AssessmentResult() {
               ) : null}
 
               {/* Cross-Modal Concordance */}
-              {evidence.xray?.cross_modal_concordance?.length > 0 && (
+              {asArray(xrayData.cross_modal_concordance).length > 0 && (
                 <div style={{ marginTop: '0.8rem', padding: '0.6rem', background: '#f8fafc', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
                   <h5 style={{ margin: '0 0 0.3rem 0', fontSize: '0.85rem', color: '#334155' }}>
                     Cross-Modal Comparison (Image Model vs. Radiology Report):
                   </h5>
                   <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
-                    {evidence.xray.cross_modal_concordance.map((c, cIdx) => (
+                    {asArray(xrayData.cross_modal_concordance).map((c, cIdx) => (
                       <li key={cIdx} style={{ marginBottom: '0.25rem' }}>
                         <span style={{ fontWeight: 600, color: c.concordance_status === 'CONCORDANT' ? '#059669' : c.concordance_status === 'DISCORDANT' ? '#dc2626' : '#64748b' }}>
                           [{c.concordance_status}]
@@ -352,7 +424,7 @@ export default function AssessmentResult() {
 
         {/* 4. WHY THIS PATHWAY */}
         <EvidenceCard title="WHY THIS PATHWAY?">
-          <p>{payload.feedback?.why_this_triage_selected || triage.why_this_pathway || 'Selected by backend safety rules based on clinical indicators.'}</p>
+          <p>{feedback.why_this_triage_selected || triage.why_this_pathway || 'Selected by backend safety rules based on clinical indicators.'}</p>
           {triage.rules_triggered?.length ? (
             <p className="small muted">Rules triggered: {triage.rules_triggered.join(', ')}</p>
           ) : null}
@@ -362,7 +434,7 @@ export default function AssessmentResult() {
         {possibleConditions.length > 0 ? (
           <EvidenceCard title="POSSIBLE CONDITIONS (ASSISTIVE ML DIFFERENTIAL)">
             <p className="small muted" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-              Probabilistic disease pattern alignment based on verified clinical symptoms. This is an assistive tool for discussion with a doctor and does NOT constitute a diagnosis.
+              These are statistical model candidates for discussion with a qualified clinician, not confirmed diagnoses or clinically validated probabilities. Review the supporting, contradictory, and unknown evidence for each candidate. The safety pathway is determined separately and is not overridden by these candidates.
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
               {possibleConditions.map((c, idx) => (
@@ -378,25 +450,25 @@ export default function AssessmentResult() {
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.35rem' }}>
                     <strong style={{ fontSize: '1rem', color: '#1e3a8a' }}>
-                      #{c.rank || idx + 1} {c.condition}
+                      #{c.rank || idx + 1} {c.condition || c.name || c.label}
                     </strong>
                     <span className="badge" style={{ background: idx === 0 ? '#2563eb' : '#64748b', color: '#fff', fontSize: '0.75rem' }}>
-                      {c.confidence_tier || 'Possible Alignment'}
+                      {c.confidence_tier || 'Possible candidate'}
                     </span>
                   </div>
                   {c.supporting_symptoms?.length ? (
                     <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.85rem', color: '#334155' }}>
-                      <strong>Supporting Symptoms:</strong> {c.supporting_symptoms.join(', ')}
+                      <strong>Supporting Symptoms:</strong> {formatCandidateList(c.supporting_symptoms).join(', ')}
                     </p>
                   ) : null}
                   {c.contradictory_findings?.length ? (
                     <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.85rem', color: '#b91c1c' }}>
-                      <strong>Contradictory / Denied:</strong> {c.contradictory_findings.join(', ')}
+                      <strong>Contradictory / Denied:</strong> {formatCandidateList(c.contradictory_findings).join(', ')}
                     </p>
                   ) : null}
                   {c.unknown_or_missing_information?.length ? (
                     <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.82rem', color: '#64748b' }}>
-                      <strong>Unassessed Factors:</strong> {c.unknown_or_missing_information.join(', ')}
+                      <strong>Unassessed Factors:</strong> {formatCandidateList(c.unknown_or_missing_information).join(', ')}
                     </p>
                   ) : null}
                   {c.suggested_specialty ? (
@@ -411,10 +483,22 @@ export default function AssessmentResult() {
         ) : conditionStatus === 'unsupported_condition' ? (
           <EvidenceCard title="POSSIBLE CONDITIONS (ASSISTIVE ML DIFFERENTIAL)">
             <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.88rem', color: '#475569', lineHeight: '1.5' }}>
-              {conditionMessage || 'Reported symptoms do not show strong alignment with the 24 disease patterns evaluated by this assistive model. A comprehensive clinical evaluation by a healthcare provider is recommended.'}
+              {conditionMessage || 'Reported symptoms do not show strong alignment with the condition patterns evaluated by this assistive model. A comprehensive clinical evaluation by a healthcare provider is recommended.'}
             </p>
             <p className="small muted" style={{ margin: 0, fontStyle: 'italic' }}>
               Note: The assistive model refuses to guess diagnoses when clinical presentations fall outside its validated training domains.
+            </p>
+          </EvidenceCard>
+        ) : conditionStatus && !['ok', 'success', 'completed'].includes(String(conditionStatus).toLowerCase()) ? (
+          <EvidenceCard title="POSSIBLE CONDITIONS (ASSISTIVE ML DIFFERENTIAL)">
+            <p className="small muted" style={{ margin: 0 }}>
+              {conditionMessage || 'Condition matching is currently unavailable. No candidate conditions have been inferred.'}
+            </p>
+          </EvidenceCard>
+        ) : rawPossibleConditions.length === 0 ? (
+          <EvidenceCard title="POSSIBLE CONDITIONS (ASSISTIVE ML DIFFERENTIAL)">
+            <p className="small muted" style={{ margin: 0 }}>
+              No displayable candidates were returned by the model for this assessment. This does not establish that no condition is present.
             </p>
           </EvidenceCard>
         ) : null}
@@ -422,7 +506,7 @@ export default function AssessmentResult() {
         {/* 5. SUGGESTED SPECIALTY */}
         <EvidenceCard title="SUGGESTED SPECIALTY">
           <p className="highlight-specialty">
-            {payload.feedback?.recommended_next_step?.suggested_specialty || result?.specialty || assessment?.specialty || 'General Physician / Internal Medicine'}
+            {feedback.recommended_next_step?.suggested_specialty || result?.specialty || assessment?.specialty || 'General Physician / Internal Medicine'}
           </p>
           <p className="small muted">Controlled mapping based on affected clinical domain.</p>
         </EvidenceCard>
@@ -431,19 +515,19 @@ export default function AssessmentResult() {
         <EvidenceCard title="RECOMMENDED NEXT STEPS">
           <p>
             <strong>Guidance:</strong>{' '}
-            {payload.feedback?.recommended_next_step?.guidance || triage.guidance || 'Consult a qualified physician.'}
+            {feedback.recommended_next_step?.guidance || triage.guidance || 'Consult a qualified physician.'}
           </p>
           <p>
             <strong>Next Action:</strong>{' '}
-            {payload.feedback?.recommended_next_step?.next_steps || triage.next_steps || 'Schedule in-person medical evaluation.'}
+            {feedback.recommended_next_step?.next_steps || triage.next_steps || 'Schedule in-person medical evaluation.'}
           </p>
         </EvidenceCard>
 
         {/* 7. SUPPORTING EVIDENCE */}
-        {payload.feedback?.supporting_evidence?.length ? (
+        {asArray(feedback.supporting_evidence).length ? (
           <EvidenceCard title="SUPPORTING EVIDENCE">
             <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
-              {payload.feedback.supporting_evidence.map((item, idx) => (
+              {asArray(feedback.supporting_evidence).map((item, idx) => (
                 <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem' }}>{item}</li>
               ))}
             </ul>
@@ -451,10 +535,10 @@ export default function AssessmentResult() {
         ) : null}
 
         {/* 8. REASSURING EVIDENCE */}
-        {payload.feedback?.reassuring_evidence?.length ? (
+        {asArray(feedback.reassuring_evidence).length ? (
           <EvidenceCard title="REASSURING EVIDENCE">
             <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
-              {payload.feedback.reassuring_evidence.map((item, idx) => (
+              {asArray(feedback.reassuring_evidence).map((item, idx) => (
                 <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem', color: '#15803d' }}>{item}</li>
               ))}
             </ul>
@@ -462,10 +546,10 @@ export default function AssessmentResult() {
         ) : null}
 
         {/* 9. SEPARATE / CONTEXTUAL FINDINGS */}
-        {payload.feedback?.separate_contextual_findings?.length ? (
+        {asArray(feedback.separate_contextual_findings).length ? (
           <EvidenceCard title="SEPARATE / CONTEXTUAL FINDINGS">
             <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
-              {payload.feedback.separate_contextual_findings.map((item, idx) => (
+              {asArray(feedback.separate_contextual_findings).map((item, idx) => (
                 <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem', color: '#475569' }}>{item}</li>
               ))}
             </ul>
@@ -473,10 +557,10 @@ export default function AssessmentResult() {
         ) : null}
 
         {/* 10. CONTRADICTORY EVIDENCE */}
-        {payload.feedback?.contradictory_evidence?.length ? (
+        {asArray(feedback.contradictory_evidence).length ? (
           <EvidenceCard title="CONTRADICTORY EVIDENCE">
             <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
-              {payload.feedback.contradictory_evidence.map((item, idx) => (
+              {asArray(feedback.contradictory_evidence).map((item, idx) => (
                 <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem', color: '#b91c1c' }}>{item}</li>
               ))}
             </ul>
@@ -484,10 +568,10 @@ export default function AssessmentResult() {
         ) : null}
 
         {/* 11. UNKNOWN / MISSING INFORMATION */}
-        {payload.feedback?.uncertain_missing_info?.length ? (
+        {asArray(feedback.uncertain_missing_info).length ? (
           <EvidenceCard title="UNKNOWN / MISSING INFORMATION">
             <ul style={{ paddingLeft: '1.2rem', margin: 0 }}>
-              {payload.feedback.uncertain_missing_info.map((item, idx) => (
+              {asArray(feedback.uncertain_missing_info).map((item, idx) => (
                 <li key={idx} style={{ marginBottom: '0.3rem', fontSize: '0.9rem', color: '#64748b' }}>{item}</li>
               ))}
             </ul>

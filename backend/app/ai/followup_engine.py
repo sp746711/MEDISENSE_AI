@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from typing import Any
 
+FOLLOWUP_ENGINE_VERSION = "followup-engine-v2.5-task1"
+
 CRITICAL_FOLLOWUP_DEFINITIONS: list[dict[str, Any]] = [
     # Abdominal / Gastrointestinal domain
     {
@@ -167,6 +169,43 @@ CRITICAL_FOLLOWUP_DEFINITIONS: list[dict[str, Any]] = [
 ]
 
 
+
+_STATE_ALIASES = {
+    "PRESENT": "PRESENT",
+    "YES": "PRESENT",
+    "TRUE": "PRESENT",
+    "POSITIVE": "PRESENT",
+    "ABSENT": "ABSENT",
+    "NO": "ABSENT",
+    "FALSE": "ABSENT",
+    "NEGATIVE": "ABSENT",
+    "DENIED": "ABSENT",
+    "UNKNOWN": "UNKNOWN",
+    "UNSURE": "UNKNOWN",
+    "NOT SURE": "UNKNOWN",
+    "UNANSWERED": "UNKNOWN",
+    "UNASSESSED": "UNKNOWN",
+    "": "UNKNOWN",
+}
+
+
+def _normalize_state(value: Any) -> str:
+    """Normalize state aliases without ever converting uncertainty to absence."""
+    text = re.sub(r"\s+", " ", str(value or "").strip().upper())
+    return _STATE_ALIASES.get(text, "UNKNOWN")
+
+
+def _as_dict_list(value: Any) -> list[dict[str, Any]]:
+    """Return only mapping items from a possibly malformed list-like payload."""
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
 def is_target_addressed(
     target: str,
     symptoms: list[dict[str, Any]] | None = None,
@@ -175,13 +214,14 @@ def is_target_addressed(
     """Check if a clinical target is already addressed (known PRESENT or known ABSENT)."""
     symptoms = symptoms or []
     known_names = {
-        s.get("symptom", "").lower()
+        str(s.get("symptom") or s.get("finding") or "").strip().lower()
         for s in symptoms
-        if s.get("state") in {"PRESENT", "ABSENT"} or s.get("status") in {"PRESENT", "ABSENT"}
+        if _normalize_state(s.get("state") or s.get("status")) in {"PRESENT", "ABSENT"}
+        and str(s.get("symptom") or s.get("finding") or "").strip()
     }
 
     # Combined context and raw_text
-    contexts = [s.get("context", "") for s in symptoms if s.get("context")]
+    contexts = [str(s.get("context", "")) for s in symptoms if s.get("context")]
     if raw_text:
         contexts.append(raw_text)
     combined_ctx = " ".join(contexts).lower()
@@ -189,7 +229,11 @@ def is_target_addressed(
     # If any symptom explicitly has state UNKNOWN for this target, it is NOT addressed
     for s in symptoms:
         s_name = (s.get("symptom") or s.get("finding") or "").lower()
-        if (target in s_name or s_name in target) and (s.get("state") == "UNKNOWN" or s.get("status") == "UNKNOWN"):
+        if (
+            s_name
+            and (target in s_name or s_name in target)
+            and _normalize_state(s.get("state") or s.get("status")) == "UNKNOWN"
+        ):
             return False
 
     # Check for explicit uncertainty expressions around this target in combined text
@@ -296,41 +340,112 @@ def suggest_followups(
     max_questions: int = 1,
 ) -> dict[str, Any]:
     """Generate dynamic clinical follow-up questions from the current state."""
-    # Normalize inputs
+    # Normalize inputs. A non-positive limit must not accidentally select
+    # questions via Python's negative-slice behavior.
+    try:
+        max_questions = max(0, min(int(max_questions), 10))
+    except (TypeError, ValueError):
+        max_questions = 1
+
     if isinstance(symptoms, dict):
         raw_text = raw_text or symptoms.get("raw_text")
-        symptoms_list = symptoms.get("symptoms", [])
-    elif symptoms is not None:
-        symptoms_list = list(symptoms)
+        symptoms_list = _as_dict_list(symptoms.get("symptoms", []))
     else:
-        symptoms_list = []
+        symptoms_list = _as_dict_list(symptoms)
 
-    if evidence and "symptoms" in evidence:
-        symptoms_present = evidence["symptoms"].get("present", [])
-        symptoms_absent = evidence["symptoms"].get("absent", [])
-        symptoms_unknown = evidence["symptoms"].get("unknown", [])
+    evidence_symptoms = evidence.get("symptoms") if isinstance(evidence, dict) else None
+    if isinstance(evidence_symptoms, dict):
+        symptoms_present = _as_dict_list(evidence_symptoms.get("present", []))
+        symptoms_absent = _as_dict_list(evidence_symptoms.get("absent", []))
+        symptoms_unknown = _as_dict_list(evidence_symptoms.get("unknown", []))
         raw_text = raw_text or evidence.get("raw_text")
+        # Include any caller-provided symptom rows not already represented in the
+        # evidence buckets; this prevents a submitted follow-up from disappearing
+        # when an upstream evidence summary omits its bucket.
+        bucket_ids = {id(item) for item in symptoms_present + symptoms_absent + symptoms_unknown}
+        for item in symptoms_list:
+            if id(item) not in bucket_ids:
+                state = _normalize_state(item.get("state") or item.get("status"))
+                if state == "PRESENT":
+                    symptoms_present.append(item)
+                elif state == "ABSENT":
+                    symptoms_absent.append(item)
+                else:
+                    symptoms_unknown.append(item)
     else:
-        symptoms_present = [s for s in symptoms_list if s.get("state") == "PRESENT"]
-        symptoms_absent = [s for s in symptoms_list if s.get("state") == "ABSENT"]
-        symptoms_unknown = [s for s in symptoms_list if s.get("state") == "UNKNOWN"]
+        symptoms_present = [s for s in symptoms_list if _normalize_state(s.get("state") or s.get("status")) == "PRESENT"]
+        symptoms_absent = [s for s in symptoms_list if _normalize_state(s.get("state") or s.get("status")) == "ABSENT"]
+        symptoms_unknown = [s for s in symptoms_list if _normalize_state(s.get("state") or s.get("status")) == "UNKNOWN"]
 
     all_symptoms = symptoms_present + symptoms_absent + symptoms_unknown
 
-    # Track answered follow-up IDs
+    # Track follow-ups carefully. A question answered UNKNOWN is not clinically
+    # resolved, but we should not endlessly repeat the exact same question.
     answered_ids: set[str] = set()
+    unknown_answered_ids: set[str] = set()
     for s in all_symptoms:
-        if s.get("question_id"):
-            answered_ids.add(s["question_id"])
-        for qid in s.get("answered_followups", []):
-            answered_ids.add(qid)
+        state = _normalize_state(s.get("state") or s.get("status"))
+        qid = s.get("question_id")
+        if qid:
+            if state == "UNKNOWN":
+                unknown_answered_ids.add(str(qid).split(":", 1)[0])
+            else:
+                answered_ids.add(str(qid).split(":", 1)[0])
+        answered_followups = s.get("answered_followups", [])
+        if not isinstance(answered_followups, (list, tuple, set)):
+            answered_followups = []
+        for answered_qid in answered_followups:
+            answered_qid = str(answered_qid).split(":", 1)[0]
+            if state == "UNKNOWN":
+                unknown_answered_ids.add(answered_qid)
+            else:
+                answered_ids.add(answered_qid)
+    unknown_answered_ids -= answered_ids
 
     # Active clinical domains
-    present_domains = {s.get("domain", "").lower() for s in symptoms_present}
-    present_areas = {s.get("body_area", "").lower() for s in symptoms_present}
-    present_names = {s.get("symptom", "").lower() for s in symptoms_present}
+    present_domains = {_text(s.get("domain")).lower() for s in symptoms_present if _text(s.get("domain"))}
+    present_areas = {_text(s.get("body_area")).lower() for s in symptoms_present if _text(s.get("body_area"))}
+    present_names = {_text(s.get("symptom") or s.get("finding")).lower() for s in symptoms_present if _text(s.get("symptom") or s.get("finding"))}
 
-    all_ctx = " ".join([s.get("context", "") for s in all_symptoms if s.get("context")] + ([raw_text] if raw_text else [])).lower()
+    all_ctx = " ".join(
+        [_text(s.get("context")) for s in all_symptoms if _text(s.get("context"))]
+        + ([str(raw_text)] if raw_text else [])
+    ).lower()
+
+    # Consume explicit safety flags produced by the evidence/triage layers.
+    # These flags are not themselves diagnoses; they identify missing answers.
+    raw_critical_unknowns = (evidence or {}).get("critical_unknowns", []) if isinstance(evidence, dict) else []
+    if not isinstance(raw_critical_unknowns, (list, tuple)):
+        raw_critical_unknowns = []
+    critical_unknown_texts: set[str] = set()
+    for item in raw_critical_unknowns:
+        if isinstance(item, dict):
+            value = " ".join(str(item.get(k) or "") for k in ("symptom", "finding", "target", "name", "question"))
+        else:
+            value = str(item or "")
+        value = re.sub(r"[_-]+", " ", value).strip().lower()
+        if value:
+            critical_unknown_texts.add(value)
+
+    # Include UNKNOWN symptom records even when the evidence engine's explicit
+    # critical_unknowns list is absent, so unanswered safety information survives.
+    for item in symptoms_unknown:
+        if not isinstance(item, dict):
+            continue
+        value = str(item.get("symptom") or item.get("finding") or "").strip().lower()
+        if value:
+            critical_unknown_texts.add(value)
+
+    critical_question_map = {
+        "q_breathing_difficulty": ("difficulty breathing", "shortness of breath", "dyspnea", "breathing difficulty"),
+        "q_chest_pain": ("chest pain", "chest discomfort", "chest pressure", "tightness"),
+        "q_fever": ("high fever", "fever", "body temperature", "chills"),
+        "q_fainting_seizure": ("fainting", "syncope", "loss of consciousness", "seizure"),
+    }
+
+    def critical_target_matches(qid: str) -> bool:
+        terms = critical_question_map.get(qid, ())
+        return any(term in text for text in critical_unknown_texts for term in terms)
 
     has_abdominal_pain = (
         any(k in present_names for k in {"abdominal pain", "stomach pain", "belly pain"})
@@ -440,6 +555,10 @@ def suggest_followups(
     ) -> None:
         if qid in answered_ids:
             return
+        # If this exact question was already answered UNKNOWN, do not loop it
+        # forever. Keep it unresolved for triage and expose it in the response.
+        if qid in unknown_answered_ids:
+            return
         item = next((d for d in CRITICAL_FOLLOWUP_DEFINITIONS if d["id"] == qid), None)
         if item and not is_target_addressed(item["target"], all_symptoms, raw_text=raw_text):
             item_copy = dict(item)
@@ -523,6 +642,17 @@ def suggest_followups(
         if not has_duration:
             add_candidate("q_duration", 70)
 
+    # Explicit critical unknowns from the evidence/triage layer take priority
+    # even if the primary symptom domain was not classified as respiratory.
+    for qid, priority in (
+        ("q_breathing_difficulty", 120),
+        ("q_chest_pain", 115),
+        ("q_fainting_seizure", 110),
+        ("q_fever", 105),
+    ):
+        if critical_target_matches(qid):
+            add_candidate(qid, priority)
+
     # Sort by priority descending
     candidates.sort(key=lambda x: x[0], reverse=True)
 
@@ -536,13 +666,31 @@ def suggest_followups(
 
     selected_questions = unique_candidates[:max_questions]
 
+    unresolved_questions = []
+    for q in CRITICAL_FOLLOWUP_DEFINITIONS:
+        if q["id"] in unknown_answered_ids:
+            unresolved_questions.append({
+                "id": q["id"],
+                "target": q["target"],
+                "question": q["question"],
+                "category": q.get("category"),
+                "state": "UNKNOWN",
+                "reason": "The user could not confirm or deny this item; do not treat it as absent.",
+            })
+
     return {
         "needed": len(selected_questions) > 0,
         "questions": selected_questions,
+        "unresolved_questions": unresolved_questions,
         "message": (
             "Answering these quick safety questions will help clarify important missing information."
             if selected_questions
-            else "No additional clarifying questions required."
+            else (
+                "One or more safety items remain UNKNOWN. They have not been treated as negative; "
+                "use the unresolved_questions list and preserve uncertainty in the assessment."
+                if unresolved_questions
+                else "No additional clarifying questions required."
+            )
         ),
     }
 
@@ -612,6 +760,43 @@ def parse_binary_answer(
     return "UNKNOWN"
 
 
+def _canonical_followup_target(value: str | None) -> str:
+    """Normalize common symptom aliases for stable follow-up answer linkage."""
+    text = re.sub(r"\s+", " ", str(value or "").strip().lower())
+    text = re.sub(r"[^a-z0-9 ]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    aliases = {
+        "shortness of breath": "difficulty breathing",
+        "breathlessness": "difficulty breathing",
+        "dyspnea": "difficulty breathing",
+        "breathing difficulty": "difficulty breathing",
+        "shortness of breath at rest": "difficulty breathing",
+        "breathlessness at rest": "difficulty breathing",
+        "chest discomfort": "chest pain",
+        "chest pressure": "chest pain",
+        "chest tightness": "chest pain",
+        "temperature": "fever",
+        "high body temperature": "fever",
+        "chills": "fever",
+        "fainted": "fainting",
+        "syncope": "fainting",
+        "loss of consciousness": "fainting",
+    }
+    return aliases.get(text, text)
+
+
+def _same_followup_question(existing: dict[str, Any], question_id: str, target_name: str) -> bool:
+    """Match an existing answer record by exact question ID or canonical target."""
+    source = str(existing.get("source") or "").lower()
+    if source != "followup_answer":
+        return False
+    old_qid = str(existing.get("question_id") or "")
+    if old_qid == question_id:
+        return True
+    old_target = existing.get("target_symptom") or existing.get("symptom") or existing.get("finding")
+    return _canonical_followup_target(str(old_target)) == _canonical_followup_target(target_name)
+
+
 def apply_followup_answer(
     symptoms: list[dict[str, Any]],
     question_id: str,
@@ -620,15 +805,21 @@ def apply_followup_answer(
     scope: str | None = None,
 ) -> list[dict[str, Any]]:
     """Update symptoms evidence list based on user's follow-up answer."""
-    updated = [dict(s) for s in symptoms]
+    updated = [dict(s) for s in symptoms if isinstance(s, dict)]
 
-    # Handle rich answer dictionary
+    # Handle rich answer dictionary. Accept the common frontend payload shapes
+    # without trusting a client-supplied state over the actual answer text.
     if isinstance(answer, dict):
-        target_symptom = target_symptom or answer.get("target_symptom")
+        target_symptom = target_symptom or answer.get("target_symptom") or answer.get("symptom")
         scope = scope or answer.get("scope")
-        ans_str = str(answer.get("answer") or answer.get("value") or "").strip()
+        ans_str = _text(answer.get("answer") or answer.get("value") or answer.get("label"))
+        question_id = _text(answer.get("question_id") or answer.get("id") or question_id)
     else:
-        ans_str = str(answer or "").strip()
+        ans_str = _text(answer)
+
+    question_id = _text(question_id)
+    if not question_id:
+        return updated
 
     # Parse encoded target or base question ID (e.g. q_duration:headache, q_duration_headache)
     base_qid = question_id
@@ -659,7 +850,7 @@ def apply_followup_answer(
     ans_lower = ans_str.lower()
     is_unknown = bool(
         re.search(
-            r"\b(?:not\s+sure|unsure|unknown|don't\s+know|dont\s+know|cannot\s+tell|can't\s+tell|hard\s+to\s+say)\b",
+            r"\b(?:not\s+sure|unsure|unknown|don't\s+know|dont\s+know|cannot\s+tell|can't\s+tell|not\s+certain|uncertain|hard\s+to\s+say|unclear|maybe|possibly)\b",
             ans_lower,
         )
     )
@@ -674,7 +865,7 @@ def apply_followup_answer(
         # Case A: Explicit group scope ("all")
         if scope == "all":
             for s in updated:
-                if s.get("state") == "PRESENT" and not s.get("duration"):
+                if _normalize_state(s.get("state") or s.get("status")) == "PRESENT" and not s.get("duration"):
                     s["duration"] = ans_str
                     s["duration_scope"] = "all"
                     s.setdefault("answered_followups", []).append(question_id)
@@ -685,7 +876,7 @@ def apply_followup_answer(
             t_clean = target_symptom.strip().lower()
             for s in updated:
                 s_name = (s.get("symptom") or s.get("finding") or "").lower()
-                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and s.get("state") == "PRESENT":
+                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and _normalize_state(s.get("state") or s.get("status")) == "PRESENT":
                     s["duration"] = ans_str
                     s.setdefault("answered_followups", []).append(question_id)
                     return updated
@@ -693,7 +884,7 @@ def apply_followup_answer(
         # Case C: Unspecified target -> safely target primary chief/pain complaint without contaminating associated symptoms
         primary_candidates = []
         for s in updated:
-            if s.get("state") == "PRESENT" and not s.get("duration"):
+            if _normalize_state(s.get("state") or s.get("status")) == "PRESENT" and not s.get("duration"):
                 s_name = (s.get("symptom") or s.get("finding") or "").lower()
                 if any(p in s_name for p in ["pain", "ache", "migraine", "cough", "breath", "injury"]):
                     primary_candidates.append(s)
@@ -726,7 +917,7 @@ def apply_followup_answer(
             t_clean = target_symptom.strip().lower()
             for s in updated:
                 s_name = (s.get("symptom") or s.get("finding") or "").lower()
-                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and s.get("state") == "PRESENT":
+                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and _normalize_state(s.get("state") or s.get("status")) == "PRESENT":
                     s["onset"] = onset_val
                     s.setdefault("answered_followups", []).append(question_id)
                     return updated
@@ -735,7 +926,7 @@ def apply_followup_answer(
         # same clinical domain. Prefer a present, non-historical primary finding.
         eligible = [
             s for s in updated
-            if s.get("state") == "PRESENT"
+            if _normalize_state(s.get("state") or s.get("status")) == "PRESENT"
             and str(s.get("type", "")).upper() != "HISTORICAL"
             and (s.get("symptom") or s.get("finding")) not in {"gradual onset", "sudden onset"}
         ]
@@ -780,7 +971,7 @@ def apply_followup_answer(
         # vomiting and diarrhea) or repeated across multiple symptom records.
         abdominal_candidates = [
             s for s in updated
-            if s.get("state") == "PRESENT"
+            if _normalize_state(s.get("state") or s.get("status")) == "PRESENT"
             and (
                 "abdominal" in str(s.get("symptom") or s.get("finding") or "").lower()
                 or "belly" in str(s.get("symptom") or s.get("finding") or "").lower()
@@ -839,7 +1030,7 @@ def apply_followup_answer(
             t_clean = target_symptom.strip().lower()
             for s in updated:
                 s_name = (s.get("symptom") or s.get("finding") or "").lower()
-                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and s.get("state") == "PRESENT":
+                if (s_name == t_clean or t_clean in s_name or s_name in t_clean) and _normalize_state(s.get("state") or s.get("status")) == "PRESENT":
                     s["severity"] = sev_val
                     s.setdefault("answered_followups", []).append(question_id)
                     return updated
@@ -847,7 +1038,7 @@ def apply_followup_answer(
         # Case B: Target relevant pain complaint (never assign pain severity to nausea, vomiting, dizziness, etc.)
         pain_candidates = []
         for s in updated:
-            if s.get("state") == "PRESENT":
+            if _normalize_state(s.get("state") or s.get("status")) == "PRESENT":
                 s_name = (s.get("symptom") or s.get("finding") or "").lower()
                 if any(p in s_name for p in ["pain", "ache", "migraine", "cramp", "soreness"]):
                     pain_candidates.append(s)
@@ -863,15 +1054,12 @@ def apply_followup_answer(
     # 5. General / Red-flag binary symptoms mapping
     state = parse_binary_answer(ans_str, base_qid, target_name, target_def.get("options"))
 
-    for s in updated:
-        if s.get("symptom", "").lower() == target_name:
-            s["state"] = state
-            s["status"] = state
-            s.setdefault("answered_followups", []).append(question_id)
-            return updated
-
+    # Keep the original symptom extraction immutable. A follow-up can contradict
+    # the original narrative (or clarify a different time point), so store it as
+    # a separate, source-attributed record rather than silently overwriting the
+    # original PRESENT/ABSENT state.
     body_area = "whole body"
-    if "chest" in target_name or "breath" in target_name:
+    if any(term in target_name for term in ("chest", "breath", "dyspnea")):
         body_area = "chest"
     elif target_def.get("domain") == "musculoskeletal":
         body_area = "extremity/joints"
@@ -880,10 +1068,18 @@ def apply_followup_answer(
     elif target_def.get("domain") in {"gi", "neurological/gi"}:
         body_area = "abdomen"
 
+    # Replace an earlier answer to this same question instead of appending a
+    # stale duplicate. Keep original NLP/source findings untouched so the
+    # evidence layer can compare narrative evidence with the explicit answer.
+    updated = [
+        item for item in updated
+        if not _same_followup_question(item, question_id, target_name)
+    ]
+    canonical_target = _canonical_followup_target(target_name)
     updated.append(
         {
             "finding": target_name,
-            "symptom": target_name,
+            "symptom": canonical_target,
             "state": state,
             "status": state,
             "duration": None,
@@ -891,7 +1087,11 @@ def apply_followup_answer(
             "body_area": body_area,
             "source": "followup_answer",
             "question_id": question_id,
+            "target_symptom": target_symptom or target_name,
+            "canonical_target": canonical_target,
+            "answer_text": ans_str,
             "answered_followups": [question_id],
+            "supersedes_unknown_for_target": state in {"PRESENT", "ABSENT"},
         }
     )
     return updated

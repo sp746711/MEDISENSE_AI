@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-NLP_VERSION = "symptom-nlp-v2.1"
+NLP_VERSION = "symptom-nlp-v2.2-task1"
 
 
 class ClinicalSeverity(str):
@@ -989,9 +989,11 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
 
                     meta = SYMPTOM_LEXICON[kw]
                     canonical = meta["canonical"]
-                    if canonical in seen_canonicals:
-                        continue
 
+                    # Track matched spans within this clause to avoid substring
+                    # duplicates, but do not discard later mentions across clauses.
+                    # A later mention may correct an earlier PRESENT/ABSENT/UNKNOWN
+                    # state and both mentions are relevant clinical evidence.
                     occupied_spans.append((start, end))
 
                     # Check uncertainty first: uncertain expressions ("not sure whether", "might have", "unsure")
@@ -1030,8 +1032,6 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                             if is_negated:
                                 break
                         state = "ABSENT" if is_negated else "PRESENT"
-
-                    seen_canonicals.add(canonical)
 
                     # Severity: NEVER globally inferred. Must directly modify the symptom.
                     sev = ClinicalSeverity("UNKNOWN")
@@ -1207,7 +1207,20 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     }
                     if is_historical:
                         item["history"] = item_context or "historical occurrence"
-                    extracted.append(item)
+                    # Suppress only exact duplicate findings with the same canonical
+                    # symptom, state, and historical/current classification. Preserve
+                    # conflicting states as separate evidence instead of silently
+                    # letting the first mention erase later information.
+                    duplicate = any(
+                        existing.get("symptom") == item.get("symptom")
+                        and existing.get("state", existing.get("status")) == item.get("state")
+                        and existing.get("type") == item.get("type")
+                        and existing.get("context") == item.get("context")
+                        for existing in extracted
+                    )
+                    if not duplicate:
+                        extracted.append(item)
+                    seen_canonicals.add(canonical)
 
     # Event-scoped onset resolution: attach onset attribute to the specific symptom or primary complaint
     for sent in raw_sentences:

@@ -10,6 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 from uuid import UUID
+from html import escape
+from datetime import timezone
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
@@ -20,6 +22,31 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.database.models import Assessment, MedicalReport, Symptom, User, XrayResult
 
+
+def _esc(value: Any, default: str = "") -> str:
+    """Escape untrusted text before inserting it into ReportLab markup."""
+    return escape(str(default if value is None else value), quote=False)
+
+
+def _safe_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _score(value: Any) -> float | None:
+    """Return a finite numeric score or None; never fabricate a score."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number or number in (float("inf"), float("-inf")):
+        return None
+    return number
+
+
 DISCLAIMER_TEXT = (
     "MEDICAL DISCLAIMER: MediSense AI is an academic clinical decision-support and health navigation system. "
     "This document does NOT constitute a medical diagnosis, prescription, or definitive treatment plan. "
@@ -28,7 +55,7 @@ DISCLAIMER_TEXT = (
 
 
 def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str, Any]:
-    """Generate a PDF summary of the assessment grounded in validated structured results."""
+    """Generate a PDF summary from the stored assessment result and persisted evidence."""
     if isinstance(assessment_id, str):
         try:
             assessment_id = UUID(assessment_id)
@@ -49,11 +76,11 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     pdf_filename = f"medisense_assessment_{assessment_id}.pdf"
     pdf_path = reports_dir / pdf_filename
 
-    # Extract feedback payload if available to guarantee exact parity with UI/API
-    res_payload = assessment.result_payload or {}
-    feedback = res_payload.get("feedback", {})
-    triage_info = res_payload.get("triage", {})
-    evidence_info = res_payload.get("evidence", {})
+    # Consume stored result sections defensively; do not recompute a separate diagnosis.
+    res_payload = _safe_dict(assessment.result_payload)
+    feedback = _safe_dict(res_payload.get("feedback"))
+    triage_info = _safe_dict(res_payload.get("triage"))
+    evidence_info = _safe_dict(res_payload.get("evidence"))
 
     doc = SimpleDocTemplate(
         str(pdf_path),
@@ -127,32 +154,39 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         "MILD": "#059669",
     }.get((assessment.pathway or "").upper(), "#4b5563")
 
-    date_str = assessment.created_at.strftime("%B %d, %Y at %H:%M UTC")
+    # Only label a timestamp UTC when it is timezone-aware and converted to UTC.
+    created_at = assessment.created_at
+    if created_at is None:
+        date_str = "Not recorded"
+    elif created_at.tzinfo is not None:
+        date_str = created_at.astimezone(timezone.utc).strftime("%B %d, %Y at %H:%M UTC")
+    else:
+        date_str = created_at.strftime("%B %d, %Y at %H:%M (timezone not recorded)")
     input_labels = []
     has_sym = bool(feedback.get("symptoms_identified") or feedback.get("current_symptoms") or getattr(assessment, "symptoms_text", None) or "symptoms" in (assessment.input_types or []))
     if has_sym:
         input_labels.append("Symptoms")
     if feedback.get("medical_report_findings") or feedback.get("medical_reports") or "medical_report" in (assessment.input_types or []):
         input_labels.append("Medical Report")
-    if feedback.get("xray_findings", {}).get("images_received") or feedback.get("xray_images"):
+    if _safe_dict(feedback.get("xray_findings")).get("images_received") or feedback.get("xray_images"):
         input_labels.append("X-ray Image")
-    if feedback.get("xray_findings", {}).get("reports_received") or feedback.get("xray_reports"):
+    if _safe_dict(feedback.get("xray_findings")).get("reports_received") or feedback.get("xray_reports"):
         input_labels.append("Radiology Report")
     if not input_labels:
         input_labels = [it.replace("_", " ").title() for it in (assessment.input_types or [])]
     inputs_str = ", ".join(input_labels)
 
     meta_data = [
-        [Paragraph("<b>Patient Name:</b>", body_style), Paragraph(user_name, body_style),
+        [Paragraph("<b>Patient Name:</b>", body_style), Paragraph(_esc(user_name), body_style),
          Paragraph("<b>Assessment ID:</b>", body_style), Paragraph(str(assessment_id)[:16] + "...", body_style)],
-        [Paragraph("<b>Location:</b>", body_style), Paragraph(user_location, body_style),
+        [Paragraph("<b>Location:</b>", body_style), Paragraph(_esc(user_location), body_style),
          Paragraph("<b>Assessment Date:</b>", body_style), Paragraph(date_str, body_style)],
-        [Paragraph("<b>Inputs Provided:</b>", body_style), Paragraph(inputs_str, body_style),
+        [Paragraph("<b>Inputs Provided:</b>", body_style), Paragraph(_esc(inputs_str), body_style),
          Paragraph("<b>Triage Pathway:</b>", body_style),
          Paragraph(f"<font color='{pathway_color}'><b>{assessment.pathway or 'PENDING'}</b></font>", body_style)],
         [Paragraph("<b>Suggested Specialty:</b>", body_style),
-         Paragraph(feedback.get("recommended_next_step", {}).get("suggested_specialty") or assessment.specialty or "General Physician", body_style),
-         Paragraph("<b>Rules Version:</b>", body_style), Paragraph(assessment.rules_version or "v2.1", body_style)],
+         Paragraph(_safe_dict(feedback.get("recommended_next_step")).get("suggested_specialty") or assessment.specialty or "General Physician", body_style),
+         Paragraph("<b>Rules Version:</b>", body_style), Paragraph(_esc(assessment.rules_version or "v2.1"), body_style)],
     ]
     meta_table = Table(meta_data, colWidths=[110, 150, 110, 150])
     meta_table.setStyle(
@@ -179,16 +213,16 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
 
     # 2. Symptoms Identified & Negative Red Flags
     story.append(Paragraph("2. Symptoms Evidence", section_heading))
-    symptoms_present = feedback.get("symptoms_identified", [])
+    symptoms_present = _safe_list(feedback.get("symptoms_identified"))
     if not symptoms_present and evidence_info:
-        symptoms_present = evidence_info.get("symptoms", {}).get("present", [])
+        symptoms_present = _safe_list(_safe_dict(evidence_info.get("symptoms")).get("present"))
     if not symptoms_present:
         symptom_rows = db.query(Symptom).filter(Symptom.assessment_id == assessment_id).all()
-        symptoms_present = [{"symptom": s.symptom, "status": s.state, "severity": s.severity, "duration": s.duration, "context": s.context} for s in symptom_rows if s.state == "PRESENT"]
+        symptoms_present = [{"symptom": s.symptom, "status": (s.state or "UNKNOWN").upper(), "severity": s.severity, "duration": s.duration, "context": s.context} for s in symptom_rows]
 
-    negative_flags = feedback.get("negative_red_flags", [])
+    negative_flags = _safe_list(feedback.get("negative_red_flags"))
     if not negative_flags and evidence_info:
-        negative_flags = evidence_info.get("symptoms", {}).get("absent", [])
+        negative_flags = _safe_list(_safe_dict(evidence_info.get("symptoms")).get("absent"))
 
     if symptoms_present:
         symp_data = [["Symptom", "Status", "Duration", "Severity", "Qualifiers / Context"]]
@@ -225,11 +259,11 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
 
             symp_data.append(
                 [
-                    Paragraph(f"<b>{name_disp}</b>", body_style),
-                    Paragraph(s.get("status", "PRESENT"), body_style),
-                    Paragraph(s.get("duration") or "Unspecified", body_style),
-                    Paragraph((s.get("severity") or "UNKNOWN").upper(), body_style),
-                    Paragraph(qual_str, body_style),
+                    Paragraph(f"<b>{_esc(name_disp)}</b>", body_style),
+                    Paragraph(_esc(s.get("status", "UNKNOWN")), body_style),
+                    Paragraph(_esc(s.get("duration") or "Unspecified"), body_style),
+                    Paragraph(_esc((s.get("severity") or "UNKNOWN").upper()), body_style),
+                    Paragraph(_esc(qual_str), body_style),
                 ]
             )
         symp_table = Table(symp_data, colWidths=[120, 60, 80, 80, 180])
@@ -256,7 +290,7 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         abs_items = [f"• <b>{s.get('finding') or s.get('symptom', '')}:</b> ABSENT" for s in negative_flags]
         story.append(Paragraph("<br/>".join(abs_items), body_style))
 
-    historical_symptoms = feedback.get("historical_symptoms", []) or feedback.get("historical_context", [])
+    historical_symptoms = _safe_list(feedback.get("historical_symptoms")) or _safe_list(feedback.get("historical_context"))
     if historical_symptoms:
         story.append(Spacer(1, 4))
         story.append(Paragraph("<b>Historical Context (Documented for context; excluded from active acute counts):</b>", body_style))
@@ -266,18 +300,18 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
 
     # 3. Medical Report Findings
     story.append(Paragraph("3. Medical Report Findings", section_heading))
-    report_findings = feedback.get("medical_report_findings", [])
+    report_findings = _safe_list(feedback.get("medical_report_findings"))
     if not report_findings and evidence_info:
-        rep_meta = evidence_info.get("report", {})
+        rep_meta = _safe_dict(evidence_info.get("report"))
         report_findings = (
             rep_meta.get("abnormal_findings", [])
             + rep_meta.get("normal_findings", [])
             + rep_meta.get("unknown_range_findings", [])
         )
     report_status = feedback.get("medical_report_status", "NOT_PROVIDED")
-    qualitative_rep = feedback.get("qualitative_findings", []) or evidence_info.get("report", {}).get("qualitative_findings", [])
-    narrative_rep = feedback.get("narrative_findings", []) or evidence_info.get("report", {}).get("narrative_findings", [])
-    is_report_provided = report_status == "PROVIDED" or evidence_info.get("report", {}).get("provided", False)
+    qualitative_rep = feedback.get("qualitative_findings", []) or _safe_dict(evidence_info.get("report")).get("qualitative_findings", [])
+    narrative_rep = feedback.get("narrative_findings", []) or _safe_dict(evidence_info.get("report")).get("narrative_findings", [])
+    is_report_provided = report_status == "PROVIDED" or _safe_dict(evidence_info.get("report")).get("provided", False)
 
     if report_findings:
         rep_data = [["Test / Parameter", "Measured Value", "Reference Range", "Status"]]
@@ -289,9 +323,9 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             unit = p.get("unit") or ""
             val_str = str(raw_val).strip()
             if unit and unit not in val_str:
-                val_display = f"{val_str} {unit}".strip()
+                val_display = _esc(f"{val_str} {unit}".strip())
             else:
-                val_display = val_str
+                val_display = _esc(val_str)
 
             status_display = f"<font color='{interp_color}'><b>{interp}</b></font>"
             if p.get("conflict"):
@@ -299,15 +333,15 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
 
             test_name = p.get("test_name", "Test")
             src_file = p.get("source_file")
-            test_cell = f"<b>{test_name}</b>"
+            test_cell = f"<b>{_esc(test_name)}</b>"
             if src_file:
-                test_cell += f"<br/><font size='6' color='#64748b'>Source: {src_file}</font>"
+                test_cell += f"<br/><font size='6' color='#64748b'>Source: {_esc(src_file)}</font>"
 
             rep_data.append(
                 [
                     test_cell,
                     val_display,
-                    p.get("reference_range") or "Not provided",
+                    _esc(p.get("reference_range") or "Not provided"),
                     status_display,
                 ]
             )
@@ -347,11 +381,11 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
 
     # 4. X-Ray & Radiology Evidence
     story.append(Paragraph("4. X-Ray & Radiology Evidence", section_heading))
-    xray_info = feedback.get("xray_findings", {})
+    xray_info = _safe_dict(feedback.get("xray_findings"))
     if not xray_info and evidence_info:
-        xray_info = evidence_info.get("xray", {})
-    x_images = xray_info.get("images", []) or evidence_info.get("xray", {}).get("images", [])
-    x_reports = xray_info.get("reports", []) or evidence_info.get("xray", {}).get("reports", []) or feedback.get("xray_reports", [])
+        xray_info = _safe_dict(evidence_info.get("xray"))
+    x_images = xray_info.get("images", []) or _safe_dict(evidence_info.get("xray")).get("images", [])
+    x_reports = xray_info.get("reports", []) or _safe_dict(evidence_info.get("xray")).get("reports", []) or feedback.get("xray_reports", [])
     has_images = bool(x_images) or (bool(xray_info.get("images_received")) and xray_info.get("status") not in {"NOT_PROVIDED", None})
     has_reports = bool(x_reports)
 
@@ -420,12 +454,12 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
 
     # 5. Supporting & Contradictory Evidence
     story.append(Paragraph("5. Clinical Rationale & Evidence", section_heading))
-    support_items = feedback.get("supporting_evidence", [])
+    support_items = _safe_list(feedback.get("supporting_evidence"))
     if support_items:
         story.append(Paragraph("<b>Supporting Indicators:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• {item}" for item in support_items]), body_style))
 
-    reassuring_items = feedback.get("reassuring_evidence", [])
+    reassuring_items = _safe_list(feedback.get("reassuring_evidence"))
     if reassuring_items:
         story.append(Spacer(1, 4))
         story.append(Paragraph("<b>Reassuring Indicators:</b>", body_style))
@@ -437,22 +471,22 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         story.append(Paragraph("<b>Additional / Contextual Findings:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• {item}" for item in contextual_items]), body_style))
 
-    contra_items = feedback.get("contradictory_evidence", [])
+    contra_items = _safe_list(feedback.get("contradictory_evidence"))
     if contra_items:
         story.append(Spacer(1, 4))
         story.append(Paragraph("<b>Contradictory Findings:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• <font color='#dc2626'>{item}</font>" for item in contra_items]), body_style))
 
-    missing_items = feedback.get("uncertain_missing_info", []) or feedback.get("unknown_unassessed_info", [])
+    missing_items = _safe_list(feedback.get("uncertain_missing_info")) or feedback.get("unknown_unassessed_info", [])
     if missing_items:
         story.append(Spacer(1, 4))
         story.append(Paragraph("<b>Unknown / Unassessed Factors:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• {item}" for item in missing_items]), body_style))
     # 6. Possible Conditions (Assistive ML Differential)
     story.append(Paragraph("6. Possible Conditions (Assistive ML Differential)", section_heading))
-    possible_conditions = feedback.get("possible_conditions", [])
-    cond_status = feedback.get("condition_prediction_status") or feedback.get("condition_predictions", {}).get("status")
-    cond_message = feedback.get("condition_prediction_message") or feedback.get("condition_predictions", {}).get("message")
+    possible_conditions = _safe_list(feedback.get("possible_conditions"))
+    cond_status = feedback.get("condition_prediction_status") or _safe_dict(feedback.get("condition_predictions")).get("status")
+    cond_message = feedback.get("condition_prediction_message") or _safe_dict(feedback.get("condition_predictions")).get("message")
 
     if possible_conditions:
         cond_data = [["Rank", "Possible Condition", "Confidence Alignment", "Supporting Evidence", "Specialty"]]
@@ -462,12 +496,14 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             evidence_cell = supp_str if supp_str else "—"
             if contra_list:
                 evidence_cell += f"<br/><font color='#dc2626' size='7'>Denied: {', '.join(contra_list[:2])}</font>"
+            score_value = _score(c.get("probability_score"))
+            score_text = f"Score: {score_value:.2f}" if score_value is not None else "Score not available"
             cond_data.append([
-                f"#{c.get('rank', 1)}",
-                f"<b>{c.get('condition', '')}</b>",
-                f"{c.get('confidence_tier', 'Possible')}<br/><font size='7' color='#64748b'>Score: {c.get('probability_score', 0):.2f}</font>",
-                evidence_cell,
-                c.get("suggested_specialty", "General Medicine"),
+                f"#{_esc(c.get('rank', 1))}",
+                f"<b>{_esc(c.get('condition', ''))}</b>",
+                f"{_esc(c.get('confidence_tier', 'Possible'))}<br/><font size='7' color='#64748b'>{score_text}</font>",
+                _esc(evidence_cell),
+                _esc(c.get("suggested_specialty", "General Medicine")),
             ])
         cond_table = Table([[Paragraph(cell, body_style) for cell in row] for row in cond_data], colWidths=[35, 145, 115, 125, 100])
         cond_table.setStyle(
@@ -514,7 +550,7 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     # 7. Safety Pathway & Clinical Navigation
     story.append(Paragraph("7. Safety Pathway & Recommended Next Steps", section_heading))
     why_path = feedback.get("why_this_triage_selected") or triage_info.get("why_this_pathway") or "Rule-based assessment."
-    next_step_data = feedback.get("recommended_next_step", {})
+    next_step_data = _safe_dict(feedback.get("recommended_next_step"))
     guidance = next_step_data.get("guidance") or triage_info.get("guidance") or "Consult a licensed healthcare professional."
     next_steps = next_step_data.get("next_steps") or triage_info.get("next_steps") or "Schedule an in-person medical evaluation."
     suggested_specialty = next_step_data.get("suggested_specialty") or assessment.specialty or "General Physician"

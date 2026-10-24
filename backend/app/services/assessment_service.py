@@ -1,5 +1,8 @@
 """Assessment orchestration service for MediSense AI.
 
+Task 1 merged update v2.1: preserves unknown symptoms in feedback and normalizes
+triage status casing before persisting assessment status.
+
 Executes the multimodal diagnostic support pipeline:
 1. Gathers multimodal inputs (symptoms, reports, X-rays) isolated by assessment_id
 2. Compiles structured evidence with contradiction & missing information analysis
@@ -29,6 +32,61 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
+def _has_xray_result(item: Any) -> bool:
+    """A completed image result may contain multi-label findings instead of one prediction."""
+    if not isinstance(item, dict):
+        return False
+    prediction = item.get("prediction")
+    findings = item.get("findings")
+    has_prediction = isinstance(prediction, str) and bool(prediction.strip())
+    has_findings = isinstance(findings, list) and any(
+        isinstance(finding, dict)
+        and str(finding.get("label") or finding.get("name") or finding.get("finding") or "").strip()
+        for finding in findings
+    )
+    return has_prediction or has_findings
+
+
+def _xray_finding_is_actionable(item: Any) -> bool:
+    """Only accept explicit positive/actionable findings as clinical candidates."""
+    if not isinstance(item, dict):
+        return False
+    if any(item.get(key) is True for key in ("is_actionable_finding", "detected", "is_positive")):
+        return True
+    state = str(item.get("state") or item.get("status") or "").strip().upper()
+    return state in {"PRESENT", "POSITIVE", "DETECTED"}
+
+
+def _format_xray_findings(findings: Any) -> list[str]:
+    """Format only explicitly actionable findings; raw scores are not clinical findings."""
+    if not isinstance(findings, list):
+        return []
+    formatted: list[str] = []
+    for item in findings:
+        if not _xray_finding_is_actionable(item):
+            continue
+        label = str(item.get("label") or item.get("name") or item.get("finding") or "").strip()
+        if not label:
+            continue
+        formatted.append(f"{label} (candidate finding; not a confirmed diagnosis)")
+    return formatted
+
+
+def _count_raw_xray_scores(findings: Any) -> int:
+    """Count score-only labels for transparency without treating them as findings."""
+    if not isinstance(findings, list):
+        return 0
+    count = 0
+    for item in findings:
+        if not isinstance(item, dict) or _xray_finding_is_actionable(item):
+            continue
+        label = str(item.get("label") or item.get("name") or item.get("finding") or "").strip()
+        score = item.get("model_score", item.get("unthresholded_model_score", item.get("score", item.get("probability"))))
+        if label and isinstance(score, (int, float)) and not isinstance(score, bool):
+            count += 1
+    return count
+
+
 def generate_assessment_feedback(
     evidence: dict[str, Any],
     triage_result: dict[str, Any],
@@ -43,6 +101,7 @@ def generate_assessment_feedback(
     symptoms_meta = evidence.get("symptoms", {})
     present = symptoms_meta.get("present", [])
     absent = symptoms_meta.get("absent", [])
+    unknown_symptoms = symptoms_meta.get("unknown", [])
     historical = symptoms_meta.get("historical", [])
 
     report_meta = evidence.get("report", {})
@@ -66,117 +125,93 @@ def generate_assessment_feedback(
 
     triage_pathway = triage_result.get("pathway") or "NOT_DETERMINED"
 
-    # 1. Assessment Summary (dynamically assembled from current evidence)
-    summary_sentences = []
-
+    # 1. Concise summary. Detailed source evidence remains in its own sections.
+    # Do not describe unsubmitted inputs as if they were analyzed.
+    summary_sentences: list[str] = []
+    if unknown_symptoms:
+        unknown_names = [
+            str(item.get("symptom") or item.get("finding") or "").strip()
+            if isinstance(item, dict) else str(item).strip()
+            for item in unknown_symptoms
+        ]
+        unknown_names = [name for name in unknown_names if name]
+        if unknown_names:
+            shown_unknown = ", ".join(unknown_names[:4])
+            if len(unknown_names) > 4:
+                shown_unknown += f", and {len(unknown_names) - 4} additional item(s)"
+            summary_sentences.append(
+                f"Important information remains unknown or unanswered: {shown_unknown}. "
+                "Unknown does not mean absent, and these items may limit the assessment."
+            )
     if present:
-        top_symptoms = []
-        for s in present:
-            desc = s.get("symptom", "")
-            details = []
-            if s.get("severity") and s.get("severity") != "UNKNOWN":
-                details.append(s["severity"].lower())
-            if s.get("laterality"):
-                details.append(f"{s['laterality'].lower()}-sided")
-            if s.get("quality"):
-                details.append(s["quality"].lower())
-            if s.get("onset"):
-                details.append(f"{s['onset'].lower()} onset")
-            if s.get("character") and s.get("character") not in {"CURRENT", "PRESENT"}:
-                details.append(s["character"])
-            elif s.get("type") and s.get("type") not in {"CURRENT", "PRESENT"}:
-                details.append(s["type"])
-            if s.get("mucus"):
-                details.append(s["mucus"])
-            if details:
-                desc += f" ({', '.join(details)})"
-            top_symptoms.append(desc)
-        summary_sentences.append(
-            f"Active symptom presentation includes {len(present)} finding(s): {', '.join(top_symptoms)}."
-        )
-    else:
-        summary_sentences.append("No active physical symptoms reported.")
-
-    if historical:
-        h_desc = [f"{h.get('symptom')} ({h.get('history') or h.get('context') or 'historical occurrence'})" for h in historical]
-        summary_sentences.append(f"Historical context noted: {', '.join(h_desc)} (documented for clinical context, excluded from active acute symptom counts).")
-
-    if absent:
-        key_negatives = [s.get("symptom") for s in absent]
-        summary_sentences.append(f"Patient explicitly confirmed absence of: {', '.join(key_negatives)}.")
+        names = [str(x.get("symptom")).strip() for x in present if x.get("symptom")]
+        if names:
+            shown = names[:4]
+            text = ", ".join(shown)
+            if len(names) > 4:
+                text += f", and {len(names) - 4} additional symptom(s)"
+            summary_sentences.append(f"Reported symptoms include {text}.")
 
     unknown_range_rep = report_meta.get("unknown_range_findings", [])
-
     if report_provided:
         if abnormal_rep:
-            abn_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')}, {r.get('interpretation')})" for r in abnormal_rep]
-            summary_sentences.append(f"Laboratory evaluation revealed {len(abnormal_rep)} out-of-range parameter(s): {', '.join(abn_names)}.")
+            names = [str(x.get("test_name")).strip() for x in abnormal_rep if x.get("test_name")]
+            if names:
+                text = ", ".join(names[:4])
+                if len(names) > 4:
+                    text += f", and {len(names) - 4} more"
+                summary_sentences.append(
+                    f"The uploaded medical/lab report contains {len(abnormal_rep)} flagged parameter(s): {text}. "
+                    "See the detailed results for values, units, and reference ranges."
+                )
+        elif qualitative_rep or narrative_rep:
+            summary_sentences.append("The uploaded medical report was processed for narrative or qualitative findings; see details below.")
         elif normal_rep:
-            summary_sentences.append(f"All {len(normal_rep)} evaluated laboratory parameter(s) are within standard reference ranges.")
-        if unknown_range_rep:
-            unk_names = [f"{r.get('test_name')} ({r.get('value')} {r.get('unit', '')})" for r in unknown_range_rep]
-            summary_sentences.append(f"Recorded parameter(s) without standardized reference ranges: {', '.join(unk_names)} (status: UNKNOWN).")
-        if qualitative_rep:
-            q_names = [f"{q.get('finding')} ({q.get('state')})" for q in qualitative_rep]
-            summary_sentences.append(f"Medical report provided with qualitative findings: {', '.join(q_names)}.")
-        elif narrative_rep:
-            summary_sentences.append("Medical report provided with clinical history and examination details.")
-        elif not abnormal_rep and not normal_rep and not unknown_range_rep:
-            summary_sentences.append("Medical report provided (clinical documentation).")
-    else:
-        summary_sentences.append("Medical laboratory report was not provided.")
+            summary_sentences.append(f"{len(normal_rep)} laboratory parameter(s) were evaluated; see the detailed results.")
 
-    xray_images_list = xray_meta.get("images", [])
-    xray_reports_list = xray_meta.get("reports", []) or report_meta.get("xray_reports", [])
-    medical_reports_list = report_meta.get("medical_reports", [])
+    xray_images_list = xray_meta.get("images", []) or []
+    xray_reports_list = xray_meta.get("reports", []) or report_meta.get("xray_reports", []) or []
+    medical_reports_list = report_meta.get("medical_reports", []) or []
 
     if xray_images_list:
-        if len(xray_images_list) == 1:
-            img = xray_images_list[0]
-            istat = (img.get("status") or "").upper()
-            ireg = (img.get("region") or "not declared").capitalize()
-            ipred = img.get("prediction")
-            if istat == "COMPLETED" and ipred:
-                summary_sentences.append(f"{ireg} X-ray ({img.get('file_name')}) model identified: {ipred}.")
-            elif istat == "UNAVAILABLE":
-                summary_sentences.append(f"{ireg} X-ray ({img.get('file_name')}) received; automated model interpretation is unavailable. No radiographic disease is assumed.")
-            else:
-                summary_sentences.append(f"{ireg} X-ray ({img.get('file_name')}) status: {istat}.")
-        else:
-            summary_sentences.append(f"Received {len(xray_images_list)} X-ray image(s).")
-            for img in xray_images_list:
-                istat = (img.get("status") or "").upper()
-                ireg = (img.get("region") or "not declared").capitalize()
-                ipred = img.get("prediction")
-                if istat == "COMPLETED" and ipred:
-                    summary_sentences.append(f"• {ireg} X-ray ({img.get('file_name')}): {ipred}.")
-                else:
-                    summary_sentences.append(f"• {ireg} X-ray ({img.get('file_name')}): Automated interpretation unavailable.")
-    elif xray_received:
-        if xray_status == "COMPLETED" and xray_pred:
-            summary_sentences.append(f"{xray_region_label} deep learning model identified radiographic pattern: {xray_pred}.")
-        elif xray_status == "UNAVAILABLE":
-            summary_sentences.append(f"{xray_region_label} received; automated model interpretation is currently unavailable. No radiographic disease is assumed.")
-        else:
-            summary_sentences.append(f"{xray_region_label} status: {xray_status}.")
-    elif not xray_reports_list:
-        summary_sentences.append("Radiographic imaging was not provided.")
+        completed = [
+            x for x in xray_images_list
+            if str(x.get("status") or "").strip().upper() == "COMPLETED" and _has_xray_result(x)
+        ]
+        unavailable = [
+            x for x in xray_images_list
+            if str(x.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR"}
+        ]
+        if completed:
+            summary_sentences.append(f"Automated image analysis returned a result for {len(completed)} of {len(xray_images_list)} uploaded X-ray image(s); see image findings and limitations below.")
+        if unavailable:
+            summary_sentences.append(f"Automated interpretation was unavailable for {len(unavailable)} uploaded X-ray image(s); no image diagnosis is inferred for those files.")
+        pending = len(xray_images_list) - len(completed) - len(unavailable)
+        if pending > 0:
+            summary_sentences.append(f"Processing is incomplete or has no valid prediction for {pending} uploaded X-ray image(s).")
+    elif xray_received and xray_status == "COMPLETED" and xray_pred:
+        summary_sentences.append("Automated X-ray analysis returned a result; see image findings and limitations below.")
+    elif xray_received and xray_status in {"UNAVAILABLE", "FAILED", "ERROR"}:
+        summary_sentences.append("An X-ray image was submitted, but automated interpretation was unavailable; no image diagnosis is inferred.")
 
     if xray_reports_list:
-        summary_sentences.append(f"Received {len(xray_reports_list)} radiology report(s) with extracted clinical documentation.")
+        summary_sentences.append(f"A radiology report was submitted ({len(xray_reports_list)} report(s)); its findings are separate from image-model predictions.")
 
-    conditions_list = condition_predictions.get("conditions", []) if condition_predictions else []
-    if conditions_list:
-        top_c = [c.get("condition") for c in conditions_list[:2] if c.get("condition")]
-        if top_c:
-            summary_sentences.append(
-                f"Assistive machine learning evaluation identified statistical pattern alignment with: {', '.join(top_c)} (probabilistic differential for physician correlation)."
-            )
+    raw_conditions = condition_predictions.get("conditions", []) if condition_predictions else []
+    # Only use well-formed model candidates; malformed entries must not break feedback.
+    conditions_list = [
+        item for item in raw_conditions
+        if isinstance(item, dict) and str(item.get("condition") or "").strip()
+    ] if isinstance(raw_conditions, list) else []
+    condition_names = [str(x.get("condition")).strip() for x in conditions_list]
+    if condition_names:
+        summary_sentences.append(f"The experimental ML model returned {len(condition_names)} possible condition candidate(s). These are not confirmed diagnoses; review the candidate evidence below.")
+    elif condition_predictions and str(condition_predictions.get("status") or "").strip().lower() not in {"", "ok", "success", "completed"}:
+        summary_sentences.append("ML condition matching was unavailable; no condition candidates are inferred.")
+    elif condition_predictions:
+        summary_sentences.append("The ML condition-matching step returned no displayable candidates. This does not mean that no condition is present.")
 
-    summary_sentences.append(
-        f"Deterministic clinical safety evaluation assigned triage level: {triage_pathway}."
-    )
-
+    summary_sentences.append(f"Current safety pathway: {triage_pathway}. ML candidates do not override safety guidance.")
     assessment_summary = " ".join(summary_sentences)
 
     # 2. Symptoms Identified
@@ -244,30 +279,109 @@ def generate_assessment_feedback(
 
     if has_xray_images or has_xray_reports or xray_received:
         if has_xray_images:
-            completed_imgs = [img for img in xray_images_list if (img.get("status") or "").lower() == "completed" and img.get("prediction")]
+            # Normalize status values consistently; providers may return mixed casing.
+            completed_imgs = [
+                img for img in xray_images_list
+                if str(img.get("status") or "").strip().upper() == "COMPLETED" and _has_xray_result(img)
+            ]
+            unavailable_imgs = [
+                img for img in xray_images_list
+                if str(img.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR"}
+            ]
+            pending_imgs = [
+                img for img in xray_images_list
+                if img not in completed_imgs and img not in unavailable_imgs
+            ]
+
+            messages: list[str] = []
             if completed_imgs:
                 pred_labels = []
                 for img in completed_imgs:
-                    p = img.get("prediction")
-                    r = (img.get("region") or "").strip()
-                    pred_labels.append(f"{p} ({r.capitalize()})" if r and r != "not declared" else str(p))
-                xray_findings_text = f"Radiographic pattern(s) identified: {', '.join(pred_labels)}. Clinical correlation and verification by a radiologist required."
-            else:
-                xray_findings_text = (
-                    f"Automated interpretation for the {len(xray_images_list)} uploaded X-ray image(s) is currently unavailable (no trained model checkpoint configured). "
-                    "No disease finding is generated or assumed."
+                    prediction = str(img.get("prediction") or "").strip()
+                    finding_labels = _format_xray_findings(img.get("findings"))
+                    raw_score_count = _count_raw_xray_scores(img.get("findings"))
+                    if finding_labels:
+                        prediction_label = "; ".join(finding_labels[:18])
+                        if len(finding_labels) > 18:
+                            prediction_label += f"; and {len(finding_labels) - 18} more candidate finding(s)"
+                    elif prediction:
+                        prediction_label = f"{prediction} (legacy model output; not a confirmed diagnosis)"
+                    elif raw_score_count:
+                        prediction_label = (
+                            f"No actionable image finding produced; {raw_score_count} raw model score label(s) "
+                            "were retained for review only and are not calibrated diagnostic probabilities"
+                        )
+                    else:
+                        prediction_label = "No actionable image finding produced"
+                    region = str(img.get("region") or "").strip()
+                    label = (
+                        f"{prediction_label} ({region.capitalize()})"
+                        if region and region.lower() not in {"not declared", "unknown"}
+                        else prediction_label
+                    )
+                    if label:
+                        pred_labels.append(label)
+                messages.append(
+                    f"Image inference completed for {len(completed_imgs)} image(s): {', '.join(pred_labels)}. "
+                    "Only explicitly marked candidate findings are displayed as findings. Raw multi-label model scores "
+                    "are not calibrated diagnostic probabilities and must not be interpreted as disease evidence. "
+                    "Clinical correlation and radiologist review are required."
                 )
+            if unavailable_imgs:
+                reasons = [
+                    str(img.get("message")).strip()
+                    for img in unavailable_imgs
+                    if img.get("message") and str(img.get("message")).strip()
+                ]
+                reason_text = "; ".join(dict.fromkeys(reasons))
+                messages.append(
+                    f"Automated interpretation was unavailable for {len(unavailable_imgs)} image(s)"
+                    + (f": {reason_text}." if reason_text else ".")
+                    + " No disease finding is generated or assumed for those images."
+                )
+            if pending_imgs:
+                messages.append(
+                    f"Processing is pending or has no valid prediction for {len(pending_imgs)} image(s); "
+                    "no image diagnosis is inferred for those files."
+                )
+            xray_findings_text = " ".join(messages) or (
+                "No valid image-model prediction is available. No disease finding is generated or assumed."
+            )
         elif xray_status == "COMPLETED" and xray_pred:
             xray_findings_text = f"Radiographic pattern identified: {xray_pred}. Clinical correlation and verification by a radiologist required."
         elif xray_status == "UNAVAILABLE" and has_xray_images:
+            reason = xray_meta.get("message") or "The configured image model could not produce a valid result."
             xray_findings_text = (
-                f"Automated interpretation for this X-ray type ({xray_region}) is currently unavailable (no trained model checkpoint configured). "
+                f"Automated interpretation for this X-ray type ({xray_region}) is unavailable: {reason} "
                 "No disease finding is generated or assumed."
             )
         else:
             xray_findings_text = f"Radiology documentation received: {len(xray_reports_list)} report(s). No radiographic image submitted for automated inference."
 
-        effective_status = xray_status if has_xray_images else "NOT_PROVIDED"
+        if has_xray_images:
+            image_statuses = [
+                str(img.get("status") or "").strip().upper()
+                for img in xray_images_list
+            ]
+            completed_count = sum(
+                status == "COMPLETED" and _has_xray_result(img)
+                for status, img in zip(image_statuses, xray_images_list)
+            )
+            unavailable_count = sum(
+                status in {"UNAVAILABLE", "FAILED", "ERROR"}
+                for status in image_statuses
+            )
+            if completed_count == len(xray_images_list) and xray_images_list:
+                effective_status = "COMPLETED"
+            elif unavailable_count == len(xray_images_list) and xray_images_list:
+                effective_status = "UNAVAILABLE"
+            elif completed_count or unavailable_count:
+                effective_status = "PARTIAL"
+            else:
+                effective_status = "PROCESSING"
+        else:
+            effective_status = "NOT_PROVIDED"
+
         xray_findings_data = {
             "received": bool(has_xray_images or has_xray_reports),
             "images_received": has_xray_images,
@@ -275,7 +389,15 @@ def generate_assessment_feedback(
             "status": effective_status,
             "region": xray_region.title() if (has_xray_images and xray_region not in {"not declared", "unknown"}) else "Not declared",
             "model": xray_meta.get("model_version") or "N/A" if has_xray_images else "N/A",
-            "prediction": xray_pred if has_xray_images else None,
+            "prediction": (
+                xray_pred if has_xray_images and len(xray_images_list) <= 1 else None
+            ),
+            "findings": (
+                xray_images_list[0].get("findings", [])
+                if len(xray_images_list) == 1 and isinstance(xray_images_list[0], dict)
+                else [finding for image in xray_images_list if isinstance(image, dict)
+                      for finding in (image.get("findings", []) if isinstance(image.get("findings"), list) else [])]
+            ),
             "description": xray_findings_text,
             "uncertainty": xray_meta.get("uncertainty") if has_xray_images else None,
             "images": xray_images_list,
@@ -327,7 +449,30 @@ def generate_assessment_feedback(
     ]
 
     # 8. Uncertain / Missing Information
+    # Keep unknown symptom states visible even when the evidence engine's separate
+    # missing-information list does not repeat the same symptom labels.
     uncertain_missing = list(evidence.get("missing", []))
+    unknown_symptom_details = [
+        {
+            "finding": (
+                item.get("symptom") or item.get("finding")
+                if isinstance(item, dict) else str(item)
+            ),
+            "symptom": (
+                item.get("symptom") or item.get("finding")
+                if isinstance(item, dict) else str(item)
+            ),
+            "status": "UNKNOWN",
+            "state": "UNKNOWN",
+            "context": item.get("context") if isinstance(item, dict) else None,
+            "body_area": item.get("body_area") if isinstance(item, dict) else None,
+            "source": (
+                item.get("source") or "user_input"
+                if isinstance(item, dict) else "user_input"
+            ),
+        }
+        for item in unknown_symptoms
+    ]
 
     # 9. Triage Outcome
     triage_level = {
@@ -411,10 +556,11 @@ def generate_assessment_feedback(
             "symptom": h.get("symptom"),
             "finding": h.get("symptom"),
             "type": "HISTORICAL",
-            "history": h.get("history") or h.get("context") or "once or twice before",
+            "history": h.get("history") or h.get("context") or "Previously experienced; details unspecified",
             "duration": None,
-            "status": "PRESENT",
-            "state": "PRESENT",
+            # Keep historical context distinct from a symptom present now.
+            "status": "HISTORICAL",
+            "state": "HISTORICAL",
             "source": h.get("source") or "user_input",
         }
         for h in historical
@@ -434,6 +580,8 @@ def generate_assessment_feedback(
         "symptoms_identified": symptoms_identified,
         "historical_symptoms": historical_symptoms,
         "historical_context": historical_symptoms,
+        "unknown_symptoms": unknown_symptom_details,
+        "unanswered_symptoms": unknown_symptom_details,
         "relevant_negative_findings": negative_red_flags,
         "negative_findings": negative_red_flags,
         "negative_red_flags": negative_red_flags,
@@ -528,6 +676,8 @@ XRAY_PROCESSING:
   status={xray.get('status')}
   model={xray.get('model_version') or 'N/A'}
   prediction={xray.get('prediction')}
+  findings_count={len(xray.get('findings', []) or []) if isinstance(xray.get('findings', []), list) else 0}
+  findings={xray.get('findings')}
   interpretation={xray.get('interpretation')}
 
 EVIDENCE_BUILD:
@@ -616,14 +766,24 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         if not trigger and "coughing" in clean_ctx.lower() and s.symptom == "chest discomfort":
             trigger = "coughing"
 
-        s_dur = None if sym_type == "HISTORICAL" else s.duration
+        # Normalize persisted states before evidence fusion. A historical item must
+        # not accidentally be treated as a current PRESENT symptom.
+        state_normalized = str(s.state or "UNKNOWN").strip().upper()
+        if state_normalized not in {"PRESENT", "ABSENT", "UNKNOWN", "HISTORICAL"}:
+            state_normalized = "UNKNOWN"
+        if sym_type == "HISTORICAL" and state_normalized == "PRESENT":
+            state_normalized = "HISTORICAL"
+        if state_normalized == "HISTORICAL":
+            sym_type = "HISTORICAL"
+
+        s_dur = None if state_normalized == "HISTORICAL" else s.duration
 
         symptoms_list.append(
             {
                 "finding": s.symptom,
                 "symptom": s.symptom,
-                "state": s.state,
-                "status": s.state,
+                "state": state_normalized,
+                "status": state_normalized,
                 "duration": s_dur,
                 "severity": s.severity,
                 "body_area": s.body_area,
@@ -749,6 +909,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "file_name": xr.file_name or "xray_image",
             "region": xr.region,
             "prediction": xr.prediction,
+            "findings": getattr(xr, "findings", None) or [],
             "confidence_if_valid": xr.confidence_if_valid,
             "uncertainty": xr.uncertainty,
             "model_version": xr.model_version,
@@ -808,9 +969,12 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         }
 
     # 7. Construct complete result payload with structured dynamic feedback
+    # Normalize case/whitespace so a valid triage status is not accidentally
+    # overwritten as "completed" just because a service returned lowercase text.
+    triage_status_normalized = str(triage_result.get("status") or "").strip().upper()
     final_status = "completed"
-    if triage_result.get("status") in {"INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"}:
-        final_status = triage_result["status"].lower()
+    if triage_status_normalized in {"INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"}:
+        final_status = triage_status_normalized.lower()
 
     feedback = generate_assessment_feedback(
         evidence=evidence,

@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-REPORT_NLP_VERSION = "report-nlp-v2.0"
+REPORT_NLP_VERSION = "report-nlp-v2.2-task1"
 
 # Target clinical tests with synonyms and typical units for pattern matching
 TARGET_TESTS: list[dict[str, Any]] = [
@@ -184,8 +184,13 @@ RANGE_REGEX = re.compile(
 LESS_THAN_RANGE_REGEX = re.compile(r"<\s*([\d,]+(?:\.\d+)?)")
 GREATER_THAN_RANGE_REGEX = re.compile(r">\s*([\d,]+(?:\.\d+)?)")
 
+# Match explicit demo/test-data labels, not ordinary report wording such as
+# "sample collected" or a clinical sentence that happens to mention instructions.
 SYNTHETIC_INSTRUCTION_RE = re.compile(
-    r"\b(?:synthetic|demonstration|demo\s+only|sample\s+report|test\s+case|no\s+actual\s+clinical\s+findings|instructions?|placeholder|dummy\s+data|simulated|example\s+report)\b",
+    r"\b(?:synthetic(?:\s+(?:test\s+)?data|\s+report|\s+example)?|"
+    r"demonstration\s+(?:data|report)|demo\s+only|sample\s+report|"
+    r"test\s+case|no\s+actual\s+clinical\s+findings|placeholder\s+data|"
+    r"dummy\s+data|simulated\s+(?:data|report)|example\s+report)\b",
     re.IGNORECASE,
 )
 
@@ -439,6 +444,8 @@ def structure_report_text(
                             conflict = True
                         elif explicit_flag in {"HIGH", "LOW"} and calculated_status == "NORMAL":
                             conflict = True
+                        elif explicit_flag == "ABNORMAL" and calculated_status == "NORMAL":
+                            conflict = True
                         elif explicit_flag == "HIGH" and calculated_status == "LOW":
                             conflict = True
                         elif explicit_flag == "LOW" and calculated_status == "HIGH":
@@ -674,6 +681,8 @@ def structure_report_text(
                         conflict = True
                     elif explicit_flag in {"HIGH", "LOW"} and calculated_status == "NORMAL":
                         conflict = True
+                    elif explicit_flag == "ABNORMAL" and calculated_status == "NORMAL":
+                        conflict = True
                     elif explicit_flag == "HIGH" and calculated_status == "LOW":
                         conflict = True
                     elif explicit_flag == "LOW" and calculated_status == "HIGH":
@@ -765,23 +774,40 @@ def structure_report_text(
                 "source": "radiology_report_text",
             })
 
-        # Examination findings: tenderness, swelling, reduced range of motion
-        if re.search(r"\b(?:tenderness|tender)\b", lower_text):
-            neg_tender = bool(re.search(r"\b(?:no|without)\s+(?:\w+\s+){0,2}(?:tenderness|tender)\b", lower_text))
+        # Examination findings: classify each finding in its own local clause.
+        # A document-wide negation check can incorrectly turn a later positive
+        # finding into ABSENT (or vice versa) when both are documented.
+        tenderness_state = classify_radiology_finding(cleaned_text, "tenderness")
+        if tenderness_state == "UNKNOWN":
+            tenderness_state = classify_radiology_finding(cleaned_text, "tender")
+        if tenderness_state != "UNKNOWN":
             qualitative_findings.append({
                 "finding": "localized tenderness",
                 "category": "examination",
                 "domain": "musculoskeletal",
-                "state": "ABSENT" if neg_tender else "PRESENT",
+                "state": tenderness_state,
+                "source": "medical_report_narrative",
             })
 
-        if re.search(r"\b(?:swelling|swollen|edema)\b", lower_text):
-            neg_swell = bool(re.search(r"\b(?:no|without)\s+(?:\w+\s+){0,2}(?:swelling|swollen|edema)\b", lower_text))
+        swelling_states = [
+            classify_radiology_finding(cleaned_text, term)
+            for term in ("swelling", "swollen", "edema")
+        ]
+        swelling_states = [state for state in swelling_states if state != "UNKNOWN"]
+        if swelling_states:
+            distinct_swelling_states = set(swelling_states)
+            if "CONFLICTING" in distinct_swelling_states or ("PRESENT" in distinct_swelling_states and "ABSENT" in distinct_swelling_states):
+                swelling_state = "CONFLICTING"
+            elif "UNCERTAIN" in distinct_swelling_states:
+                swelling_state = "UNCERTAIN"
+            else:
+                swelling_state = swelling_states[0]
             qualitative_findings.append({
                 "finding": "swelling",
                 "category": "examination",
                 "domain": "musculoskeletal",
-                "state": "ABSENT" if neg_swell else "PRESENT",
+                "state": swelling_state,
+                "source": "medical_report_narrative",
             })
 
         if re.search(r"\b(?:reduced|decreased|limited|restricted)\s+(?:range of motion|movement|mobility|rom)\b", lower_text):
@@ -812,8 +838,6 @@ def structure_report_text(
         ]
         for term, cat, dom in resp_terms:
             state = classify_radiology_finding(cleaned_text, term)
-            if term in {"avulsion fragment", "ossific fragment"} and fragment_uncertainty and not explicit_confirmed_fracture:
-                state = "UNCERTAIN"
             if state != "UNKNOWN":
                 qualitative_findings.append({
                     "finding": term,

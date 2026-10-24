@@ -2,14 +2,15 @@
 
 Defines a comprehensive, hierarchical, and extensible catalogue of anatomical
 regions, subregions, X-ray examination types, and common search synonyms.
-Separates anatomical catalogue availability from AI vision model support.
+Separates anatomical catalogue coverage, configured model support, and runtime model availability.
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from copy import deepcopy
+from typing import Any
 
-from app.ai.xray_router import XRAY_MODEL_REGISTRY, get_model_registry_entry
+from app.ai.xray_router import get_model_registry_entry
 
 # Centralized Anatomical Catalogue
 ANATOMICAL_CATALOGUE: list[dict[str, Any]] = [
@@ -19,7 +20,7 @@ ANATOMICAL_CATALOGUE: list[dict[str, Any]] = [
         "category_badge": "Craniofacial",
         "description": "Skull, facial bones, orbits, paranasal sinuses, and cervical soft tissues.",
         "aliases": [
-            "head", "skull", "cranium", "face", "facial", "brain", "jaw",
+            "head", "skull", "cranium", "face", "facial", "jaw",
             "mandible", "sinus", "sinuses", "orbits", "neck", "throat",
         ],
         "subregions": [
@@ -322,7 +323,7 @@ ANATOMICAL_CATALOGUE: list[dict[str, Any]] = [
             {
                 "id": "forearm",
                 "name": "Forearm",
-                "aliases": ["forearm", "radius", "ulna", "arm"],
+                "aliases": ["forearm", "radius", "ulna", "lower arm"],
                 "xray_types": [
                     {
                         "id": "forearm_ap_lat",
@@ -615,26 +616,33 @@ def get_xray_catalogue_with_model_status() -> list[dict[str, Any]]:
     enriched_catalogue = []
 
     for main_region in ANATOMICAL_CATALOGUE:
-        region_copy = dict(main_region)
+        region_copy = deepcopy(main_region)
         enriched_subregions = []
 
         for subreg in main_region.get("subregions", []):
-            subreg_copy = dict(subreg)
+            subreg_copy = deepcopy(subreg)
             enriched_xray_types = []
 
             for xtype in subreg.get("xray_types", []):
-                xtype_copy = dict(xtype)
+                xtype_copy = deepcopy(xtype)
                 canon_reg = xtype.get("canonical_region", "unknown")
                 reg_entry = get_model_registry_entry(canon_reg)
 
                 if reg_entry and reg_entry.is_supported:
                     is_avail, avail_msg = reg_entry.check_availability()
-                    status_label = "supported"
-                    badge_label = "Supported (ResNet-18)" if is_avail else "Supported (Model Configured)"
-                    notice = (
-                        "Automated computer-vision screening pipeline is configured for chest radiography (ResNet-18). "
-                        "If model weights are loaded on the server, automated screening will execute."
-                    )
+                    status_label = "available" if is_avail else "configured_unavailable"
+                    badge_label = "Available (ResNet-18)" if is_avail else "Model Configured — Weights Unavailable"
+                    if is_avail:
+                        notice = (
+                            f"A vision model is available for {reg_entry.display_name} radiography. "
+                            "Its output is an assistive screening result, not a confirmed diagnosis."
+                        )
+                    else:
+                        notice = (
+                            f"A model is configured for {reg_entry.display_name} radiography, "
+                            "but usable model weights or runtime availability were not confirmed. "
+                            "No image interpretation should be claimed."
+                        )
                 else:
                     is_avail = False
                     status_label = "unsupported"
@@ -646,7 +654,9 @@ def get_xray_catalogue_with_model_status() -> list[dict[str, Any]]:
                     )
 
                 xtype_copy["model_support"] = {
+                    "catalogue_default_support": xtype.get("default_model_support", "unsupported"),
                     "status": status_label,
+                    "configured_support": bool(reg_entry and reg_entry.is_supported),
                     "is_supported": bool(reg_entry and reg_entry.is_supported),
                     "is_available": is_avail,
                     "badge": badge_label,
@@ -668,16 +678,10 @@ def get_xray_catalogue_with_model_status() -> list[dict[str, Any]]:
 # Clean, simplified searchable body-regions catalogue for streamlined user search
 SEARCHABLE_BODY_REGIONS: list[dict[str, Any]] = [
     {
-        "id": "head",
-        "name": "Head",
-        "canonical_region": "skull",
-        "aliases": ["head", "skull", "cranium", "brain", "face", "facial", "sinus", "jaw", "mandible", "calvarium"],
-    },
-    {
         "id": "skull",
-        "name": "Skull",
+        "name": "Skull / Cranium X-Ray",
         "canonical_region": "skull",
-        "aliases": ["skull", "head", "cranium", "calvarium", "braincase"],
+        "aliases": ["skull", "head x-ray", "cranium", "calvarium", "braincase", "skull x-ray"],
     },
     {
         "id": "chest",
@@ -717,7 +721,7 @@ SEARCHABLE_BODY_REGIONS: list[dict[str, Any]] = [
         "id": "forearm",
         "name": "Forearm",
         "canonical_region": "forearm",
-        "aliases": ["forearm", "radius", "ulna", "arm"],
+        "aliases": ["forearm", "radius", "ulna", "lower arm"],
     },
     {
         "id": "wrist",
@@ -783,7 +787,7 @@ SEARCHABLE_BODY_REGIONS: list[dict[str, Any]] = [
         "id": "foot",
         "name": "Foot",
         "canonical_region": "foot",
-        "aliases": ["foot", "feet", "metatarsal", "calcaneus", "heel", "toes"],
+        "aliases": ["foot", "feet", "metatarsal", "midfoot", "foot x-ray"],
     },
     {
         "id": "sinuses",
@@ -816,10 +820,23 @@ def get_backend_body_regions() -> list[dict[str, Any]]:
         is_avail = False
         if entry and is_sup:
             is_avail, _ = entry.check_availability()
-            notice = "Automated AI vision screening pipeline is configured for chest radiography (ResNet-18)."
-            model_status = "supported"
+            if is_avail:
+                notice = (
+                    f"A vision model is available for {entry.display_name} radiography. "
+                    "Its output is assistive screening, not a confirmed diagnosis."
+                )
+                model_status = "available"
+            else:
+                notice = (
+                    f"A model is configured for {entry.display_name} radiography, but usable weights "
+                    "or runtime availability were not confirmed. No image interpretation should be claimed."
+                )
+                model_status = "configured_unavailable"
         else:
-            notice = f"Automated AI vision inference is currently unavailable for {item['name']} radiography. Your image and reports will be safely preserved without fabricated diagnoses."
+            notice = (
+                f"Automated AI vision inference is unsupported for {item['name']} radiography. "
+                "The image may be retained for the assessment, but no AI image finding will be generated."
+            )
             model_status = "unsupported"
 
         results.append({
@@ -831,6 +848,9 @@ def get_backend_body_regions() -> list[dict[str, Any]]:
             "is_available": is_avail,
             "model_status": model_status,
             "model_notice": notice,
+            "status_note": (
+                "Model availability is checked at request time; catalogue inclusion does not imply model support."
+            ),
         })
     return results
 

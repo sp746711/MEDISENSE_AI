@@ -363,13 +363,18 @@ export default function SymptomsInput() {
   };
 
   const finalizeAndSubmit = async (finalText, structuredFollowups = null) => {
+    if (!assessmentId) {
+      setError('No assessment in progress. Start a new assessment.');
+      return;
+    }
+
     setSubmitting(true);
     setError('');
     try {
       await submitSymptoms(assessmentId, finalText, structuredFollowups);
       navigate(nextPath());
     } catch (err) {
-      setError(err.message || 'Failed to submit symptoms.');
+      setError(err?.message || 'Failed to submit symptoms.');
     } finally {
       setSubmitting(false);
     }
@@ -377,7 +382,56 @@ export default function SymptomsInput() {
 
   const handleFollowupConfirm = (e) => {
     e.preventDefault();
-    finalizeAndSubmit(text.trim(), followupAnswers);
+    setError('');
+
+    if (!assessmentId) {
+      setError('No assessment in progress. Start a new assessment.');
+      return;
+    }
+
+    const unanswered = followupQuestions.find((question) => {
+      const answer = followupAnswers[question.id];
+      return answer === undefined || answer === null || String(answer).trim() === '';
+    });
+
+    if (unanswered) {
+      setError(`Please answer question: ${unanswered.question}`);
+      return;
+    }
+
+    // Preserve the selected answer plus the question/target metadata expected by the backend.
+    const structuredAnswers = {};
+
+    for (const question of followupQuestions) {
+      const selectedAnswer = String(followupAnswers[question.id]).trim();
+      const normalizedAnswer = selectedAnswer.toLowerCase();
+      let state = 'UNKNOWN';
+
+      if (['yes', 'true', 'present', 'positive'].includes(normalizedAnswer)) {
+        state = 'PRESENT';
+      } else if (['no', 'false', 'absent', 'negative'].includes(normalizedAnswer)) {
+        state = 'ABSENT';
+      }
+
+      const targetSymptom =
+        question.target_symptom ||
+        question.symptom ||
+        question.symptom_name ||
+        question.target ||
+        null;
+
+      structuredAnswers[question.id] = {
+        question_id: question.id,
+        question: question.question,
+        answer: selectedAnswer,
+        value: selectedAnswer,
+        state,
+        ...(targetSymptom ? { target_symptom: targetSymptom, symptom: targetSymptom } : {}),
+        ...(question.scope ? { scope: question.scope } : {}),
+      };
+    }
+
+    finalizeAndSubmit(text.trim(), structuredAnswers);
   };
 
   return (

@@ -509,3 +509,28 @@ def test_15_xray_images_separate_from_report_ocr(client, auth_user, auth_token, 
     xray_recs = db_session.query(XrayResult).filter(XrayResult.assessment_id == ass.assessment_id).all()
     assert len(xray_recs) == 1
     assert xray_recs[0].region == "chest"
+
+    # Verify the upload response matches the persisted X-ray record.
+    upload_data = res_xray_route.json()
+    assert upload_data["region"] == "chest"
+    assert str(upload_data["xray_result_id"]) == str(xray_recs[0].xray_result_id)
+    assert upload_data["status"] == xray_recs[0].status
+
+    # Verify that GET retrieves the saved X-ray result for this assessment.
+    res_saved = client.get(
+        f"/api/assessments/{ass.assessment_id}/xray",
+        headers={"Authorization": f"Bearer {auth_token}"},
+    )
+    assert res_saved.status_code == 200
+
+    saved_data = res_saved.json()
+    assert str(saved_data["assessment_id"]) == str(ass.assessment_id)
+    assert len(saved_data["results"]) == 1
+
+    saved_xray = saved_data["results"][0]
+    assert str(saved_xray["xray_result_id"]) == str(upload_data["xray_result_id"])
+    assert saved_xray["region"] == "chest"
+    assert saved_xray["status"] == xray_recs[0].status
+    assert saved_xray["findings"] == (xray_recs[0].findings or [])
+    assert saved_xray["model_version"] == xray_recs[0].model_version
+

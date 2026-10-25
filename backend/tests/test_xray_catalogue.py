@@ -60,14 +60,16 @@ def test_search_aliases_and_normalization():
     assert normalize_region_name("cranium") == ("skull", True)
     assert normalize_region_name("face") == ("facial bones", True)
     assert normalize_region_name("sinus") == ("sinuses", True)
-    assert normalize_region_name("c-spine") == ("spine", True)
+    # The router preserves the specific cervical-spine region rather than
+    # collapsing it into the general spine region.
+    assert normalize_region_name("c-spine") == ("cervical spine", True)
     assert normalize_region_name("neck") == ("neck", True)
     assert normalize_region_name("low back") == ("spine", True)
     assert normalize_region_name("cxr") == ("chest", True)
     assert normalize_region_name("lungs") == ("chest", True)
     assert normalize_region_name("collarbone") == ("clavicle", True)
     assert normalize_region_name("upper arm") == ("humerus", True)
-    assert normalize_region_name("tailbone") == ("spine", True)
+    assert normalize_region_name("tailbone") == ("sacrum", True)
     assert normalize_region_name("shin") == ("lower leg", True)
     assert normalize_region_name("heel") == ("calcaneus", True)
 
@@ -102,7 +104,6 @@ def test_catalogue_api_endpoint():
     assert skull_xtype["model_support"]["is_supported"] is False
     assert "Unsupported" in skull_xtype["model_support"]["badge"]
     assert "unavailable" in skull_xtype["model_support"]["notice"].lower()
-
 
 
 def test_model_support_distinction_truthful():
@@ -203,4 +204,3 @@ def test_search_empty_and_no_match():
     # Nonexistent query
     unmatched = [r for r in regions if "xyz999nonexistent" in r["name"].lower()]
     assert len(unmatched) == 0
-

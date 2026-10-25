@@ -2,7 +2,7 @@
 
 Supports:
 - Existing, explicitly configured 5-class ResNet-18 state-dict checkpoints.
-- A dedicated MURA DenseNet121 binary wrist-X-ray checkpoint.
+- Region-specific MURA DenseNet121 binary checkpoints for wrist, elbow, finger, forearm, hand, humerus and shoulder.
 - Optional TorchXRayVision DenseNet121 multi-label chest X-ray inference.
 
 Safety:
@@ -10,8 +10,8 @@ Safety:
 - DenseNet121 scores are model outputs, NOT calibrated probabilities or diagnoses.
 - Multi-label outputs are preserved; no softmax is applied across independent findings.
 - Chest X-ray models must not be used for other body regions.
-- The MURA wrist model must not be used for other body regions.
-- The wrist output is a research-model score, not a clinical diagnosis.
+- Each MURA model is restricted to its own body region.
+- MURA outputs are research-model scores, not clinical diagnoses.
 """
 
 from __future__ import annotations
@@ -65,6 +65,21 @@ TORCHXRAYVISION_LABELS = (
     "Lung Opacity",
     "Enlarged Cardiomediastinum",
 )
+
+
+# Region-specific MURA checkpoints downloaded and strictly architecture-validated.
+# These are separate binary research classifiers; never share one region's weights with another.
+MURA_REGION_CHECKPOINTS = {
+    "wrist": ("XRAY_WRIST_CHECKPOINT", Path("models/xray/wrist/XR_WRIST_FINAL_best.pt"), "XR_WRIST"),
+    "elbow": ("XRAY_ELBOW_CHECKPOINT", Path("models/xray/mura_regions/XR_ELBOW_FINAL_best.pt"), "XR_ELBOW"),
+    "finger": ("XRAY_FINGER_CHECKPOINT", Path("models/xray/mura_regions/XR_FINGER_FINAL_best.pt"), "XR_FINGER"),
+    "forearm": ("XRAY_FOREARM_CHECKPOINT", Path("models/xray/mura_regions/XR_FOREARM_FINAL_best.pt"), "XR_FOREARM"),
+    "hand": ("XRAY_HAND_CHECKPOINT", Path("models/xray/mura_regions/XR_HAND_FINAL_best.pt"), "XR_HAND"),
+    "humerus": ("XRAY_HUMERUS_CHECKPOINT", Path("models/xray/mura_regions/XR_HUMERUS_FINAL_best.pt"), "XR_HUMERUS"),
+    "shoulder": ("XRAY_SHOULDER_CHECKPOINT", Path("models/xray/mura_regions/XR_SHOULDER_FINAL_best.pt"), "XR_SHOULDER"),
+}
+MURA_REGION_NAMES = frozenset(MURA_REGION_CHECKPOINTS)
+MURA_BINARY_LABELS = ["normal", "abnormal"]
 
 
 class BasicBlock(nn.Module):
@@ -187,9 +202,9 @@ class XRayModelService:
     def load_model(self, region: str = "chest") -> bool:
         """Load a model explicitly configured for the requested anatomical region.
 
-        TorchXRayVision is chest-only. Other regions may use a region-specific
-        ResNet18 state_dict only when the registry declares labels, preprocessing,
-        architecture and a checkpoint. No model is silently reused across regions.
+        TorchXRayVision is chest-only. MURA DenseNet121 checkpoints are loaded only
+        for their exact configured anatomical region. Other regions use configured
+        ResNet18 checkpoints only when their registry entry explicitly supports them.
         """
         canonical_region, recognized = normalize_region_name(region)
         entry = get_model_registry_entry(canonical_region) if recognized else None
@@ -202,6 +217,12 @@ class XRayModelService:
         self.model_version = None
         self._active_region = canonical_region
         self._active_classes = list(entry.class_label_mapping) if entry else []
+
+        # MURA regions have their own verified DenseNet121 binary checkpoints.
+        # They can be enabled even while the catalogue's legacy ResNet entry is marked unsupported.
+        if canonical_region in MURA_REGION_NAMES:
+            self._active_classes = list(MURA_BINARY_LABELS)
+            return self._load_mura_region_checkpoint()
 
         if not entry or not entry.is_supported:
             self._load_failure_code = "unsupported_region"
@@ -232,6 +253,81 @@ class XRayModelService:
             self._load_failure_reason = f"No class labels are configured for {canonical_region}."
             return False
         return self._load_resnet_checkpoint(entry)
+
+    def _load_mura_region_checkpoint(self) -> bool:
+        """Load the matching region-specific MURA DenseNet121 binary checkpoint."""
+        region = self._active_region
+        config = MURA_REGION_CHECKPOINTS.get(region)
+        if config is None:
+            self._load_failure_code = "unsupported_region"
+            self._load_failure_reason = f"No MURA checkpoint is configured for region '{region}'."
+            return False
+
+        env_name, relative_path, expected_area = config
+        project_root = Path(__file__).resolve().parents[2]
+        configured = (os.getenv(env_name, "") or "").strip()
+        if configured:
+            candidate = Path(configured).expanduser()
+            path = candidate if candidate.is_absolute() else project_root / candidate
+        else:
+            path = project_root / relative_path
+
+        self._checkpoint_path = str(path.resolve(strict=False))
+        if not path.is_file() or path.stat().st_size <= 0:
+            self._load_failure_code = "checkpoint_path_not_found"
+            self._load_failure_reason = f"{region.title()} checkpoint not found or empty: {self._checkpoint_path}"
+            logger.warning("%s", self._load_failure_reason)
+            return False
+
+        try:
+            checkpoint = torch.load(str(path), map_location=self.device, weights_only=True)
+            if not isinstance(checkpoint, dict):
+                raise ValueError("Checkpoint must be a dictionary.")
+            area = checkpoint.get("area")
+            if area is not None and area != expected_area:
+                raise ValueError(f"Checkpoint metadata area {area!r} does not match {expected_area!r}.")
+            img_size = checkpoint.get("img_size")
+            if img_size is not None and int(img_size) != 224:
+                raise ValueError("Checkpoint metadata does not specify 224-pixel inputs.")
+            state_dict = checkpoint.get("model_state", checkpoint.get("state_dict", checkpoint))
+            if not isinstance(state_dict, dict) or not state_dict:
+                raise ValueError("Checkpoint is missing a valid model state dictionary.")
+            # Handle common DataParallel prefix, then require exact key/shape compatibility.
+            if all(isinstance(key, str) for key in state_dict):
+                state_dict = {key[7:] if key.startswith("module.") else key: value for key, value in state_dict.items()}
+            classifier_weight = state_dict.get("classifier.weight")
+            classifier_bias = state_dict.get("classifier.bias")
+            if (not isinstance(classifier_weight, torch.Tensor)
+                    or tuple(classifier_weight.shape) != (1, 1024)
+                    or not isinstance(classifier_bias, torch.Tensor)
+                    or tuple(classifier_bias.shape) != (1,)):
+                raise ValueError("Checkpoint classifier is not the expected one-logit DenseNet121 head.")
+
+            from torchvision import models
+            model = models.densenet121(weights=None)
+            model.classifier = nn.Linear(model.classifier.in_features, 1)
+            model.load_state_dict(state_dict, strict=True)
+            model = model.to(self.device)
+            model.eval()
+
+            self._model = model
+            self._provider = "mura_densenet121"
+            self.model_version = f"mura-densenet121-{region}@{path.name}"
+            self._active_classes = list(MURA_BINARY_LABELS)
+            self._loaded = True
+            self._load_failure_code = None
+            self._load_failure_reason = None
+            logger.info("Loaded MURA DenseNet121 %s checkpoint: %s", region, self._checkpoint_path)
+            return True
+        except Exception as exc:
+            self._model = None
+            self._loaded = False
+            self.model_version = None
+            self._provider = None
+            self._load_failure_code = "mura_checkpoint_load_failed"
+            self._load_failure_reason = f"{type(exc).__name__}: {exc}"
+            logger.exception("Failed to load MURA %s checkpoint: %s", region, exc)
+            return False
 
     def _load_mura_wrist_checkpoint(self, entry=None) -> bool:
         """Load the MURA wrist-specific DenseNet121 binary classifier.
@@ -538,7 +634,7 @@ class XRayModelService:
                 ),
             )
 
-        if not registry_entry.is_supported:
+        if not registry_entry.is_supported and canonical_region not in MURA_REGION_NAMES:
             return self._unavailable(
                 canonical_region,
                 "unsupported_region",
@@ -574,15 +670,10 @@ class XRayModelService:
         if not self.is_available(canonical_region):
             failure_code = self._load_failure_code or "model_unavailable"
             failure_reason = self._load_failure_reason or "Model could not be loaded."
-            is_development = str(getattr(self.settings, "app_env", "development")).lower() in {
-                "development", "dev", "local"
-            }
-            message = (
-                f"X-ray received. The {display_region} image model is not available. "
-                "No prediction was generated; verify the region-specific trained checkpoint and model configuration."
-            )
-            if is_development:
-                message += f" Diagnostic: {failure_code}: {failure_reason}"
+            # Keep the user-facing message stable and free of local paths or
+            # internal diagnostics. The failure code/reason remain available in
+            # structured fields for logs and debugging.
+            message = DEFAULT_UNAVAILABLE_MESSAGE
             result = self._unavailable(
                 canonical_region, failure_code, failure_reason, message=message
             )
@@ -595,10 +686,62 @@ class XRayModelService:
                 return self._unavailable(canonical_region, "provider_region_mismatch", "TorchXRayVision provider is chest-only.")
             return self._analyze_torchxrayvision(image_path)
         if self._provider == "mura_densenet121":
-            if canonical_region != "wrist":
-                return self._unavailable(canonical_region, "provider_region_mismatch", "MURA DenseNet121 provider is wrist-only.")
-            return self._analyze_mura_wrist(image_path)
+            if canonical_region not in MURA_REGION_NAMES or canonical_region != self._active_region:
+                return self._unavailable(canonical_region, "provider_region_mismatch", "MURA DenseNet121 checkpoint does not match the selected region.")
+            return self._analyze_mura_region(image_path, canonical_region)
         return self._analyze_resnet(image_path, canonical_region, list(self._active_classes))
+
+    def _analyze_mura_region(self, image_path: str, region: str) -> dict[str, Any]:
+        """Run a region-matched MURA binary classifier; output is research-only."""
+        tensor = self.preprocess_mura_wrist(image_path)
+        if tensor is None:
+            return self._unavailable(
+                region, "preprocessing_failed", f"Unable to decode and preprocess {region} image.",
+                self.model_version, "Image preprocessing failed. Please verify the image file format.",
+            )
+        try:
+            with torch.inference_mode():
+                outputs = self._model(tensor)
+            if not isinstance(outputs, torch.Tensor) or tuple(outputs.shape) != (1, 1):
+                raise ValueError(f"Expected one {region} logit, received {getattr(outputs, 'shape', None)}")
+            logit = outputs[0, 0].float()
+            if not torch.isfinite(logit):
+                raise ValueError(f"{region.title()} model produced a non-finite logit.")
+            score = float(torch.sigmoid(logit).item())
+            if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+                raise ValueError(f"{region.title()} model produced an invalid sigmoid score.")
+            predicted_label = "abnormal" if score >= 0.5 else "normal"
+            return {
+                "status": "completed",
+                "region": region,
+                "model_version": self.model_version,
+                "prediction": predicted_label,
+                "findings": [{
+                    "label": predicted_label,
+                    "model_score": round(score if predicted_label == "abnormal" else 1.0 - score, 5),
+                    "abnormality_score": round(score, 5),
+                    "score_type": "sigmoid_model_score_not_clinically_calibrated",
+                    "is_actionable_finding": False,
+                }],
+                "abnormality_score": round(score, 5),
+                "confidence_if_valid": None,
+                "uncertainty": (
+                    f"Research-only MURA {region} normal/abnormal classifier output. The sigmoid score is not a clinically calibrated "
+                    "probability and does not establish or exclude a specific condition. The default 0.5 threshold is a "
+                    "technical demo threshold, not a clinically validated decision threshold. Radiologist review is required."
+                ),
+                "explainability_artifact": None,
+                "message": (
+                    f"The research model's {region} output was '{predicted_label}' (normal/abnormal classification). "
+                    "This is not a diagnosis; a qualified clinician/radiologist must interpret the X-ray."
+                ),
+            }
+        except Exception as exc:
+            logger.warning("MURA %s inference failed: %s", region, exc)
+            return self._unavailable(
+                region, "inference_failed", f"{region.title()} inference could not be completed.", self.model_version,
+                "X-ray analysis failed. No result is available; please consult a qualified radiologist.",
+            )
 
     def _analyze_mura_wrist(self, image_path: str) -> dict[str, Any]:
         """Run wrist-only binary inference and preserve its limited research scope."""

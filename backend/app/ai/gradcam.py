@@ -152,9 +152,12 @@ def generate_gradcam(
                 model_device = tensor.device
 
         tensor = tensor.to(model_device)
-        # Gradients with respect to model activations are what Grad-CAM uses.
-        # Input gradients are not required; avoid unnecessarily tracking them.
-        tensor = tensor.detach()
+        # Keep a gradient path through the network even when a loaded model's
+        # parameters have been frozen for inference. Grad-CAM differentiates
+        # the selected score with respect to an intermediate activation; making
+        # the input require gradients ensures those activations remain connected
+        # to autograd without changing any parameter's requires_grad setting.
+        tensor = tensor.detach().requires_grad_(True)
 
         def capture_activation(
             _module: nn.Module,

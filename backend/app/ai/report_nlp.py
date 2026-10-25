@@ -838,6 +838,19 @@ def structure_report_text(
         ]
         for term, cat, dom in resp_terms:
             state = classify_radiology_finding(cleaned_text, term)
+
+            # The report may first state that a fragment is seen, then qualify
+            # its nature or age in a nearby clause (for example, possible
+            # avulsion versus an old injury). Keep fragment findings uncertain
+            # rather than treating the fragment's cause as confirmed. Do not
+            # override an explicitly confirmed fracture elsewhere in the report.
+            if (
+                term in {"ossific fragment", "avulsion fragment"}
+                and fragment_uncertainty
+                and not explicit_confirmed_fracture
+            ):
+                state = "UNCERTAIN"
+
             if state != "UNKNOWN":
                 qualitative_findings.append({
                     "finding": term,

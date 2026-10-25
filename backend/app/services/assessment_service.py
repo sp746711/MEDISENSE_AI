@@ -968,13 +968,13 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "is_experimental": True,
         }
 
-    # 7. Construct complete result payload with structured dynamic feedback
-    # Normalize case/whitespace so a valid triage status is not accidentally
-    # overwritten as "completed" just because a service returned lowercase text.
-    triage_status_normalized = str(triage_result.get("status") or "").strip().upper()
+    # 7. Construct complete result payload with structured dynamic feedback.
+    # Processing status is independent of clinical triage status. If this
+    # pipeline reaches this stage, the assessment processing completed; the
+    # full clinical status remains preserved in result_payload["triage"].
+    # Do not convert insufficient/conflicting evidence into a processing error,
+    # and do not invent a pathway when deterministic triage returns None.
     final_status = "completed"
-    if triage_status_normalized in {"INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"}:
-        final_status = triage_status_normalized.lower()
 
     feedback = generate_assessment_feedback(
         evidence=evidence,

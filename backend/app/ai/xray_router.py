@@ -27,6 +27,30 @@ MURA_WRIST_CHECKPOINT = (
     Path(__file__).resolve().parents[2]
     / "models" / "xray" / "wrist" / "XR_WRIST_FINAL_best.pt"
 )
+MURA_REGION_CHECKPOINTS = {
+    "elbow": ("XR_ELBOW", "XR_ELBOW_FINAL_best.pt"),
+    "finger": ("XR_FINGER", "XR_FINGER_FINAL_best.pt"),
+    "forearm": ("XR_FOREARM", "XR_FOREARM_FINAL_best.pt"),
+    "hand": ("XR_HAND", "XR_HAND_FINAL_best.pt"),
+    "humerus": ("XR_HUMERUS", "XR_HUMERUS_FINAL_best.pt"),
+    "shoulder": ("XR_SHOULDER", "XR_SHOULDER_FINAL_best.pt"),
+}
+MURA_BINARY_CLASSES = ["Normal", "Abnormal"]
+MURA_PREPROCESSING = {
+    "target_size": [224, 224],
+    "color_mode": "RGB",
+    "pixel_scaling": "1/255.0",
+    "mean": [0.485, 0.456, 0.406],
+    "std": [0.229, 0.224, 0.225],
+    "interpolation": "bilinear",
+    "exif_orientation_correction": True,
+}
+
+def _mura_checkpoint(region: str) -> str:
+    """Return the region-specific MURA checkpoint path used by the inference service."""
+    filename = MURA_REGION_CHECKPOINTS[region][1]
+    return str(Path(__file__).resolve().parents[2] / "models" / "xray" / "mura_regions" / filename)
+
 
 CHEST_CLASSES = [
     "Normal / Clear",
@@ -105,19 +129,20 @@ def verify_checkpoint_integrity(
                 "expected a state_dict or checkpoint dictionary."
             )
 
-        # MURA wrist checkpoint format: {"model_state": ..., "area": "XR_WRIST", ...}.
-        # It has one sigmoid logit for abnormality detection, not a 2-logit classifier.
-        if loaded.get("area") == "XR_WRIST" and isinstance(loaded.get("model_state"), dict):
+        # MURA checkpoints use {"model_state": ..., "area": "XR_*", ...} and
+        # a one-logit sigmoid head. Structural validation applies to each region.
+        mura_areas = {"XR_WRIST", *(area for area, _ in MURA_REGION_CHECKPOINTS.values())}
+        if loaded.get("area") in mura_areas and isinstance(loaded.get("model_state"), dict):
             state = loaded["model_state"]
             weight = state.get("classifier.weight")
             bias = state.get("classifier.bias")
             if getattr(weight, "shape", None) != (1, 1024):
-                return False, "MURA wrist checkpoint classifier.weight must have shape (1, 1024)."
+                return False, f"MURA {loaded.get('area')} checkpoint classifier.weight must have shape (1, 1024)."
             if getattr(bias, "shape", None) != (1,):
-                return False, "MURA wrist checkpoint classifier.bias must have shape (1,)."
+                return False, f"MURA {loaded.get('area')} checkpoint classifier.bias must have shape (1,)."
             if not any(k.startswith("features.") for k in state if isinstance(k, str)):
-                return False, "MURA wrist checkpoint is missing DenseNet121 feature weights."
-            return True, f"MURA XR_WRIST DenseNet121 checkpoint structurally verified: {checkpoint_path}"
+                return False, f"MURA {loaded.get('area')} checkpoint is missing DenseNet121 feature weights."
+            return True, f"MURA {loaded.get('area')} DenseNet121 checkpoint structurally verified: {checkpoint_path}"
 
         state_dict = loaded.get("state_dict", loaded.get("model_state_dict", loaded))
         if not isinstance(state_dict, dict) or not state_dict:
@@ -206,10 +231,15 @@ class XRayModelRegistryEntry:
             "mura_densenet121", "densenet121", "mura-densenet121"
         }:
             pass
+        elif self.canonical_region in MURA_REGION_CHECKPOINTS and architecture in {
+            "mura_densenet121", "densenet121", "mura-densenet121"
+        }:
+            pass
         elif self.canonical_region != "chest" and "resnet18" not in architecture:
             return False, (
                 "unsupported_model_architecture: This inference service supports configured ResNet18 "
-                "state-dict models for non-chest regions and the configured MURA DenseNet121 wrist model."
+                "state-dict models and region-specific MURA DenseNet121 checkpoints for wrist, elbow, "
+                "finger, forearm, hand, humerus and shoulder."
             )
 
         # Per-region environment overrides take precedence over cached settings.
@@ -341,71 +371,71 @@ XRAY_MODEL_REGISTRY: dict[str, XRayModelRegistryEntry] = {
         canonical_region="hand",
         display_name="Hand",
         supported_modality="radiograph_image",
-        checkpoint_location=None,
-        model_architecture=None,
-        class_label_mapping=[],
-        expected_preprocessing=None,
-        model_version=None,
-        source_provenance="Stanford MURA (unconfigured)",
-        supported_prediction_task="Musculoskeletal abnormality detection (unconfigured)",
-        is_supported=False,
-        validation_status="UNCONFIGURED",
+        checkpoint_location=_mura_checkpoint("hand"),
+        model_architecture="mura_densenet121",
+        class_label_mapping=MURA_BINARY_CLASSES,
+        expected_preprocessing=MURA_PREPROCESSING,
+        model_version="MURA_XR_HAND_DenseNet121_research_checkpoint",
+        source_provenance="MURA region-specific research checkpoint; performance not independently validated by MediSense AI",
+        supported_prediction_task="Hand radiograph binary normal/abnormal research screening score; not a diagnosis",
+        is_supported=True,
+        validation_status="RESEARCH_MODEL_NOT_CLINICALLY_VALIDATED",
     ),
     "forearm": XRayModelRegistryEntry(
         canonical_region="forearm",
         display_name="Forearm",
         supported_modality="radiograph_image",
-        checkpoint_location=None,
-        model_architecture=None,
-        class_label_mapping=[],
-        expected_preprocessing=None,
-        model_version=None,
-        source_provenance="Stanford MURA (unconfigured)",
-        supported_prediction_task="Forearm fracture / deformity detection (unconfigured)",
-        is_supported=False,
-        validation_status="UNCONFIGURED",
+        checkpoint_location=_mura_checkpoint("forearm"),
+        model_architecture="mura_densenet121",
+        class_label_mapping=MURA_BINARY_CLASSES,
+        expected_preprocessing=MURA_PREPROCESSING,
+        model_version="MURA_XR_FOREARM_DenseNet121_research_checkpoint",
+        source_provenance="MURA region-specific research checkpoint; performance not independently validated by MediSense AI",
+        supported_prediction_task="Forearm radiograph binary normal/abnormal research screening score; not a diagnosis",
+        is_supported=True,
+        validation_status="RESEARCH_MODEL_NOT_CLINICALLY_VALIDATED",
     ),
     "elbow": XRayModelRegistryEntry(
         canonical_region="elbow",
         display_name="Elbow",
         supported_modality="radiograph_image",
-        checkpoint_location=None,
-        model_architecture=None,
-        class_label_mapping=[],
-        expected_preprocessing=None,
-        model_version=None,
-        source_provenance="Stanford MURA (unconfigured)",
-        supported_prediction_task="Elbow joint effusion / fracture detection (unconfigured)",
-        is_supported=False,
-        validation_status="UNCONFIGURED",
+        checkpoint_location=_mura_checkpoint("elbow"),
+        model_architecture="mura_densenet121",
+        class_label_mapping=MURA_BINARY_CLASSES,
+        expected_preprocessing=MURA_PREPROCESSING,
+        model_version="MURA_XR_ELBOW_DenseNet121_research_checkpoint",
+        source_provenance="MURA region-specific research checkpoint; performance not independently validated by MediSense AI",
+        supported_prediction_task="Elbow radiograph binary normal/abnormal research screening score; not a diagnosis",
+        is_supported=True,
+        validation_status="RESEARCH_MODEL_NOT_CLINICALLY_VALIDATED",
     ),
     "shoulder": XRayModelRegistryEntry(
         canonical_region="shoulder",
         display_name="Shoulder",
         supported_modality="radiograph_image",
-        checkpoint_location=None,
-        model_architecture=None,
-        class_label_mapping=[],
-        expected_preprocessing=None,
-        model_version=None,
-        source_provenance="Stanford MURA (unconfigured)",
-        supported_prediction_task="Shoulder dislocation / fracture detection (unconfigured)",
-        is_supported=False,
-        validation_status="UNCONFIGURED",
+        checkpoint_location=_mura_checkpoint("shoulder"),
+        model_architecture="mura_densenet121",
+        class_label_mapping=MURA_BINARY_CLASSES,
+        expected_preprocessing=MURA_PREPROCESSING,
+        model_version="MURA_XR_SHOULDER_DenseNet121_research_checkpoint",
+        source_provenance="MURA region-specific research checkpoint; performance not independently validated by MediSense AI",
+        supported_prediction_task="Shoulder radiograph binary normal/abnormal research screening score; not a diagnosis",
+        is_supported=True,
+        validation_status="RESEARCH_MODEL_NOT_CLINICALLY_VALIDATED",
     ),
     "humerus": XRayModelRegistryEntry(
         canonical_region="humerus",
         display_name="Humerus",
         supported_modality="radiograph_image",
-        checkpoint_location=None,
-        model_architecture=None,
-        class_label_mapping=[],
-        expected_preprocessing=None,
-        model_version=None,
-        source_provenance="Stanford MURA (unconfigured)",
-        supported_prediction_task="Humerus shaft fracture detection (unconfigured)",
-        is_supported=False,
-        validation_status="UNCONFIGURED",
+        checkpoint_location=_mura_checkpoint("humerus"),
+        model_architecture="mura_densenet121",
+        class_label_mapping=MURA_BINARY_CLASSES,
+        expected_preprocessing=MURA_PREPROCESSING,
+        model_version="MURA_XR_HUMERUS_DenseNet121_research_checkpoint",
+        source_provenance="MURA region-specific research checkpoint; performance not independently validated by MediSense AI",
+        supported_prediction_task="Humerus radiograph binary normal/abnormal research screening score; not a diagnosis",
+        is_supported=True,
+        validation_status="RESEARCH_MODEL_NOT_CLINICALLY_VALIDATED",
     ),
     "clavicle": XRayModelRegistryEntry(
         canonical_region="clavicle",
@@ -687,6 +717,20 @@ XRAY_MODEL_REGISTRY: dict[str, XRayModelRegistryEntry] = {
         is_supported=False,
         validation_status="UNCONFIGURED",
     ),
+    "finger": XRayModelRegistryEntry(
+        canonical_region="finger",
+        display_name="Finger / Thumb",
+        supported_modality="radiograph_image",
+        checkpoint_location=_mura_checkpoint("finger"),
+        model_architecture="mura_densenet121",
+        class_label_mapping=MURA_BINARY_CLASSES,
+        expected_preprocessing=MURA_PREPROCESSING,
+        model_version="MURA_XR_FINGER_DenseNet121_research_checkpoint",
+        source_provenance="MURA finger research checkpoint; performance not independently validated by MediSense AI",
+        supported_prediction_task="Finger radiograph binary normal/abnormal research screening score; not a diagnosis",
+        is_supported=True,
+        validation_status="RESEARCH_MODEL_NOT_CLINICALLY_VALIDATED",
+    ),
     "fingers": XRayModelRegistryEntry(
         canonical_region="fingers",
         display_name="Fingers & Thumb",
@@ -773,17 +817,9 @@ def _apply_environment_model_overrides() -> None:
         if not (checkpoint and architecture and classes):
             continue
         normalized_architecture = architecture.lower().replace("-", "_")
-        if normalized_architecture in {"mura_densenet121", "densenet121"} and region == "wrist":
+        if normalized_architecture in {"mura_densenet121", "densenet121", "mura-densenet121"} and (region == "wrist" or region in MURA_REGION_CHECKPOINTS):
             configured_architecture = "mura_densenet121"
-            preprocessing = {
-                "target_size": [224, 224],
-                "color_mode": "RGB",
-                "pixel_scaling": "1/255.0",
-                "mean": [0.485, 0.456, 0.406],
-                "std": [0.229, 0.224, 0.225],
-                "interpolation": "bilinear",
-                "exif_orientation_correction": True,
-            }
+            preprocessing = MURA_PREPROCESSING
         elif "resnet18" in normalized_architecture:
             configured_architecture = "ResNet18"
             preprocessing = STANDARD_PREPROCESSING
@@ -927,10 +963,10 @@ REGION_ALIASES: dict[str, str] = {
     "sternum": "sternum",
     "breastbone": "sternum",
     # Digits
-    "fingers": "fingers",
-    "finger": "fingers",
-    "thumb": "fingers",
-    "digits": "fingers",
+    "fingers": "finger",
+    "finger": "finger",
+    "thumb": "finger",
+    "digits": "finger",
     "toes": "toes",
     "toe": "toes",
     "calcaneus": "calcaneus",

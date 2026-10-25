@@ -2,6 +2,7 @@
 
 Supports:
 - Existing, explicitly configured 5-class ResNet-18 state-dict checkpoints.
+- A dedicated MURA DenseNet121 binary wrist-X-ray checkpoint.
 - Optional TorchXRayVision DenseNet121 multi-label chest X-ray inference.
 
 Safety:
@@ -9,11 +10,14 @@ Safety:
 - DenseNet121 scores are model outputs, NOT calibrated probabilities or diagnoses.
 - Multi-label outputs are preserved; no softmax is applied across independent findings.
 - Chest X-ray models must not be used for other body regions.
+- The MURA wrist model must not be used for other body regions.
+- The wrist output is a research-model score, not a clinical diagnosis.
 """
 
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -196,9 +200,6 @@ class XRayModelService:
         self._provider = None
         self._xrv = None
         self.model_version = None
-        # Clear region-specific diagnostics so a failed load cannot expose a
-        # checkpoint path left over from a previous region.
-        self._checkpoint_path = None
         self._active_region = canonical_region
         self._active_classes = list(entry.class_label_mapping) if entry else []
 
@@ -216,6 +217,10 @@ class XRayModelService:
             return self._load_torchxrayvision()
 
         architecture = (entry.model_architecture or "").strip().lower()
+        if canonical_region == "wrist" and architecture in {
+            "mura_densenet121", "densenet121", "mura-densenet121"
+        }:
+            return self._load_mura_wrist_checkpoint(entry)
         if "resnet18" not in architecture:
             self._load_failure_code = "unsupported_model_architecture"
             self._load_failure_reason = (
@@ -227,6 +232,82 @@ class XRayModelService:
             self._load_failure_reason = f"No class labels are configured for {canonical_region}."
             return False
         return self._load_resnet_checkpoint(entry)
+
+    def _load_mura_wrist_checkpoint(self, entry=None) -> bool:
+        """Load the MURA wrist-specific DenseNet121 binary classifier.
+
+        This checkpoint is structurally different from the existing ResNet
+        checkpoints: its state dictionary is stored under ``model_state`` and
+        its classifier produces one logit. It must only be used for wrist X-rays.
+        """
+        if self._active_region != "wrist":
+            self._load_failure_code = "provider_region_mismatch"
+            self._load_failure_reason = "The MURA checkpoint is wrist-only."
+            return False
+
+        project_root = Path(__file__).resolve().parents[2]
+        configured = (os.getenv("XRAY_WRIST_CHECKPOINT", "") or "").strip()
+        if configured:
+            candidate = Path(configured).expanduser()
+            if not candidate.is_absolute():
+                # Relative paths are first resolved from the backend project root.
+                candidate = project_root / candidate
+            path = candidate
+        else:
+            path = project_root / "models" / "xray" / "wrist" / "XR_WRIST_FINAL_best.pt"
+
+        self._checkpoint_path = str(path.resolve(strict=False))
+        if not path.is_file() or path.stat().st_size <= 0:
+            self._load_failure_code = "checkpoint_path_not_found"
+            self._load_failure_reason = f"Wrist checkpoint not found or empty: {self._checkpoint_path}"
+            logger.warning("%s", self._load_failure_reason)
+            return False
+
+        try:
+            # weights_only=True avoids arbitrary pickle object loading.
+            checkpoint = torch.load(str(path), map_location=self.device, weights_only=True)
+            if not isinstance(checkpoint, dict):
+                raise ValueError("Checkpoint must be a dictionary.")
+            if checkpoint.get("area") != "XR_WRIST":
+                raise ValueError("Checkpoint metadata area is not XR_WRIST.")
+            if int(checkpoint.get("img_size", 0)) != 224:
+                raise ValueError("Checkpoint metadata does not specify 224-pixel inputs.")
+            state_dict = checkpoint.get("model_state")
+            if not isinstance(state_dict, dict) or not state_dict:
+                raise ValueError("Checkpoint is missing its model_state dictionary.")
+            classifier_weight = state_dict.get("classifier.weight")
+            classifier_bias = state_dict.get("classifier.bias")
+            if (not isinstance(classifier_weight, torch.Tensor)
+                    or tuple(classifier_weight.shape) != (1, 1024)
+                    or not isinstance(classifier_bias, torch.Tensor)
+                    or tuple(classifier_bias.shape) != (1,)):
+                raise ValueError("Checkpoint classifier is not the expected one-logit DenseNet121 head.")
+
+            from torchvision import models
+            model = models.densenet121(weights=None)
+            model.classifier = nn.Linear(model.classifier.in_features, 1)
+            model.load_state_dict(state_dict, strict=True)
+            model = model.to(self.device)
+            model.eval()
+
+            self._model = model
+            self._provider = "mura_densenet121"
+            self.model_version = f"mura-densenet121-wrist@{path.name}"
+            self._active_classes = ["normal", "abnormal"]
+            self._loaded = True
+            self._load_failure_code = None
+            self._load_failure_reason = None
+            logger.info("Loaded MURA DenseNet121 wrist checkpoint: %s", self._checkpoint_path)
+            return True
+        except Exception as exc:
+            self._model = None
+            self._loaded = False
+            self.model_version = None
+            self._provider = None
+            self._load_failure_code = "mura_wrist_checkpoint_load_failed"
+            self._load_failure_reason = f"{type(exc).__name__}: {exc}"
+            logger.exception("Failed to load MURA wrist checkpoint: %s", exc)
+            return False
 
     def _load_torchxrayvision(self) -> bool:
         """Load pretrained TorchXRayVision DenseNet121 and its published labels."""
@@ -275,8 +356,11 @@ class XRayModelService:
             self._load_failure_reason = f"Missing registry entry or class labels for {region}."
             return False
 
-        configured_checkpoint = ""
-        if region == "chest":
+        # Region-specific environment configuration takes priority over cached settings.
+        configured_checkpoint = (os.getenv(f"XRAY_{region.upper()}_CHECKPOINT", "") or "").strip()
+        if region == "chest" and not configured_checkpoint:
+            configured_checkpoint = (os.getenv("XRAY_CHEST_CHECKPOINT", "") or "").strip()
+        if region == "chest" and not configured_checkpoint:
             configured_checkpoint = (getattr(self.settings, "xray_chest_checkpoint", "") or "").strip()
         model_root = Path(self.settings.xray_model_path).expanduser()
         if configured_checkpoint:
@@ -368,6 +452,24 @@ class XRayModelService:
             logger.warning("ResNet image preprocessing failed: %s", exc)
             return None
 
+    def preprocess_mura_wrist(self, image_path: str) -> Optional[torch.Tensor]:
+        """Preprocess wrist images with 224px RGB and ImageNet normalization."""
+        try:
+            from PIL import ImageOps
+            with Image.open(image_path) as image:
+                image = ImageOps.exif_transpose(image).convert("RGB")
+                image = image.resize((224, 224), resample=Image.Resampling.BILINEAR)
+                array = np.asarray(image, dtype=np.float32) / 255.0
+            mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
+            std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
+            array = (array - mean) / std
+            if array.shape != (224, 224, 3) or not np.isfinite(array).all():
+                raise ValueError("Unexpected or non-finite wrist image tensor.")
+            return torch.from_numpy(array.transpose(2, 0, 1).copy()).unsqueeze(0).to(self.device)
+        except Exception as exc:
+            logger.warning("MURA wrist image preprocessing failed: %s", exc)
+            return None
+
     def preprocess_torchxrayvision(self, image_path: str) -> Optional[torch.Tensor]:
         """Use TorchXRayVision's own grayscale loading, crop, resize, and normalization."""
         try:
@@ -448,9 +550,12 @@ class XRayModelService:
                 ),
             )
 
-        # A non-chest region can only reach inference if its registry entry
-        # explicitly declares a compatible region-specific model and checkpoint.
-        # The chest-only TorchXRayVision provider is checked again before inference.
+        if canonical_region != "chest" and self.configured_model in {
+            "chest_densenet121", "densenet121", "torchxrayvision", "torch_xray_vision", "xrv_densenet121"
+        }:
+            # TorchXRayVision's configured DenseNet is chest-specific; it must never
+            # be reused for another anatomy even if configuration is accidentally changed.
+            pass
 
         try:
             image_file = Path(image_path)
@@ -489,7 +594,64 @@ class XRayModelService:
             if canonical_region != "chest":
                 return self._unavailable(canonical_region, "provider_region_mismatch", "TorchXRayVision provider is chest-only.")
             return self._analyze_torchxrayvision(image_path)
+        if self._provider == "mura_densenet121":
+            if canonical_region != "wrist":
+                return self._unavailable(canonical_region, "provider_region_mismatch", "MURA DenseNet121 provider is wrist-only.")
+            return self._analyze_mura_wrist(image_path)
         return self._analyze_resnet(image_path, canonical_region, list(self._active_classes))
+
+    def _analyze_mura_wrist(self, image_path: str) -> dict[str, Any]:
+        """Run wrist-only binary inference and preserve its limited research scope."""
+        tensor = self.preprocess_mura_wrist(image_path)
+        if tensor is None:
+            return self._unavailable(
+                "wrist", "preprocessing_failed", "Unable to decode and preprocess wrist image.",
+                self.model_version,
+                "Image preprocessing failed. Please verify the image file format.",
+            )
+        try:
+            with torch.inference_mode():
+                outputs = self._model(tensor)
+            if not isinstance(outputs, torch.Tensor) or tuple(outputs.shape) != (1, 1):
+                raise ValueError(f"Expected one wrist logit, received {getattr(outputs, 'shape', None)}")
+            logit = outputs[0, 0].float()
+            if not torch.isfinite(logit):
+                raise ValueError("Wrist model produced a non-finite logit.")
+            score = float(torch.sigmoid(logit).item())
+            if not math.isfinite(score) or not 0.0 <= score <= 1.0:
+                raise ValueError("Wrist model produced an invalid sigmoid score.")
+            predicted_label = "abnormal" if score >= 0.5 else "normal"
+            return {
+                "status": "completed",
+                "region": "wrist",
+                "model_version": self.model_version,
+                "prediction": predicted_label,
+                "findings": [{
+                    "label": predicted_label,
+                    "model_score": round(score if predicted_label == "abnormal" else 1.0 - score, 5),
+                    "abnormality_score": round(score, 5),
+                    "score_type": "sigmoid_model_score_not_clinically_calibrated",
+                    "is_actionable_finding": False,
+                }],
+                "abnormality_score": round(score, 5),
+                "confidence_if_valid": None,
+                "uncertainty": (
+                    "Research-only MURA wrist abnormality-classifier output. The sigmoid score is not a clinically calibrated "
+                    "probability and does not establish or exclude a fracture. The default 0.5 threshold is a "
+                    "technical demo threshold, not a clinically validated decision threshold. Radiologist review is required."
+                ),
+                "explainability_artifact": None,
+                "message": (
+                    f"The research model's wrist output was '{predicted_label}' (normal/abnormal classification). This is not a diagnosis; "
+                    "a qualified clinician/radiologist must interpret the X-ray."
+                ),
+            }
+        except Exception as exc:
+            logger.warning("MURA wrist inference failed: %s", exc)
+            return self._unavailable(
+                "wrist", "inference_failed", "Wrist inference could not be completed.", self.model_version,
+                "Wrist X-ray analysis failed. No result is available; please consult a qualified radiologist.",
+            )
 
     def _analyze_torchxrayvision(self, image_path: str) -> dict[str, Any]:
         tensor = self.preprocess_torchxrayvision(image_path)

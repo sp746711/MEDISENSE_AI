@@ -8,7 +8,7 @@ trained models are marked operational.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 import os
 import re
@@ -20,7 +20,13 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 # Supported regions for computer-vision model evaluation
-SUPPORTED_REGIONS: set[str] = {"chest"}  # Expand only when verified trained models exist
+SUPPORTED_REGIONS: set[str] = {"chest"}  # Updated after registry configuration
+
+MURA_WRIST_CLASSES = ["No abnormality detected", "Abnormality detected"]
+MURA_WRIST_CHECKPOINT = (
+    Path(__file__).resolve().parents[2]
+    / "models" / "xray" / "wrist" / "XR_WRIST_FINAL_best.pt"
+)
 
 CHEST_CLASSES = [
     "Normal / Clear",
@@ -98,6 +104,20 @@ def verify_checkpoint_integrity(
                 f"Unsupported checkpoint object type: {type(loaded).__name__}; "
                 "expected a state_dict or checkpoint dictionary."
             )
+
+        # MURA wrist checkpoint format: {"model_state": ..., "area": "XR_WRIST", ...}.
+        # It has one sigmoid logit for abnormality detection, not a 2-logit classifier.
+        if loaded.get("area") == "XR_WRIST" and isinstance(loaded.get("model_state"), dict):
+            state = loaded["model_state"]
+            weight = state.get("classifier.weight")
+            bias = state.get("classifier.bias")
+            if getattr(weight, "shape", None) != (1, 1024):
+                return False, "MURA wrist checkpoint classifier.weight must have shape (1, 1024)."
+            if getattr(bias, "shape", None) != (1,):
+                return False, "MURA wrist checkpoint classifier.bias must have shape (1,)."
+            if not any(k.startswith("features.") for k in state if isinstance(k, str)):
+                return False, "MURA wrist checkpoint is missing DenseNet121 feature weights."
+            return True, f"MURA XR_WRIST DenseNet121 checkpoint structurally verified: {checkpoint_path}"
 
         state_dict = loaded.get("state_dict", loaded.get("model_state_dict", loaded))
         if not isinstance(state_dict, dict) or not state_dict:
@@ -182,14 +202,23 @@ class XRayModelRegistryEntry:
                 "must still succeed; outputs are research scores, not a clinical diagnosis."
             )
 
-        if self.canonical_region != "chest" and "resnet18" not in architecture:
+        if self.canonical_region == "wrist" and architecture in {
+            "mura_densenet121", "densenet121", "mura-densenet121"
+        }:
+            pass
+        elif self.canonical_region != "chest" and "resnet18" not in architecture:
             return False, (
                 "unsupported_model_architecture: This inference service supports configured ResNet18 "
-                "state-dict models for non-chest regions; the requested architecture is not implemented."
+                "state-dict models for non-chest regions and the configured MURA DenseNet121 wrist model."
             )
 
-        configured_path = ""
-        if self.canonical_region == "chest":
+        # Per-region environment overrides take precedence over cached settings.
+        # A checkpoint alone is insufficient: architecture and labels must also be
+        # configured and must match the checkpoint's training output order.
+        configured_path = (os.getenv(f"XRAY_{self.canonical_region.upper()}_CHECKPOINT", "") or "").strip()
+        if self.canonical_region == "chest" and not configured_path:
+            configured_path = (os.getenv("XRAY_CHEST_CHECKPOINT", "") or "").strip()
+        if self.canonical_region == "chest" and not configured_path:
             configured_path = (getattr(settings, "xray_chest_checkpoint", "") or "").strip()
         if configured_path:
             p = Path(configured_path).expanduser()
@@ -290,15 +319,23 @@ XRAY_MODEL_REGISTRY: dict[str, XRayModelRegistryEntry] = {
         canonical_region="wrist",
         display_name="Wrist",
         supported_modality="radiograph_image",
-        checkpoint_location=None,
-        model_architecture=None,
-        class_label_mapping=[],
-        expected_preprocessing=None,
-        model_version=None,
-        source_provenance="Stanford MURA Musculoskeletal Radiographs (unconfigured)",
-        supported_prediction_task="Musculoskeletal abnormality / fracture detection (unconfigured)",
-        is_supported=False,
-        validation_status="UNCONFIGURED",
+        checkpoint_location=str(MURA_WRIST_CHECKPOINT),
+        model_architecture="mura_densenet121",
+        class_label_mapping=MURA_WRIST_CLASSES,
+        expected_preprocessing={
+            "target_size": [224, 224],
+            "color_mode": "RGB",
+            "pixel_scaling": "1/255.0",
+            "mean": [0.485, 0.456, 0.406],
+            "std": [0.229, 0.224, 0.225],
+            "interpolation": "bilinear",
+            "exif_orientation_correction": True,
+        },
+        model_version="MURA_XR_WRIST_DenseNet121_research_checkpoint",
+        source_provenance="MURA wrist research checkpoint; provenance/performance not independently validated by MediSense AI",
+        supported_prediction_task="Binary wrist radiograph abnormality screening score; not fracture-specific and not a diagnosis",
+        is_supported=True,
+        validation_status="RESEARCH_MODEL_NOT_CLINICALLY_VALIDATED",
     ),
     "hand": XRayModelRegistryEntry(
         canonical_region="hand",
@@ -707,6 +744,68 @@ XRAY_MODEL_REGISTRY: dict[str, XRayModelRegistryEntry] = {
         validation_status="UNCONFIGURED",
     ),
 }
+
+def _apply_environment_model_overrides() -> None:
+    """Enable a region only when a real checkpoint, architecture and labels are supplied.
+
+    For each canonical region, configure:
+      XRAY_<REGION>_CHECKPOINT=path/to/weights.pt
+      XRAY_<REGION>_MODEL_ARCHITECTURE=ResNet18
+      XRAY_<REGION>_CLASSES=Class A,Class B
+      XRAY_<REGION>_MODEL_VERSION=dataset-and-version
+
+    The labels must be the exact ordered output labels used to train the checkpoint.
+    This configuration does not train a model or validate clinical performance.
+    """
+    global SUPPORTED_REGIONS
+    configured = {"chest"} | {
+        region for region, entry in XRAY_MODEL_REGISTRY.items() if entry.is_supported
+    }
+    for region, entry in list(XRAY_MODEL_REGISTRY.items()):
+        prefix = f"XRAY_{region.upper()}_"
+        checkpoint = (os.getenv(prefix + "CHECKPOINT", "") or "").strip()
+        architecture = (os.getenv(prefix + "MODEL_ARCHITECTURE", "") or "").strip()
+        raw_classes = (os.getenv(prefix + "CLASSES", "") or "").strip()
+        classes = [label.strip() for label in raw_classes.split(",") if label.strip()]
+        version = (os.getenv(prefix + "MODEL_VERSION", "") or "").strip() or None
+
+        # Never infer labels from a filename or auto-enable a region from its name.
+        if not (checkpoint and architecture and classes):
+            continue
+        normalized_architecture = architecture.lower().replace("-", "_")
+        if normalized_architecture in {"mura_densenet121", "densenet121"} and region == "wrist":
+            configured_architecture = "mura_densenet121"
+            preprocessing = {
+                "target_size": [224, 224],
+                "color_mode": "RGB",
+                "pixel_scaling": "1/255.0",
+                "mean": [0.485, 0.456, 0.406],
+                "std": [0.229, 0.224, 0.225],
+                "interpolation": "bilinear",
+                "exif_orientation_correction": True,
+            }
+        elif "resnet18" in normalized_architecture:
+            configured_architecture = "ResNet18"
+            preprocessing = STANDARD_PREPROCESSING
+        else:
+            logger.warning("Ignoring %s override: architecture %r is not implemented for this region.", region, architecture)
+            continue
+        XRAY_MODEL_REGISTRY[region] = replace(
+            entry,
+            checkpoint_location=checkpoint,
+            model_architecture=configured_architecture,
+            class_label_mapping=classes,
+            expected_preprocessing=preprocessing,
+            model_version=version or f"{region}_resnet18_env_configured",
+            source_provenance=(os.getenv(prefix + "SOURCE", "") or "User-configured checkpoint; provenance not independently verified"),
+            is_supported=True,
+            validation_status="CONFIGURED_PENDING_VALIDATION",
+        )
+        configured.add(region)
+    SUPPORTED_REGIONS = configured
+
+
+_apply_environment_model_overrides()
 
 # Alias resolution mapping
 REGION_ALIASES: dict[str, str] = {

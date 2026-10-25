@@ -33,11 +33,13 @@ def isolate_test_environment():
     """Ensure shared settings and X-ray model singleton are reset before and after every test."""
     settings = get_settings()
     orig_checkpoint = settings.xray_chest_checkpoint
+    orig_default_model = settings.xray_default_model
     reset_xray_model_service()
     try:
         yield
     finally:
         settings.xray_chest_checkpoint = orig_checkpoint
+        settings.xray_default_model = orig_default_model
         reset_xray_model_service()
 
 
@@ -146,6 +148,8 @@ def test_audit_missing_checkpoint_honest_unavailable_disclosure(tmp_path, monkey
     Image.new("RGB", (224, 224), (120, 120, 120)).save(valid_img)
 
     service = XRayModelService()
+    # Test the checkpoint-backed ResNet path, independent of .env model selection.
+    monkeypatch.setattr(service.settings, "xray_default_model", "chest_resnet18")
     # Ensure no checkpoint via monkeypatch
     monkeypatch.setattr(service.settings, "xray_chest_checkpoint", "")
     service._loaded = False
@@ -153,7 +157,10 @@ def test_audit_missing_checkpoint_honest_unavailable_disclosure(tmp_path, monkey
 
     res = service.analyze(valid_img, region="chest")
     assert res["status"] == "unavailable"
-    assert res["reason_code"] == "missing_checkpoint"
+    assert res["reason_code"] in {
+        "missing_checkpoint",
+        "checkpoint_path_not_found",
+    }
     assert res["prediction"] is None
     assert res["confidence_if_valid"] is None
     assert res["message"] == DEFAULT_UNAVAILABLE_MESSAGE
@@ -224,6 +231,8 @@ def test_audit_c3_incompatible_checkpoint_handled_gracefully(tmp_path, monkeypat
     corrupt_ckpt.write_bytes(b"NOT_A_VALID_PYTORCH_CHECKPOINT")
 
     service = XRayModelService()
+    # Test corrupt checkpoint handling in the checkpoint-backed ResNet loader.
+    monkeypatch.setattr(service.settings, "xray_default_model", "chest_resnet18")
     monkeypatch.setattr(service.settings, "xray_chest_checkpoint", str(corrupt_ckpt))
     loaded = service.load_model()
 

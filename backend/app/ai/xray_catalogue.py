@@ -628,11 +628,34 @@ def get_xray_catalogue_with_model_status() -> list[dict[str, Any]]:
                 canon_reg = xtype.get("canonical_region", "unknown")
                 reg_entry = get_model_registry_entry(canon_reg)
 
+                availability_message = (
+                    "No compatible trained model is configured for this anatomical region."
+                )
+
                 if reg_entry and reg_entry.is_supported:
-                    is_avail, avail_msg = reg_entry.check_availability()
+                    # Availability checks can fail when optional ML dependencies are
+                    # missing or a checkpoint path is invalid. Keep the catalogue
+                    # endpoint usable, and never claim inference is available on error.
+                    try:
+                        is_avail, availability_message = reg_entry.check_availability()
+                    except Exception as exc:
+                        is_avail = False
+                        availability_message = (
+                            f"Model availability check failed: {type(exc).__name__}."
+                        )
+
                     status_label = "available" if is_avail else "configured_unavailable"
-                    architecture = (reg_entry.model_architecture or "configured model").replace("_", " ").replace("-", " ").strip() if reg_entry else "configured model"
-                    badge_label = f"Available ({architecture})" if is_avail else "Model Configured — Weights Unavailable"
+                    architecture = (
+                        (reg_entry.model_architecture or "configured model")
+                        .replace("_", " ")
+                        .replace("-", " ")
+                        .strip()
+                    )
+                    badge_label = (
+                        f"Available ({architecture})"
+                        if is_avail
+                        else "Model Configured — Weights Unavailable"
+                    )
                     if is_avail:
                         notice = (
                             f"A vision model is available for {reg_entry.display_name} radiography. "
@@ -664,6 +687,7 @@ def get_xray_catalogue_with_model_status() -> list[dict[str, Any]]:
                     "notice": notice,
                     "model_version": reg_entry.model_version if reg_entry else None,
                     "model_architecture": reg_entry.model_architecture if reg_entry else None,
+                    "availability_message": availability_message,
                 }
                 enriched_xray_types.append(xtype_copy)
 
@@ -684,7 +708,7 @@ def get_xray_catalogue_with_model_status() -> list[dict[str, Any]]:
 #   autocomplete list drifting out of sync with available examination types.
 # - Catalogue presence is NOT model support; runtime support is checked below.
 _REGION_DISPLAY_NAMES: dict[str, str] = {
-    "skull": "Skull / Cranium",
+    "skull": "Head",
     "chest": "Chest",
     "ribs": "Ribs",
     "sternum": "Sternum",
@@ -767,6 +791,29 @@ def _build_searchable_body_regions() -> list[dict[str, Any]]:
 
 
 SEARCHABLE_BODY_REGIONS: list[dict[str, Any]] = _build_searchable_body_regions()
+
+# Provide the broad anatomical terms expected by the frontend autocomplete while
+# retaining specific cervical/thoracic/lumbar entries. The generic Spine option
+# is a catalogue/search choice only; model support is still checked by registry.
+for _generic_region in (
+    {
+        "id": "head",
+        "name": "Head",
+        "canonical_region": "skull",
+        "aliases": ["head", "hea", "skull", "cranium", "head x-ray"],
+    },
+    {
+        "id": "spine",
+        "name": "Spine",
+        "canonical_region": "spine",
+        "aliases": ["spine", "spi", "vertebral column", "backbone", "c-spine", "t-spine", "l-spine"],
+    },
+):
+    if not any(item["name"] == _generic_region["name"] for item in SEARCHABLE_BODY_REGIONS):
+        SEARCHABLE_BODY_REGIONS.append(_generic_region)
+
+# Keep search results deterministic after adding aggregate regions.
+SEARCHABLE_BODY_REGIONS.sort(key=lambda item: (item["name"].lower(), item["canonical_region"]))
 
 
 def get_backend_body_regions() -> list[dict[str, Any]]:

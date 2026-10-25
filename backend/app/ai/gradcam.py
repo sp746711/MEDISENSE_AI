@@ -1,6 +1,6 @@
 """Grad-CAM explainability generator for MediSense AI X-ray models.
 
-Computes Grad-CAM from a real forward pass and gradients of a trained PyTorch
+Computes Grad-CAM from a real forward pass and gradients of a PyTorch
 model. It never fabricates a heatmap. Failure to generate an artifact is
 reported as unavailable and must not invalidate an otherwise valid prediction.
 """
@@ -36,16 +36,19 @@ def _unavailable(message: str, reason_code: str = "gradcam_unavailable") -> dict
 
 
 def _read_original_image(image_path: str) -> Optional[np.ndarray]:
-    """Read an image safely and return an RGB-correct BGR array for OpenCV."""
+    """Read an image safely and return a BGR array suitable for OpenCV."""
     try:
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         if image is not None and image.size:
             return image
+
         with Image.open(image_path) as pil_image:
             pil_image = ImageOps.exif_transpose(pil_image).convert("RGB")
             rgb = np.asarray(pil_image)
+
         if rgb.ndim != 3 or rgb.shape[2] != 3 or rgb.size == 0:
             return None
+
         return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     except (OSError, ValueError, cv2.error) as exc:
         logger.warning("Unable to read image for Grad-CAM: %s", exc)
@@ -53,17 +56,35 @@ def _read_original_image(image_path: str) -> Optional[np.ndarray]:
 
 
 def _find_target_layer(model: nn.Module) -> Optional[nn.Module]:
-    """Prefer the final ResNet block; otherwise use the last convolution."""
+    """Find a spatial convolutional layer appropriate for Grad-CAM.
+
+    For ResNet-style models, prefer the final convolution in the final
+    residual block. For other CNNs, fall back to the last Conv2d module.
+    """
     layer4 = getattr(model, "layer4", None)
+
     if isinstance(layer4, (nn.Sequential, list, tuple)) and len(layer4):
-        candidate = layer4[-1]
-        if isinstance(candidate, nn.Module):
-            return candidate
+        final_block = layer4[-1]
+
+        # Standard ResNet BasicBlock and Bottleneck expose conv2/conv3.
+        for name in ("conv3", "conv2", "conv1"):
+            candidate = getattr(final_block, name, None)
+            if isinstance(candidate, nn.Conv2d):
+                return candidate
+
+        # Some custom residual blocks wrap their convolutions more deeply.
+        nested_last_conv: Optional[nn.Module] = None
+        for module in final_block.modules():
+            if isinstance(module, nn.Conv2d):
+                nested_last_conv = module
+        if nested_last_conv is not None:
+            return nested_last_conv
 
     last_conv: Optional[nn.Module] = None
     for module in model.modules():
         if isinstance(module, nn.Conv2d):
             last_conv = module
+
     return last_conv
 
 
@@ -74,7 +95,7 @@ def generate_gradcam(
 ) -> dict[str, Any]:
     """Generate a genuine Grad-CAM overlay for a PyTorch convolutional model.
 
-    ``target_class`` is used only when it is a valid class index. If it is not,
+    ``target_class`` is used only when it is a valid class index. Otherwise,
     the model's top output class is selected. The output is an explanatory
     visualization, not a clinical localization or diagnostic confirmation.
     """
@@ -97,8 +118,8 @@ def generate_gradcam(
     original = _read_original_image(image_path)
     if original is None:
         return _unavailable("The uploaded image could not be decoded.", "image_decode_failed")
-    height, width = original.shape[:2]
 
+    height, width = original.shape[:2]
     target_layer = _find_target_layer(model)
     if target_layer is None:
         return _unavailable(
@@ -111,13 +132,12 @@ def generate_gradcam(
     was_training = model.training
 
     try:
-        # Use the same preprocessing pipeline as inference, but place the
-        # tensor on the actual model device rather than a separately inferred device.
+        # Reuse the same preprocessing pipeline as model inference.
         from app.ai.xray_model import XRayModelService
 
         service = XRayModelService()
         tensor = service.preprocess_image(image_path)
-        if tensor is None:
+        if not isinstance(tensor, torch.Tensor) or tensor.numel() == 0:
             return _unavailable(
                 "Image preprocessing failed for Grad-CAM computation.",
                 "preprocessing_failed",
@@ -126,39 +146,93 @@ def generate_gradcam(
         try:
             model_device = next(model.parameters()).device
         except StopIteration:
-            model_device = tensor.device
-        tensor = tensor.to(model_device)
-        tensor.requires_grad_(True)
+            try:
+                model_device = next(model.buffers()).device
+            except StopIteration:
+                model_device = tensor.device
 
-        def capture_activation(_module: nn.Module, _inputs: tuple[Any, ...], output: Any) -> None:
+        tensor = tensor.to(model_device)
+        # Gradients with respect to model activations are what Grad-CAM uses.
+        # Input gradients are not required; avoid unnecessarily tracking them.
+        tensor = tensor.detach()
+
+        def capture_activation(
+            _module: nn.Module,
+            _inputs: tuple[Any, ...],
+            output: Any,
+        ) -> None:
             if isinstance(output, torch.Tensor):
                 activations.append(output)
 
         forward_handle = target_layer.register_forward_hook(capture_activation)
         model.eval()
-        # Grad-CAM requires gradients, so do not wrap this block in no_grad().
+
+        # Grad-CAM must run with autograd enabled, even if the caller uses
+        # torch.no_grad() around its prediction pipeline.
         with torch.enable_grad():
             outputs = model(tensor)
-            if not isinstance(outputs, torch.Tensor) or outputs.ndim != 2 or outputs.shape[0] < 1:
-                return _unavailable("The model returned an invalid output shape.", "invalid_model_output")
-            if outputs.shape[1] < 1 or not torch.isfinite(outputs).all():
-                return _unavailable("The model output contained no valid class scores.", "invalid_model_output")
+
+            if (
+                not isinstance(outputs, torch.Tensor)
+                or outputs.ndim != 2
+                or outputs.shape[0] < 1
+                or outputs.shape[1] < 1
+            ):
+                return _unavailable(
+                    "The model returned an invalid output shape.",
+                    "invalid_model_output",
+                )
+
+            if not bool(torch.isfinite(outputs).all().item()):
+                return _unavailable(
+                    "The model output contained non-finite class scores.",
+                    "invalid_model_output",
+                )
+
             if not activations:
-                return _unavailable("The target layer did not produce activations.", "activation_missing")
+                return _unavailable(
+                    "The target layer did not produce activations.",
+                    "activation_missing",
+                )
 
             class_index = target_class
-            if not isinstance(class_index, int) or isinstance(class_index, bool) or not 0 <= class_index < outputs.shape[1]:
+            if (
+                not isinstance(class_index, int)
+                or isinstance(class_index, bool)
+                or not 0 <= class_index < outputs.shape[1]
+            ):
                 class_index = int(outputs[0].argmax(dim=0).item())
 
             activation = activations[-1]
-            if activation.ndim != 4 or activation.shape[0] < 1:
-                return _unavailable("The target layer output is not a valid spatial feature map.", "invalid_activation_shape")
+            if (
+                activation.ndim != 4
+                or activation.shape[0] < 1
+                or not activation.requires_grad
+            ):
+                return _unavailable(
+                    "The target layer output is not a gradient-enabled spatial feature map.",
+                    "invalid_activation_shape",
+                )
 
             gradients = torch.autograd.grad(
-                outputs[0, class_index], activation, retain_graph=False, create_graph=False, allow_unused=True
+                outputs=outputs[0, class_index],
+                inputs=activation,
+                retain_graph=False,
+                create_graph=False,
+                allow_unused=True,
             )[0]
-            if gradients is None or not torch.isfinite(gradients).all():
-                return _unavailable("Gradients could not be calculated for the selected class.", "gradients_unavailable")
+
+            if gradients is None:
+                return _unavailable(
+                    "Gradients could not be calculated for the selected class.",
+                    "gradients_unavailable",
+                )
+
+            if not bool(torch.isfinite(gradients).all().item()):
+                return _unavailable(
+                    "Gradients contained non-finite values.",
+                    "gradients_unavailable",
+                )
 
             # Global-average-pool gradients and weight the feature maps.
             weights = gradients.mean(dim=(2, 3), keepdim=True)
@@ -166,27 +240,46 @@ def generate_gradcam(
             cam = cam_tensor.detach().float().cpu().numpy()
 
         if cam.size == 0 or not np.isfinite(cam).all():
-            return _unavailable("The generated activation map was empty or invalid.", "invalid_heatmap")
+            return _unavailable(
+                "The generated activation map was empty or invalid.",
+                "invalid_heatmap",
+            )
 
         cam_min = float(cam.min())
         cam_max = float(cam.max())
         spread = cam_max - cam_min
-        # A flat activation map carries no useful spatial explanation. Do not
-        # save a misleading all-zero/all-one visualization as if it were useful.
+
+        # A flat map has no meaningful spatial variation. Do not save a
+        # fabricated or misleading all-zero/all-one explanation.
         if not np.isfinite(spread) or spread <= 1e-12:
-            return _unavailable("The model produced no meaningful spatial activation for this class.", "flat_heatmap")
+            return _unavailable(
+                "The model produced no meaningful spatial activation for this class.",
+                "flat_heatmap",
+            )
+
         cam = (cam - cam_min) / spread
-        cam_resized = cv2.resize(cam, (width, height), interpolation=cv2.INTER_LINEAR)
-        heatmap = cv2.applyColorMap(np.clip(cam_resized * 255.0, 0, 255).astype(np.uint8), cv2.COLORMAP_JET)
+        cam_resized = cv2.resize(
+            cam,
+            (width, height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        heatmap = cv2.applyColorMap(
+            np.clip(cam_resized * 255.0, 0, 255).astype(np.uint8),
+            cv2.COLORMAP_JET,
+        )
         overlay = cv2.addWeighted(original, 0.65, heatmap, 0.35, 0)
 
         settings = get_settings()
         explain_dir = Path(settings.upload_path) / "explainability"
         explain_dir.mkdir(parents=True, exist_ok=True)
+
         filename = f"gradcam_{uuid.uuid4().hex}.jpg"
         output_path = explain_dir / filename
         if not cv2.imwrite(str(output_path), overlay):
-            return _unavailable("The Grad-CAM image could not be saved.", "artifact_write_failed")
+            return _unavailable(
+                "The Grad-CAM image could not be saved.",
+                "artifact_write_failed",
+            )
 
         return {
             "status": "ok",
@@ -194,24 +287,29 @@ def generate_gradcam(
             "label": "Model Explainability Visualization (Grad-CAM)",
             "message": (
                 "Grad-CAM was generated from the model's feature activations and gradients. "
-                "It is an assistive visualization, not a diagnosis or proof that a highlighted area is abnormal."
+                "It is an assistive visualization, not a diagnosis or proof that a highlighted "
+                "area is abnormal."
             ),
             "artifact_path": str(output_path),
             "filename": filename,
             "target_class_index": class_index,
         }
+
     except Exception as exc:
         logger.warning("Grad-CAM generation failed: %s", exc, exc_info=True)
         return _unavailable(
-            "Grad-CAM could not be generated for this image and model. The model prediction, if available, should be reported separately.",
+            "Grad-CAM could not be generated for this image and model. "
+            "The model prediction, if available, should be reported separately.",
             "gradcam_execution_failed",
         )
+
     finally:
         if forward_handle is not None:
             try:
                 forward_handle.remove()
             except Exception:
                 logger.debug("Could not remove Grad-CAM forward hook.")
+
         # Avoid changing the caller's model mode permanently.
         try:
             model.train(was_training)

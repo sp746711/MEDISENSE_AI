@@ -68,6 +68,17 @@ async def upload_xray(
     max_bytes = int(settings.max_upload_size_mb * 1024 * 1024)
     try:
         content = await _read_limited_upload(file, max_bytes)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(
+            "X-ray upload stream read failed for assessment_id=%s",
+            assessment_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The uploaded X-ray image could not be read. Please retry the upload.",
+        ) from exc
     finally:
         await file.close()
 
@@ -290,6 +301,9 @@ async def upload_xray(
         db.commit()
         db.refresh(result)
 
+        saved_findings = (
+            getattr(result, findings_column, []) if findings_column else []
+        ) or []
         return {
             "status": result.status,
             "xray_result_id": str(result.xray_result_id),
@@ -298,7 +312,7 @@ async def upload_xray(
             "region": result.region,
             "model_version": result.model_version,
             "prediction": result.prediction,
-            "findings": getattr(result, findings_column, []) if findings_column else [],
+            "findings": saved_findings,
             "confidence_if_valid": result.confidence_if_valid,
             "uncertainty": result.uncertainty,
             "source": source,

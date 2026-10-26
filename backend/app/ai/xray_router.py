@@ -2,6 +2,7 @@
 
 Defines canonical anatomical regions, alias normalizations, model architecture specifications,
 expected preprocessing, class mappings, checkpoint paths, and availability disclosures.
+Goal 1 update: broad classifier labels are recognized without being routed to narrower regional models.
 Enforces strict medical-safety boundaries: only anatomical regions with verified, compatible
 trained models are marked operational.
 """
@@ -856,6 +857,18 @@ REGION_ALIASES: dict[str, str] = {
     "thorax": "chest",
     "lungs": "chest",
     "pulmonary": "chest",
+    # Broad anatomy labels are recognized but must not select a specific regional model.
+    "extremity": "extremity",
+    "upper extremity": "upper extremity",
+    "lower extremity": "lower extremity",
+    "head region": "head region",
+    "leg": "lower extremity",
+    # Exact classifier labels with no configured compatible regional model.
+    "nasopharynx": "nasopharynx",
+    "si joint": "sacroiliac joint",
+    "sacroiliac joint": "sacroiliac joint",
+    "temporal bone": "temporal bone",
+    "pns": "sinuses",
     # Wrist aliases
     "wrist": "wrist",
     "wrist x-ray": "wrist",
@@ -878,7 +891,8 @@ REGION_ALIASES: dict[str, str] = {
     "shoulder joint": "shoulder",
     # Humerus
     "humerus": "humerus",
-    "arm": "humerus",
+    # "arm" is broad; do not silently treat the whole arm as a humerus X-ray.
+    "arm": "upper extremity",
     # Clavicle
     "clavicle": "clavicle",
     "collarbone": "clavicle",
@@ -930,7 +944,8 @@ REGION_ALIASES: dict[str, str] = {
     "tailbone": "sacrum",
     "sacrococcygeal": "sacrum",
     # Head & Neck
-    "head": "skull",
+    # "head" is broad; only an explicit skull/cranium label maps to skull.
+    "head": "head region",
     "skull": "skull",
     "cranium": "skull",
     "calvarium": "skull",
@@ -1039,6 +1054,66 @@ def get_all_registry_entries() -> list[dict[str, Any]]:
     return [entry.to_dict() for entry in XRAY_MODEL_REGISTRY.values()]
 
 
+# Some labels in the 33-class anatomy classifier describe a broad area rather than
+# a specific study compatible with one of the configured regional disease models.
+# These must be displayed honestly without routing to a narrower anatomy model.
+_ANATOMY_CLASS_BROAD_LABELS: dict[str, str] = {
+    "extremity": "extremity",
+    "upper extremity": "upper extremity",
+    "lower extremity": "lower extremity",
+    "arm": "upper extremity",
+    "leg": "lower extremity",
+    "head": "head region",
+}
+
+
+def _normalize_anatomy_classifier_label(label: Any) -> tuple[str, bool, bool]:
+    """Normalize a 33-class model label without narrowing broad anatomy.
+
+    Returns (canonical_region, recognized, is_broad). The classifier's ARM/LEG/HEAD
+    labels are deliberately not mapped to humerus/femur/skull because that would
+    claim a more specific region than the model actually predicted.
+    """
+    cleaned = re.sub(r"\s+", " ", str(label or "").strip().lower().replace("_", " "))
+    if not cleaned:
+        return "unknown", False, False
+    broad_region = _ANATOMY_CLASS_BROAD_LABELS.get(cleaned)
+    if broad_region:
+        return broad_region, True, True
+    canonical, recognized = normalize_region_name(cleaned)
+    return canonical, recognized, False
+
+
+def _broad_anatomy_route_result(
+    region: str,
+    anatomy_result: dict[str, Any],
+    confidence: Any,
+) -> dict[str, Any]:
+    """Return a successful anatomy result but refuse unsupported regional inference."""
+    display = region.replace("_", " ").title()
+    return {
+        "region": region,
+        "canonical_region": region,
+        "candidate_region": region,
+        "detected_region": region,
+        "supported": False,
+        "is_supported": False,
+        "is_available": False,
+        "is_recognized": True,
+        "region_source": "image_classifier",
+        "anatomy_verification_status": "completed",
+        "body_part_confidence": confidence,
+        "anatomy_detection": anatomy_result,
+        "reason_code": "broad_anatomy_label",
+        "registry_entry": None,
+        "message": (
+            f"The anatomy classifier identified a broad region ({display}), not a specific X-ray region "
+            "that can be safely linked to a configured interpretation model. No regional disease model was run. "
+            "Use a clearer, region-specific X-ray or have the image reviewed by a qualified radiology professional."
+        ),
+    }
+
+
 # Lazy singleton: load the anatomy classifier only when an image is routed without
 # a user-supplied region. This keeps import/startup of unrelated API modules cheap.
 _BODY_PART_CLASSIFIER = None
@@ -1139,36 +1214,53 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 ),
             }
 
-        detected_region, detected_region_recognized = normalize_region_name(detected_label)
+        confidence = anatomy_result.get("body_part_confidence")
+        detected_region, detected_region_recognized, is_broad_label = (
+            _normalize_anatomy_classifier_label(detected_label)
+        )
         if not detected_region_recognized:
             logger.error("Body-part classifier returned an unknown label: %r", detected_label)
             return {
                 "region": "unknown",
                 "canonical_region": "unknown",
+                "candidate_region": str(detected_label).strip().lower().replace("_", " "),
                 "supported": False,
                 "is_supported": False,
                 "is_available": False,
                 "is_recognized": False,
                 "region_source": "image_classifier",
                 "anatomy_verification_status": "failed",
+                "body_part_confidence": confidence,
                 "anatomy_detection": anatomy_result,
                 "reason_code": "unsupported_classifier_label",
                 "registry_entry": None,
-                "message": "The automatic classifier returned an unsupported body-part label. No regional model was selected.",
+                "message": (
+                    f"The anatomy classifier returned an unrecognized label ({detected_label!r}). "
+                    "No regional interpretation model was selected."
+                ),
             }
+
+        # A broad label is a valid anatomy-classifier output, but it is not enough
+        # to select a narrower region-specific model (e.g. ARM is not equivalent
+        # to humerus, HEAD is not equivalent to skull, and LEG is not equivalent to femur).
+        if is_broad_label:
+            return _broad_anatomy_route_result(detected_region, anatomy_result, confidence)
 
         # Reuse the existing registry availability checks and model metadata.
         # The recursive call passes the image-detected region, not user input.
         routed_result = route_xray(image_path, declared_region=detected_region)
-        confidence = anatomy_result.get("body_part_confidence")
         routed_result["region_source"] = "image_classifier"
         routed_result["detected_region"] = detected_region
         routed_result["anatomy_verification_status"] = "completed"
         routed_result["body_part_confidence"] = confidence
         routed_result["anatomy_detection"] = anatomy_result
+        try:
+            confidence_label = f"{float(confidence):.1%}" if confidence is not None else "not available"
+        except (TypeError, ValueError):
+            confidence_label = "not available"
         routed_result["message"] = (
-            f"Automatically classified this image as {detected_region.title()} "
-            f"(classifier confidence: {float(confidence):.1%}). "
+            f"Automatically classified this image as {detected_region.replace('_', ' ').title()} "
+            f"(classifier score: {confidence_label}). "
             f"{routed_result.get('message', '')}"
         ).strip()
         return routed_result
@@ -1176,17 +1268,44 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
     canonical_region, is_recognized = normalize_region_name(declared_region)
     entry = XRAY_MODEL_REGISTRY.get(canonical_region)
 
-    if not is_recognized or entry is None:
+    if not is_recognized:
         logger.info("Unrecognized anatomical region declared: '%s'", declared_region)
         return {
             "region": canonical_region,
             "canonical_region": canonical_region,
             "supported": False,
+            "is_supported": False,
+            "is_available": False,
             "is_recognized": False,
+            "region_source": "declared_region",
+            "reason_code": "unrecognized_region",
             "registry_entry": None,
             "message": (
-                f"X-ray received. Automated interpretation for '{declared_region or 'unknown'}' is currently unavailable. "
-                "If you have the associated radiology report, upload it for supported text-based analysis."
+                f"The supplied region '{declared_region or 'unknown'}' could not be recognized. "
+                "No regional interpretation model was selected."
+            ),
+        }
+
+    if entry is None:
+        # Known anatomy labels without a configured region-specific inference model
+        # should be reported as recognized-but-unavailable, not as bad classifier labels.
+        is_broad = canonical_region in {
+            "extremity", "upper extremity", "lower extremity", "head region"
+        }
+        display = canonical_region.replace("_", " ").title()
+        return {
+            "region": canonical_region,
+            "canonical_region": canonical_region,
+            "supported": False,
+            "is_supported": False,
+            "is_available": False,
+            "is_recognized": True,
+            "region_source": "declared_region",
+            "reason_code": "broad_anatomy_label" if is_broad else "unsupported_region",
+            "registry_entry": None,
+            "message": (
+                f"The region {display} was recognized, but no compatible region-specific image interpretation model "
+                "is configured. No disease finding was inferred. A radiology report can be added separately."
             ),
         }
 

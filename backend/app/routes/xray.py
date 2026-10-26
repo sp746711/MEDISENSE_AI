@@ -5,15 +5,20 @@ Task 1 safeguards:
 - do not pass an unrecognized user-supplied region directly to model inference;
 - clean up the stored image if routing, inference, or persistence fails;
 - keep model-unavailable outcomes explicit rather than inventing findings;
-- preserve assessment ownership checks and source/status metadata.
+- preserve assessment ownership checks and source/status metadata;
+- persist anatomy-classifier metadata separately from disease-model output;
+- do not combine radiology-report and image evidence without explicit association and region compatibility.
 """
 
 import uuid
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 import math
+from datetime import datetime, timezone
 from uuid import UUID
+
+from pydantic import BaseModel
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
@@ -22,13 +27,225 @@ from app.ai.xray_model import get_xray_model_service
 from app.ai.xray_router import normalize_region_name, route_xray
 from app.core.config import get_settings
 from app.core.dependencies import CurrentUser, DbSession
-from app.database.models import Assessment, MedicalReport, XrayResult
+from app.database.models import (
+    Assessment,
+    MedicalReport,
+    XrayReportAssociation,
+    XrayResult,
+)
 from app.utils.file_validation import validate_image_file
 
 router = APIRouter(prefix="/assessments", tags=["X-Ray"])
 logger = logging.getLogger(__name__)
 
 _READ_CHUNK_SIZE = 1024 * 1024
+
+
+class XrayReportAssociationRequest(BaseModel):
+    """Body for an explicit user decision about an image/report pair."""
+
+    status: Literal["confirmed", "rejected"]
+
+
+def _safe_json_value(value: Any, *, depth: int = 0) -> Any:
+    """Convert classifier metadata to bounded, JSON-safe primitive values."""
+    if depth > 8:
+        return None
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, item in list(value.items())[:100]:
+            if isinstance(key, (str, int, float, bool)):
+                safe[str(key)[:100]] = _safe_json_value(item, depth=depth + 1)
+        return safe
+    if isinstance(value, (list, tuple)):
+        return [_safe_json_value(item, depth=depth + 1) for item in value[:100]]
+    # Support numpy scalar values without making numpy a route dependency.
+    item_method = getattr(value, "item", None)
+    if callable(item_method):
+        try:
+            item = item_method()
+        except Exception:
+            return None
+        if item is not value:
+            return _safe_json_value(item, depth=depth + 1)
+    return str(value)[:500]
+
+
+def _build_anatomy_metadata(
+    *,
+    routing: dict[str, Any],
+    resolved_region: str,
+    region_source: str,
+    anatomy_status: str,
+    body_part_confidence: float | None,
+) -> dict[str, Any]:
+    """Build durable anatomy-classifier metadata, separate from disease findings."""
+    detection = routing.get("anatomy_detection")
+    detection = detection if isinstance(detection, dict) else {}
+    candidate_region = routing.get("candidate_region")
+    if not isinstance(candidate_region, str) or not candidate_region.strip():
+        candidate_region = detection.get("candidate_body_part") or detection.get("candidate_region")
+    if isinstance(candidate_region, str):
+        candidate_region = candidate_region.strip().lower() or None
+    else:
+        candidate_region = None
+
+    classifier_version = (
+        detection.get("classifier_version")
+        or detection.get("model_version")
+        or detection.get("model_name")
+        or detection.get("architecture")
+        or routing.get("classifier_version")
+    )
+    top_candidates = (
+        detection.get("top_candidates")
+        or detection.get("candidates")
+        or detection.get("top_predictions")
+    )
+
+    return {
+        "status": str(anatomy_status or "unverified").upper(),
+        "source": str(region_source or "unknown"),
+        "detected_region": None if resolved_region == "unknown" else resolved_region,
+        "candidate_region": candidate_region,
+        "body_part_confidence": body_part_confidence,
+        "confidence_threshold_validated": bool(
+            detection.get("confidence_threshold_validated", False)
+        ),
+        "classifier_version": _safe_json_value(classifier_version),
+        "top_candidates": _safe_json_value(top_candidates),
+        # Keep the source classifier payload so later diagnostics can inspect the
+        # actual candidate labels and scores rather than reconstructing them.
+        "classifier_output": _safe_json_value(detection),
+    }
+
+
+def _extract_report_region(report: MedicalReport) -> tuple[str | None, bool]:
+    """Return a canonical report region and whether its label is recognized."""
+    metadata = report.ocr_metadata if isinstance(report.ocr_metadata, dict) else {}
+    report_region = metadata.get("report_region")
+    if not isinstance(report_region, str) or not report_region.strip():
+        verification = metadata.get("region_verification")
+        report_region = verification.get("report_region") if isinstance(verification, dict) else None
+    if not isinstance(report_region, str) or not report_region.strip():
+        return None, False
+    canonical_region, recognized = normalize_region_name(report_region)
+    return (canonical_region if recognized else report_region.strip().lower()), bool(recognized)
+
+
+def _build_association_safety(
+    *, status_value: str, image_region: str | None, report_region: str | None, region_recognized: bool
+) -> dict[str, Any]:
+    """Pairing can support evidence combination only after explicit confirmation and region match."""
+    image = str(image_region or "unknown").strip().lower()
+    report = str(report_region or "unknown").strip().lower()
+    if image == "unknown" or report == "unknown" or not region_recognized:
+        region_check = "UNVERIFIED"
+        compatible = False
+    elif image == report:
+        region_check = "MATCH"
+        compatible = True
+    else:
+        region_check = "MISMATCH"
+        compatible = False
+
+    confirmed = status_value == "confirmed"
+    can_combine = confirmed and compatible
+    if region_check == "MISMATCH":
+        message = "The selected image and report have different detected regions. Keep their evidence separate even though the pairing decision was recorded."
+    elif region_check == "UNVERIFIED":
+        message = "The image/report region match could not be verified. Keep their evidence separate."
+    elif confirmed:
+        message = "The image/report pair was explicitly confirmed and the detected regions match. This does not validate the clinical findings themselves."
+    elif status_value == "rejected":
+        message = "The image/report pair was rejected and must remain separate."
+    else:
+        message = "The image/report pair is not explicitly confirmed and must remain separate."
+
+    return {
+        "status": status_value.upper(),
+        "association_explicitly_confirmed": confirmed,
+        "region_check": region_check,
+        "region_compatible": compatible,
+        "can_combine": can_combine,
+        "message": message,
+    }
+
+
+def _build_report_region_verification(
+    *,
+    resolved_region: str,
+    report_regions: list[str],
+    unrecognized_report_region_count: int,
+    report_count: int,
+    existing_image_count: int,
+) -> dict[str, Any]:
+    """Compare regions only when one report can be compared with one image.
+
+    Reports and images are stored per assessment, not explicitly linked to each
+    other in the current schema. Comparing every report against every image creates
+    false mismatches for assessments containing multiple images or reports. When
+    the association cannot be uniquely inferred, preserve it as UNVERIFIED and do
+    not authorize evidence fusion.
+    """
+    image_region = str(resolved_region or "unknown").strip().lower() or "unknown"
+    normalized_report_regions = [
+        str(region).strip().lower()
+        for region in report_regions
+        if isinstance(region, str) and region.strip()
+    ]
+    unique_pair_can_be_compared = (
+        image_region != "unknown"
+        and report_count == 1
+        and existing_image_count == 0
+        and len(normalized_report_regions) == 1
+        and unrecognized_report_region_count == 0
+    )
+
+    mismatch = False
+    match: bool | None = None
+    if unique_pair_can_be_compared:
+        mismatch = normalized_report_regions[0] != image_region
+        match = not mismatch
+
+    if mismatch:
+        status_value = "MISMATCH"
+        message = (
+            "The radiology report region conflicts with the automatically detected image type. "
+            "Keep the image and report findings separate until the mismatch is reviewed."
+        )
+    elif match is True:
+        status_value = "MATCH"
+        message = (
+            "The sole radiology report and image have compatible detected body regions. "
+            "This is a region-consistency check, not confirmation of clinical findings."
+        )
+    else:
+        status_value = "UNVERIFIED"
+        message = (
+            "The image/report relationship could not be uniquely verified. Keep report findings "
+            "separate from image-model predictions until the correct pair is confirmed."
+        )
+
+    return {
+        "status": status_value,
+        "detected_image_region": None if image_region == "unknown" else image_region,
+        "report_regions": normalized_report_regions,
+        "unrecognized_report_region_count": max(0, int(unrecognized_report_region_count)),
+        "association_scope": (
+            "SINGLE_IMAGE_SINGLE_REPORT" if unique_pair_can_be_compared else "AMBIGUOUS_OR_INCOMPLETE"
+        ),
+        "association_explicitly_confirmed": False,
+        "region_compatible": match is True,
+        # The current schema has no explicit user-confirmed report/image link.
+        # Matching region labels are necessary but not sufficient to fuse evidence.
+        "can_combine": False,
+        "message": message,
+    }
 
 
 @router.get("/xray/catalogue")
@@ -154,49 +371,34 @@ async def upload_xray(
             )
             .all()
         )
+        # The current schema stores reports and images against an assessment but
+        # does not store an explicit report_id <-> xray_result_id association.
+        # Therefore, region comparison is only meaningful when this is the first
+        # image in the assessment and exactly one report is present.
+        existing_xray_count = (
+            db.query(XrayResult)
+            .filter(XrayResult.assessment_id == assessment.assessment_id)
+            .count()
+        )
         report_regions: list[str] = []
         unrecognized_report_regions = 0
         for saved_report in saved_xray_reports:
-            metadata = saved_report.ocr_metadata if isinstance(saved_report.ocr_metadata, dict) else {}
-            report_region = metadata.get("report_region")
-            if not isinstance(report_region, str) or not report_region.strip():
-                verification = metadata.get("region_verification")
-                report_region = verification.get("report_region") if isinstance(verification, dict) else None
-            if not isinstance(report_region, str) or not report_region.strip():
+            canonical_report_region, report_region_recognized = _extract_report_region(saved_report)
+            if canonical_report_region is None:
                 continue
-            canonical_report_region, report_region_recognized = normalize_region_name(report_region)
             if report_region_recognized:
                 report_regions.append(canonical_report_region)
             else:
                 unrecognized_report_regions += 1
 
-        report_region_mismatch = bool(
-            resolved_region != "unknown"
-            and any(report_region != resolved_region for report_region in report_regions)
+        report_region_verification = _build_report_region_verification(
+            resolved_region=resolved_region,
+            report_regions=report_regions,
+            unrecognized_report_region_count=unrecognized_report_regions,
+            report_count=len(saved_xray_reports),
+            existing_image_count=existing_xray_count,
         )
-        report_region_match = (
-            None if not report_regions or resolved_region == "unknown"
-            else not report_region_mismatch
-        )
-        report_region_verification = {
-            "status": (
-                "MISMATCH" if report_region_mismatch
-                else "MATCH" if report_region_match is True
-                else "UNVERIFIED"
-            ),
-            "detected_image_region": None if resolved_region == "unknown" else resolved_region,
-            "report_regions": report_regions,
-            "unrecognized_report_region_count": unrecognized_report_regions,
-            "can_combine": report_region_match is not False,
-            "message": (
-                "The radiology report region conflicts with the automatically detected image type. "
-                "Keep the image and report findings separate until the mismatch is reviewed."
-                if report_region_mismatch
-                else "The detected image type agrees with the recognized radiology report region."
-                if report_region_match is True
-                else "Report/image region consistency could not be verified from available metadata."
-            ),
-        }
+        report_region_mismatch = report_region_verification["status"] == "MISMATCH"
 
         route_supported = bool(
             routing.get("is_supported", routing.get("supported", False))
@@ -372,10 +574,23 @@ async def upload_xray(
             persisted_parts.append(report_region_verification["message"])
         persisted_message = " ".join(dict.fromkeys(persisted_parts))
 
+        anatomy_metadata = _build_anatomy_metadata(
+            routing=routing,
+            resolved_region=resolved_region,
+            region_source=str(region_source),
+            anatomy_status=anatomy_status,
+            body_part_confidence=body_part_confidence,
+        )
+        result_kwargs = {}
+        if hasattr(XrayResult, "anatomy_metadata"):
+            result_kwargs["anatomy_metadata"] = anatomy_metadata
+
         result = XrayResult(
             assessment_id=assessment.assessment_id,
             file_name=clean_file_name,
-            region=analysis.get("region") or resolved_region,
+            # The router is the source of the validated canonical anatomy.
+            # Never let a model adapter override it with a different alias/casing.
+            region=resolved_region,
             model_version=analysis.get("model_version"),
             prediction=prediction,
             confidence_if_valid=confidence,
@@ -385,6 +600,7 @@ async def upload_xray(
             message=persisted_message,
             stored_name=stored_name,
             **({findings_column: findings} if findings_column and findings else {}),
+            **result_kwargs,
         )
         db.add(result)
         if assessment.status == "draft":
@@ -412,6 +628,8 @@ async def upload_xray(
             "diagnostic_message": analysis.get("diagnostic_message"),
             "image_anatomy_verification": image_anatomy_verification,
             "image_type_detection": anatomy_detection,
+            "anatomy_metadata_persisted": hasattr(XrayResult, "anatomy_metadata"),
+            "anatomy_metadata": anatomy_metadata,
             "detected_region": None if resolved_region == "unknown" else resolved_region,
             "region_source": region_source,
             "anatomy_verification_status": anatomy_status,
@@ -517,6 +735,100 @@ def delete_xray(
     }
 
 
+@router.put("/{assessment_id}/xray/{xray_result_id}/reports/{report_id}/association")
+def set_xray_report_association(
+    assessment_id: UUID,
+    xray_result_id: UUID,
+    report_id: UUID,
+    payload: XrayReportAssociationRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> dict:
+    """Record the user's explicit decision about a radiology-report/image pair.
+
+    Region agreement is a safety check, not proof that a report belongs to an
+    image. Even after confirmation, evidence may only be combined when regions
+    are recognized and compatible.
+    """
+    _owned(db, assessment_id, current_user.user_id)
+    image = (
+        db.query(XrayResult)
+        .filter(
+            XrayResult.assessment_id == assessment_id,
+            XrayResult.xray_result_id == xray_result_id,
+        )
+        .first()
+    )
+    if image is None:
+        raise HTTPException(status_code=404, detail="X-ray image not found")
+
+    report = (
+        db.query(MedicalReport)
+        .filter(
+            MedicalReport.assessment_id == assessment_id,
+            MedicalReport.report_id == report_id,
+            MedicalReport.report_category == "xray_report",
+        )
+        .first()
+    )
+    if report is None:
+        raise HTTPException(status_code=404, detail="Radiology report not found for this assessment")
+
+    report_region, region_recognized = _extract_report_region(report)
+    safety = _build_association_safety(
+        status_value=payload.status,
+        image_region=image.region,
+        report_region=report_region,
+        region_recognized=region_recognized,
+    )
+    association = (
+        db.query(XrayReportAssociation)
+        .filter(
+            XrayReportAssociation.report_id == report_id,
+            XrayReportAssociation.xray_result_id == xray_result_id,
+        )
+        .first()
+    )
+    now = datetime.now(timezone.utc)
+    if association is None:
+        association = XrayReportAssociation(
+            report_id=report_id,
+            xray_result_id=xray_result_id,
+            status=payload.status,
+            confirmed_at=now if payload.status == "confirmed" else None,
+        )
+        db.add(association)
+    else:
+        association.status = payload.status
+        association.confirmed_at = now if payload.status == "confirmed" else None
+        db.add(association)
+
+    try:
+        db.commit()
+        db.refresh(association)
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "X-ray/report association save failed for assessment_id=%s, xray_result_id=%s, report_id=%s",
+            assessment_id,
+            xray_result_id,
+            report_id,
+        )
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail="The X-ray/report association could not be saved. Please retry.",
+        ) from exc
+
+    return {
+        "assessment_id": str(assessment_id),
+        "xray_result_id": str(xray_result_id),
+        "report_id": str(report_id),
+        "association_id": str(association.association_id),
+        **safety,
+        "confirmed_at": association.confirmed_at.isoformat() if association.confirmed_at else None,
+    }
+
+
 @router.get("/{assessment_id}/xray")
 def get_xray(
     assessment_id: UUID,
@@ -545,14 +857,31 @@ def get_xray(
                 "uncertainty": row.uncertainty,
                 "status": row.status,
                 "message": row.message,
-                "image_anatomy_verification": {
-                    "status": "RESULT_METADATA_NOT_PERSISTED",
-                    "detected_region": row.region,
-                    "message": (
-                        "The saved result contains the detected region and analysis message. "
-                        "Detailed body-part classifier confidence is available in the original upload response."
-                    ),
-                },
+                "image_anatomy_verification": (
+                    row.anatomy_metadata if isinstance(getattr(row, "anatomy_metadata", None), dict) else {
+                        "status": "NOT_PERSISTED",
+                        "detected_region": row.region if str(row.region or "").strip().lower() not in {"", "unknown"} else None,
+                        "body_part_confidence": None,
+                        "candidate_region": None,
+                        "metadata_persistence": "LIMITED_BY_CURRENT_XRAYRESULT_SCHEMA",
+                        "message": "Anatomy classifier confidence/candidate data is unavailable in this legacy saved row.",
+                    }
+                ),
+                "report_associations": [
+                    {
+                        "association_id": str(association.association_id),
+                        "report_id": str(association.report_id),
+                        "report_file_name": association.medical_report.file_name if association.medical_report else None,
+                        **_build_association_safety(
+                            status_value=str(association.status or "pending").lower(),
+                            image_region=row.region,
+                            report_region=_extract_report_region(association.medical_report)[0] if association.medical_report else None,
+                            region_recognized=_extract_report_region(association.medical_report)[1] if association.medical_report else False,
+                        ),
+                        "confirmed_at": association.confirmed_at.isoformat() if association.confirmed_at else None,
+                    }
+                    for association in (getattr(row, "report_associations", None) or [])
+                ],
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
             for row in rows

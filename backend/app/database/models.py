@@ -158,6 +158,11 @@ class MedicalReport(Base):
     )
 
     assessment: Mapped["Assessment"] = relationship(back_populates="medical_reports")
+    xray_associations: Mapped[list["XrayReportAssociation"]] = relationship(
+        back_populates="medical_report",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class XrayResult(Base):
@@ -181,6 +186,11 @@ class XrayResult(Base):
     # Multi-label DenseNet121 output; each item stores a label and its score.
     # Kept nullable for existing rows and legacy single-label models.
     findings: Mapped[Any] = mapped_column(JSONType, nullable=True)
+    # Persist anatomy-classifier output separately from disease-model findings.
+    # Example: {"status": "verified", "confidence": 0.91,
+    #           "candidate_region": "KNEE", "top_candidates": [...],
+    #           "classifier_version": "convnext_tiny_onnx_33class"}
+    anatomy_metadata: Mapped[Any] = mapped_column(JSONType, nullable=True)
     confidence_if_valid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     uncertainty: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     explainability_artifact: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
@@ -194,6 +204,72 @@ class XrayResult(Base):
     )
 
     assessment: Mapped["Assessment"] = relationship(back_populates="xray_results")
+    report_associations: Mapped[list["XrayReportAssociation"]] = relationship(
+        back_populates="xray_result",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class XrayReportAssociation(Base):
+    """Explicit association between an X-ray image and a radiology report.
+
+    Region similarity alone must not confirm a pairing. New associations start
+    as pending and should only become confirmed after an explicit user action.
+    The join table permits one report to cover multiple images/views and an
+    assessment to contain multiple reports and images.
+    """
+
+    __tablename__ = "xray_report_associations"
+    __table_args__ = (
+        UniqueConstraint(
+            "report_id",
+            "xray_result_id",
+            name="uq_xray_report_association_pair",
+        ),
+    )
+
+    association_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    report_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("medical_reports.report_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    xray_result_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("xray_results.xray_result_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Allowed application-level values: pending, confirmed, rejected.
+    # A new association is never implicitly trusted.
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        nullable=False,
+    )
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+
+    medical_report: Mapped["MedicalReport"] = relationship(
+        back_populates="xray_associations",
+    )
+    xray_result: Mapped["XrayResult"] = relationship(
+        back_populates="report_associations",
+    )
 
 
 class Doctor(Base):

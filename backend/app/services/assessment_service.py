@@ -154,6 +154,7 @@ def generate_assessment_feedback(
                 f"Important information remains unknown or unanswered: {shown_unknown}. "
                 "Unknown does not mean absent, and these items may limit the assessment."
             )
+    active_symptom_summary: str | None = None
     if present:
         names = [str(x.get("symptom")).strip() for x in present if x.get("symptom")]
         if names:
@@ -161,7 +162,27 @@ def generate_assessment_feedback(
             text = ", ".join(shown)
             if len(names) > 4:
                 text += f", and {len(names) - 4} additional symptom(s)"
+            # Preserve the existing concise sentence while also exposing the
+            # explicit active-finding count and any symptom-specific qualifiers.
             summary_sentences.append(f"Reported symptoms include {text}.")
+            detailed_items: list[str] = []
+            for item in present:
+                name = str(item.get("symptom") or item.get("finding") or "").strip()
+                if not name:
+                    continue
+                details: list[str] = []
+                severity = str(item.get("severity") or "").strip().upper()
+                if severity and severity not in {"UNKNOWN", "UNSPECIFIED", "NONE"}:
+                    details.append(severity.lower())
+                duration = str(item.get("duration") or "").strip()
+                if duration and duration.lower() not in {"unknown", "unspecified", "none", "n/a"}:
+                    details.append(f"duration: {duration}")
+                detailed_items.append(f"{name} ({'; '.join(details)})" if details else name)
+            detailed_text = ", ".join(detailed_items)
+            active_symptom_summary = (
+                f"Active symptom presentation includes {len(detailed_items)} finding(s): {detailed_text}."
+                if detailed_items else None
+            )
 
     unknown_range_rep = report_meta.get("unknown_range_findings", [])
     if report_provided:
@@ -172,13 +193,16 @@ def generate_assessment_feedback(
                 if len(names) > 4:
                     text += f", and {len(names) - 4} more"
                 summary_sentences.append(
-                    f"The uploaded medical/lab report contains {len(abnormal_rep)} flagged parameter(s): {text}. "
+                    f"The uploaded medical/lab report contains {len(abnormal_rep)} out-of-range parameter(s): {text}. "
                     "See the detailed results for values, units, and reference ranges."
                 )
         elif qualitative_rep or narrative_rep:
             summary_sentences.append("The uploaded medical report was processed for narrative or qualitative findings; see details below.")
         elif normal_rep:
-            summary_sentences.append(f"{len(normal_rep)} laboratory parameter(s) were evaluated; see the detailed results.")
+            summary_sentences.append(
+                f"{len(normal_rep)} laboratory parameter(s) were within standard reference ranges; "
+                "see the detailed results for values and units."
+            )
 
     xray_images_list = xray_meta.get("images", []) or []
     xray_reports_list = xray_meta.get("reports", []) or report_meta.get("xray_reports", []) or []
@@ -265,6 +289,10 @@ def generate_assessment_feedback(
         summary_sentences.append("The ML condition-matching step returned no displayable candidates. This does not mean that no condition is present.")
 
     summary_sentences.append(f"Current safety pathway: {triage_pathway}. ML candidates do not override safety guidance.")
+    # Put the complete active-symptom inventory at the end so it can be read as
+    # a discrete, countable sentence. The concise headline above remains intact.
+    if active_symptom_summary:
+        summary_sentences.append(active_symptom_summary)
     assessment_summary = " ".join(summary_sentences)
 
     # 2. Symptoms Identified
@@ -583,7 +611,17 @@ def generate_assessment_feedback(
             or "Seek emergency medical care now. Do not delay care while waiting for an AI interpretation."
         )
     elif pathway_normalized in {"NOT_DETERMINED", "UNKNOWN", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"}:
-        dynamic_guidance = (
+        # Preserve any safety-question prompt from deterministic triage, while
+        # adding the symptom domain so guidance remains specific to the case.
+        if is_resp:
+            guidance_context = "Reported respiratory symptoms need context-specific review. "
+        elif is_neuro:
+            guidance_context = "Reported neurological symptoms need context-specific review. "
+        elif is_msk:
+            guidance_context = "Reported musculoskeletal symptoms need context-specific review. "
+        else:
+            guidance_context = ""
+        dynamic_guidance = guidance_context + (
             triage_result.get("guidance")
             or "The available information is not sufficient to assign a reliable triage pathway. More clinical information and professional assessment are needed."
         )
@@ -658,6 +696,32 @@ def generate_assessment_feedback(
         "All automated suggestions must be evaluated and verified by a licensed medical professional."
     )
 
+    if is_resp:
+        specialty_rationale = (
+            f"{suggested_spec} was suggested because the reported presentation is predominantly respiratory; "
+            "this is care-navigation guidance, not a diagnosis."
+        )
+    elif is_neuro:
+        specialty_rationale = (
+            f"{suggested_spec} was suggested because the reported presentation is predominantly neurological; "
+            "this is care-navigation guidance, not a diagnosis."
+        )
+    elif is_msk:
+        specialty_rationale = (
+            f"{suggested_spec} was suggested because the reported presentation is predominantly musculoskeletal; "
+            "this is care-navigation guidance, not a diagnosis."
+        )
+    elif xray_images_list and not present:
+        specialty_rationale = (
+            "A specialty was not established from symptoms because none were provided; image interpretation and its "
+            "limitations should guide the next step when a compatible model is available."
+        )
+    else:
+        specialty_rationale = (
+            f"{suggested_spec} is a general care-navigation suggestion based on the available assessment evidence; "
+            "it is not a diagnosis."
+        )
+
     return {
         "assessment_summary": assessment_summary,
         "current_symptoms": symptoms_identified,
@@ -689,7 +753,7 @@ def generate_assessment_feedback(
         "triage_level": triage_level,
         "triage_rationale": why_this_pathway,
         "why_this_triage_selected": why_this_pathway,
-        "specialty_rationale": f"Specialty selection ({suggested_spec}) is aligned with the predominant clinical symptom pattern.",
+        "specialty_rationale": specialty_rationale,
         "recommended_next_step": recommended_next_step,
         "possible_conditions": conditions_list,
         "condition_predictions": condition_predictions or {},

@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from typing import Any, Optional
 
-NLP_VERSION = "symptom-nlp-v2.2-task1"
+NLP_VERSION = "symptom-nlp-v2.3-task1"
 
 
 class ClinicalSeverity(str):
@@ -1221,6 +1221,64 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     if not duplicate:
                         extracted.append(item)
                     seen_canonicals.add(canonical)
+
+    # Resolve an explicit pain-quality statement across adjacent sentences only when
+    # there is exactly one current pain complaint. This supports inputs such as
+    # "The pain is throbbing ... I have had a severe headache ..." without copying
+    # a quality to an unrelated symptom when the text mentions multiple pain sites.
+    pain_complaint_names = {
+        "headache", "migraine", "chest pain", "chest pain at rest", "chest discomfort",
+        "abdominal pain", "back pain", "wrist pain", "knee pain", "ankle pain",
+        "shoulder pain", "elbow pain", "arthralgia", "myalgia", "dental pain", "otalgia",
+        "pain after fall",
+    }
+    active_pain_complaints = {
+        str(item.get("symptom") or "").strip().lower()
+        for item in extracted
+        if str(item.get("state", item.get("status", ""))).upper() == "PRESENT"
+        and str(item.get("type") or "").upper() != "HISTORICAL"
+        and str(item.get("symptom") or "").strip().lower() in pain_complaint_names
+    }
+    if len(active_pain_complaints) == 1:
+        sole_pain_complaint = next(iter(active_pain_complaints))
+        # Only infer a cross-sentence link from an explicit pain-subject construction.
+        # Do not use the global quality keyword by itself; that could belong to another symptom.
+        for sent in raw_sentences:
+            sent_clean = sent.strip()
+            if not sent_clean:
+                continue
+            subject_match = re.search(
+                r"\b(?:the|this|my|head)\s+pain\b|\bpain\s+(?:is|was|feels|felt|became|has\s+been)\b",
+                sent_clean,
+                re.IGNORECASE,
+            )
+            if not subject_match:
+                continue
+            quality_match = None
+            quality_value = None
+            for q_re, q_val in QUALITY_PATTERNS:
+                candidate = q_re.search(sent_clean, subject_match.end())
+                if candidate and (quality_match is None or candidate.start() < quality_match.start()):
+                    quality_match = candidate
+                    quality_value = q_val
+            if not quality_match or quality_value is None:
+                continue
+            between = sent_clean[subject_match.end():quality_match.start()]
+            # Negated, uncertain, or explicitly unconfirmed qualities must not be promoted.
+            if re.search(r"\b(?:not|never|without|isn't|isnt|wasn't|wasnt|cannot|can't|might|may|could|possibly|perhaps|maybe|unsure|uncertain)\b", between, re.IGNORECASE):
+                continue
+            if sole_pain_complaint in {"headache", "migraine"}:
+                for item in extracted:
+                    if (
+                        str(item.get("symptom") or "").strip().lower() == sole_pain_complaint
+                        and str(item.get("state", item.get("status", ""))).upper() == "PRESENT"
+                        and str(item.get("type") or "").upper() != "HISTORICAL"
+                        and not item.get("quality")
+                    ):
+                        item["quality"] = quality_value
+            # One explicit quality statement is enough; don't let later unrelated
+            # sentences overwrite it.
+            break
 
     # Event-scoped onset resolution: attach onset attribute to the specific symptom or primary complaint
     for sent in raw_sentences:

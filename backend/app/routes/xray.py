@@ -19,10 +19,10 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.ai.xray_model import get_xray_model_service
-from app.ai.xray_router import route_xray
+from app.ai.xray_router import normalize_region_name, route_xray
 from app.core.config import get_settings
 from app.core.dependencies import CurrentUser, DbSession
-from app.database.models import Assessment, XrayResult
+from app.database.models import Assessment, MedicalReport, XrayResult
 from app.utils.file_validation import validate_image_file
 
 router = APIRouter(prefix="/assessments", tags=["X-Ray"])
@@ -58,11 +58,57 @@ async def upload_xray(
 ) -> dict:
     """Validate, store, route and analyse one X-ray image for an owned assessment."""
     assessment = _owned(db, assessment_id, current_user.user_id)
+    if not isinstance(region, str) or not region.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select the anatomical region before uploading an X-ray image.",
+        )
+    selected_region, selected_region_recognized = normalize_region_name(region)
+    if not selected_region_recognized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The selected X-ray region is not recognized by the backend catalogue.",
+        )
     if "xray" not in (assessment.input_types or []):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This assessment was not configured for X-ray input.",
         )
+
+    # Defence in depth: if an X-ray report was uploaded first, compare its
+    # backend-extracted examination region with the region supplied for this image.
+    # This validates report/selection consistency. It does NOT independently
+    # identify anatomy from image pixels; that requires a separate trained verifier.
+    saved_xray_reports = (
+        db.query(MedicalReport)
+        .filter(
+            MedicalReport.assessment_id == assessment.assessment_id,
+            MedicalReport.report_category == "xray_report",
+        )
+        .all()
+    )
+    matched_report_regions: list[str] = []
+    for saved_report in saved_xray_reports:
+        metadata = saved_report.ocr_metadata if isinstance(saved_report.ocr_metadata, dict) else {}
+        report_region = metadata.get("report_region")
+        if not isinstance(report_region, str) or not report_region.strip():
+            verification = metadata.get("region_verification")
+            report_region = verification.get("report_region") if isinstance(verification, dict) else None
+        if not isinstance(report_region, str) or not report_region.strip():
+            continue
+        canonical_report_region, report_region_recognized = normalize_region_name(report_region)
+        if not report_region_recognized:
+            continue
+        if canonical_report_region != selected_region:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Region mismatch: selected X-ray region is '{selected_region}', "
+                    f"but the uploaded radiology report identifies '{canonical_report_region}'. "
+                    "Correct the region or report before image analysis."
+                ),
+            )
+        matched_report_regions.append(canonical_report_region)
 
     settings = get_settings()
     max_bytes = int(settings.max_upload_size_mb * 1024 * 1024)
@@ -280,6 +326,21 @@ async def upload_xray(
                 "with a JSON findings column and apply the database migration."
             )
 
+        image_anatomy_verification = {
+            "status": "UNVERIFIED",
+            "selected_region": selected_region,
+            "report_region": matched_report_regions[0] if matched_report_regions else None,
+            "report_region_match": bool(matched_report_regions),
+            "message": (
+                "The report region matches the selected region, but the current backend does not independently classify image anatomy."
+                if matched_report_regions else
+                "The image was routed using the selected region. The current backend does not independently verify anatomy from image pixels."
+            ),
+        }
+        base_result_message = analysis.get("message") or routing.get("message")
+        verification_message = image_anatomy_verification["message"]
+        persisted_message = f"{base_result_message} {verification_message}" if base_result_message else verification_message
+
         result = XrayResult(
             assessment_id=assessment.assessment_id,
             file_name=clean_file_name,
@@ -290,7 +351,7 @@ async def upload_xray(
             uncertainty=analysis.get("uncertainty"),
             explainability_artifact=analysis.get("explainability_artifact"),
             status=analysis_status,
-            message=analysis.get("message") or routing.get("message"),
+            message=persisted_message,
             stored_name=stored_name,
             **({findings_column: findings} if findings_column and findings else {}),
         )
@@ -318,6 +379,7 @@ async def upload_xray(
             "source": source,
             "reason_code": analysis.get("reason_code"),
             "diagnostic_message": analysis.get("diagnostic_message"),
+            "image_anatomy_verification": image_anatomy_verification,
         }
     except HTTPException:
         _remove_file(dest)
@@ -380,6 +442,13 @@ def get_xray(
                 "uncertainty": row.uncertainty,
                 "status": row.status,
                 "message": row.message,
+                "image_anatomy_verification": {
+                    "status": "UNVERIFIED",
+                    "selected_region": row.region,
+                    "message": (
+                        "The current backend routes by the selected region but does not independently classify anatomy from image pixels."
+                    ),
+                },
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
             for row in rows

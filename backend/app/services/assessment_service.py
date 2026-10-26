@@ -1,7 +1,6 @@
 """Assessment orchestration service for MediSense AI.
 
-Task 1 merged update v2.1: preserves unknown symptoms in feedback and normalizes
-triage status casing before persisting assessment status.
+Task 1 merged update v2.2: wires selected inputs into evidence validation, surfaces X-ray region mismatch status, and records the current symptom-only prediction scope.
 
 Executes the multimodal diagnostic support pipeline:
 1. Gathers multimodal inputs (symptoms, reports, X-rays) isolated by assessment_id
@@ -112,10 +111,22 @@ def generate_assessment_feedback(
     narrative_rep = report_meta.get("narrative_findings", [])
 
     xray_meta = evidence.get("xray", {})
-    xray_received = xray_meta.get("received", False)
-    xray_status = (xray_meta.get("status") or "NOT_PROVIDED").upper()
+    if not isinstance(xray_meta, dict):
+        xray_meta = {}
+    xray_received = bool(xray_meta.get("received", False))
+    xray_status = str(xray_meta.get("status") or "NOT_PROVIDED").strip().upper()
     xray_pred = xray_meta.get("prediction")
-    raw_xray_region = (xray_meta.get("region") or "").strip().lower()
+    raw_xray_region = str(xray_meta.get("region") or "").strip().lower()
+    raw_region_verification = xray_meta.get("region_verification", [])
+    region_verification_records = (
+        [item for item in raw_region_verification if isinstance(item, dict)]
+        if isinstance(raw_region_verification, list)
+        else []
+    )
+    has_region_mismatch = bool(xray_meta.get("has_region_mismatch")) or any(
+        str(item.get("status") or "").strip().upper() == "MISMATCH"
+        for item in region_verification_records
+    )
     xray_region = raw_xray_region if raw_xray_region else "not declared"
     xray_region_label = (
         f"{xray_region.capitalize()} X-ray"
@@ -178,15 +189,27 @@ def generate_assessment_feedback(
             x for x in xray_images_list
             if str(x.get("status") or "").strip().upper() == "COMPLETED" and _has_xray_result(x)
         ]
+        mismatched = [
+            x for x in xray_images_list
+            if str(x.get("status") or "").strip().upper() == "REGION_MISMATCH"
+            or str(x.get("region_verification_status") or "").strip().upper() == "MISMATCH"
+        ]
         unavailable = [
             x for x in xray_images_list
-            if str(x.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR"}
+            if str(x.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR", "INVALID", "REJECTED"}
         ]
+        handled_ids = {id(item) for item in completed + mismatched + unavailable}
         if completed:
             summary_sentences.append(f"Automated image analysis returned a result for {len(completed)} of {len(xray_images_list)} uploaded X-ray image(s); see image findings and limitations below.")
+        if mismatched:
+            mismatch_names = [str(item.get("file_name") or "X-ray image") for item in mismatched]
+            summary_sentences.append(
+                f"Region verification failed for {len(mismatched)} X-ray image(s) ({', '.join(mismatch_names[:3])}). "
+                "Their predictions are excluded from combined X-ray evidence until the image/report pairing is corrected."
+            )
         if unavailable:
             summary_sentences.append(f"Automated interpretation was unavailable for {len(unavailable)} uploaded X-ray image(s); no image diagnosis is inferred for those files.")
-        pending = len(xray_images_list) - len(completed) - len(unavailable)
+        pending = sum(1 for item in xray_images_list if id(item) not in handled_ids)
         if pending > 0:
             summary_sentences.append(f"Processing is incomplete or has no valid prediction for {pending} uploaded X-ray image(s).")
     elif xray_received and xray_status == "COMPLETED" and xray_pred:
@@ -195,7 +218,17 @@ def generate_assessment_feedback(
         summary_sentences.append("An X-ray image was submitted, but automated interpretation was unavailable; no image diagnosis is inferred.")
 
     if xray_reports_list:
-        summary_sentences.append(f"A radiology report was submitted ({len(xray_reports_list)} report(s)); its findings are separate from image-model predictions.")
+        summary_sentences.append(f"A radiology report was submitted ({len(xray_reports_list)} report(s)); its extracted statements are kept separate from image-model predictions.")
+    if has_region_mismatch:
+        summary_sentences.append(
+            "At least one X-ray image/report region mismatch was detected. Do not rely on the affected image/report pair until the correct file or region is confirmed."
+        )
+
+    has_non_symptom_inputs = bool(xray_images_list or xray_reports_list or medical_reports_list)
+    if has_non_symptom_inputs:
+        summary_sentences.append(
+            "Prediction-model limitation: the currently configured disease-candidate model uses symptom features only; laboratory and X-ray evidence is processed and displayed separately but is not yet a direct input to that classifier."
+        )
 
     raw_conditions = condition_predictions.get("conditions", []) if condition_predictions else []
     # Only use well-formed model candidates; malformed entries must not break feedback.
@@ -204,10 +237,30 @@ def generate_assessment_feedback(
         if isinstance(item, dict) and str(item.get("condition") or "").strip()
     ] if isinstance(raw_conditions, list) else []
     condition_names = [str(x.get("condition")).strip() for x in conditions_list]
+    condition_status = str((condition_predictions or {}).get("status") or "").strip().lower()
     if condition_names:
         summary_sentences.append(f"The experimental ML model returned {len(condition_names)} possible condition candidate(s). These are not confirmed diagnoses; review the candidate evidence below.")
-    elif condition_predictions and str(condition_predictions.get("status") or "").strip().lower() not in {"", "ok", "success", "completed"}:
-        summary_sentences.append("ML condition matching was unavailable; no condition candidates are inferred.")
+    elif condition_predictions and condition_status in {"insufficient_evidence", "insufficient-data", "no_candidates"}:
+        if has_non_symptom_inputs and not present:
+            summary_sentences.append(
+                "No disease candidates were generated from the reports/X-ray alone because the currently configured condition classifier requires active symptom features. "
+                "Successfully extracted report and image findings are still shown below; this prediction limitation does not mean that no condition is present."
+            )
+        elif not present:
+            summary_sentences.append(
+                "The current symptom-based condition classifier had no active present symptoms to evaluate. This does not mean that no condition is present; review the extracted findings and safety guidance below."
+            )
+        else:
+            summary_sentences.append(
+                "The current condition classifier returned no displayable candidates for these inputs. This does not mean that no condition is present; review the source findings and safety guidance below."
+            )
+    elif condition_predictions and condition_status not in {"", "ok", "success", "completed"}:
+        prediction_message = str(condition_predictions.get("message") or "").strip()
+        summary_sentences.append(
+            "ML condition matching is unavailable for this assessment"
+            + (f": {prediction_message}" if prediction_message else ".")
+            + " The safety triage result and extracted source findings remain available below."
+        )
     elif condition_predictions:
         summary_sentences.append("The ML condition-matching step returned no displayable candidates. This does not mean that no condition is present.")
 
@@ -284,14 +337,17 @@ def generate_assessment_feedback(
                 img for img in xray_images_list
                 if str(img.get("status") or "").strip().upper() == "COMPLETED" and _has_xray_result(img)
             ]
+            mismatched_imgs = [
+                img for img in xray_images_list
+                if str(img.get("status") or "").strip().upper() == "REGION_MISMATCH"
+                or str(img.get("region_verification_status") or "").strip().upper() == "MISMATCH"
+            ]
             unavailable_imgs = [
                 img for img in xray_images_list
-                if str(img.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR"}
+                if str(img.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR", "INVALID", "REJECTED"}
             ]
-            pending_imgs = [
-                img for img in xray_images_list
-                if img not in completed_imgs and img not in unavailable_imgs
-            ]
+            handled_ids = {id(item) for item in completed_imgs + mismatched_imgs + unavailable_imgs}
+            pending_imgs = [img for img in xray_images_list if id(img) not in handled_ids]
 
             messages: list[str] = []
             if completed_imgs:
@@ -326,6 +382,19 @@ def generate_assessment_feedback(
                     "Only explicitly marked candidate findings are displayed as findings. Raw multi-label model scores "
                     "are not calibrated diagnostic probabilities and must not be interpreted as disease evidence. "
                     "Clinical correlation and radiologist review are required."
+                )
+            if mismatched_imgs:
+                mismatch_descriptions = []
+                for img in mismatched_imgs:
+                    image_name = str(img.get("file_name") or "X-ray image")
+                    image_region = str(img.get("region") or "unknown region")
+                    message = str(img.get("message") or "The selected image and radiology report describe different regions.").strip()
+                    mismatch_descriptions.append(f"{image_name} ({image_region}): {message}")
+                messages.append(
+                    "Region mismatch — affected X-ray result(s) were excluded from combined evidence: "
+                    + "; ".join(mismatch_descriptions[:4])
+                    + (f"; and {len(mismatch_descriptions) - 4} more" if len(mismatch_descriptions) > 4 else "")
+                    + ". Correct the selected region or upload the matching radiology report before relying on the result."
                 )
             if unavailable_imgs:
                 reasons = [
@@ -367,20 +436,21 @@ def generate_assessment_feedback(
                 status == "COMPLETED" and _has_xray_result(img)
                 for status, img in zip(image_statuses, xray_images_list)
             )
+            mismatch_count = sum(status == "REGION_MISMATCH" for status in image_statuses)
             unavailable_count = sum(
-                status in {"UNAVAILABLE", "FAILED", "ERROR"}
+                status in {"UNAVAILABLE", "FAILED", "ERROR", "INVALID", "REJECTED"}
                 for status in image_statuses
             )
             if completed_count == len(xray_images_list) and xray_images_list:
                 effective_status = "COMPLETED"
-            elif unavailable_count == len(xray_images_list) and xray_images_list:
-                effective_status = "UNAVAILABLE"
-            elif completed_count or unavailable_count:
-                effective_status = "PARTIAL"
+            elif mismatch_count == len(xray_images_list) and xray_images_list:
+                effective_status = "REGION_MISMATCH"
+            elif completed_count or mismatch_count or unavailable_count:
+                effective_status = "PARTIAL" if completed_count else "UNAVAILABLE"
             else:
                 effective_status = "PROCESSING"
         else:
-            effective_status = "NOT_PROVIDED"
+            effective_status = "REPORT_ONLY" if has_xray_reports else "NOT_PROVIDED"
 
         xray_findings_data = {
             "received": bool(has_xray_images or has_xray_reports),
@@ -402,6 +472,8 @@ def generate_assessment_feedback(
             "uncertainty": xray_meta.get("uncertainty") if has_xray_images else None,
             "images": xray_images_list,
             "reports": xray_reports_list,
+            "region_verification": region_verification_records,
+            "has_region_mismatch": has_region_mismatch,
         }
     else:
         xray_findings_data = {
@@ -416,6 +488,8 @@ def generate_assessment_feedback(
             "uncertainty": None,
             "images": [],
             "reports": [],
+            "region_verification": [],
+            "has_region_mismatch": False,
         }
 
     # 5. Supporting & Reassuring Evidence
@@ -543,6 +617,17 @@ def generate_assessment_feedback(
     else:
         dynamic_guidance = triage_result.get("guidance") or f"Consult with a specialist ({suggested_spec}) or general physician, and review your findings."
         dynamic_action = triage_result.get("next_steps") or "Schedule in-person medical evaluation and bring all available medical records."
+
+    # Keep the deterministic triage recommendation, but clearly flag any X-ray
+    # image/report mismatch. Never allow a mismatched pair to be described as a
+    # completed, concordant interpretation. Emergency guidance is not downgraded.
+    if has_region_mismatch:
+        mismatch_note = (
+            " At least one X-ray image/report body-region mismatch was detected. "
+            "Do not rely on the affected image/report pairing; correct the region or upload the matching report and rerun the X-ray assessment."
+        )
+        dynamic_guidance = f"{dynamic_guidance}{mismatch_note}"
+        dynamic_action = f"{dynamic_action}{mismatch_note}"
 
     recommended_next_step = {
         "guidance": dynamic_guidance,
@@ -720,6 +805,12 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         return {"status": "error", "message": "Assessment not found"}
 
     settings = get_settings()
+    raw_selected_input_types = assessment.input_types
+    selected_input_types = (
+        [str(item).strip() for item in raw_selected_input_types if str(item).strip()]
+        if isinstance(raw_selected_input_types, (list, tuple))
+        else []
+    )
 
     # 1. Fetch symptoms isolated strictly by assessment_id
     symptom_rows = (
@@ -940,6 +1031,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         radiology_report_provided=bool(xray_reports_list),
         qualitative_report_findings=qualitative_findings_list,
         narrative_report_findings=narrative_findings_list,
+        selected_input_types=selected_input_types,
     )
 
     # 5. Apply deterministic rule-based triage
@@ -949,7 +1041,11 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
     specialty_result = map_evidence_to_specialty(evidence)
     suggested_specialty = specialty_result.get("suggested_specialty")
 
-    # 6b. Predict possible conditions using verified evidence (Non-diagnostic ML differential)
+    # 6b. Predict possible conditions using the currently configured predictor.
+    # IMPORTANT: condition_prediction.py presently accepts symptom features only;
+    # laboratory values, radiology-report text, and image pixels are not direct
+    # inputs to this classifier. Keep this limitation explicit in the result until
+    # a separately trained/validated multimodal predictor is integrated.
     try:
         condition_svc = get_condition_prediction_service()
         condition_predictions = condition_svc.predict_conditions(
@@ -957,6 +1053,24 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             symptoms_absent=evidence.get("symptoms", {}).get("absent", []),
             symptoms_unknown=evidence.get("symptoms", {}).get("unknown", []),
             raw_text=evidence.get("raw_text"),
+        )
+        if not isinstance(condition_predictions, dict):
+            condition_predictions = {
+                "status": "unavailable",
+                "model_version": None,
+                "conditions": [],
+                "message": "The condition predictor returned an invalid response.",
+                "is_experimental": True,
+            }
+        else:
+            condition_predictions = dict(condition_predictions)
+        condition_predictions.setdefault("input_scope", ["symptoms_present", "symptoms_absent", "symptoms_unknown"])
+        condition_predictions.setdefault("uses_medical_report_features", False)
+        condition_predictions.setdefault("uses_radiology_report_text", False)
+        condition_predictions.setdefault("uses_xray_image_features", False)
+        condition_predictions.setdefault(
+            "scope_notice",
+            "This configured condition classifier uses symptom features only. Medical/laboratory and X-ray evidence are processed in the assessment, but are not direct features of this classifier.",
         )
     except Exception as exc:
         logger.error("Condition prediction pipeline execution failed: %s", exc)
@@ -966,6 +1080,11 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "conditions": [],
             "message": "Assistive condition prediction is currently unavailable. The safety triage result is independent and remains in effect.",
             "is_experimental": True,
+            "input_scope": ["symptoms_present", "symptoms_absent", "symptoms_unknown"],
+            "uses_medical_report_features": False,
+            "uses_radiology_report_text": False,
+            "uses_xray_image_features": False,
+            "scope_notice": "The configured condition classifier is symptom-based; reports and X-ray image features are not direct classifier inputs.",
         }
 
     # 7. Construct complete result payload with structured dynamic feedback.
@@ -993,9 +1112,15 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         "feedback": feedback,
         "condition_predictions": condition_predictions,
         "summary": {
+            "selected_input_types": selected_input_types,
             "symptoms_count": len(symptoms_list),
+            "medical_reports_count": len(medical_reports_list),
+            "radiology_reports_count": len(xray_reports_list),
             "reports_count": len(report_rows),
+            "xray_images_count": len(xray_results_list),
             "xray_present": bool(xray_rows),
+            "xray_region_mismatch": bool(evidence.get("xray", {}).get("has_region_mismatch")),
+            "input_availability": evidence.get("input_availability", {}),
             "triage_pathway": triage_result.get("pathway"),
             "suggested_specialty": suggested_specialty,
             "possible_conditions_count": len(condition_predictions.get("conditions", [])),
@@ -1005,7 +1130,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
     # 8. Output diagnostic debug logging
     _log_assessment_evidence_debug(
         assessment_id=assessment_id,
-        input_types=assessment.input_types or [],
+        input_types=selected_input_types,
         symptoms_list=symptoms_list,
         report_findings_list=report_findings_list,
         xray_dict=primary_xray_dict,

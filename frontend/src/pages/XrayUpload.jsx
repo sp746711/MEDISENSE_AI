@@ -254,6 +254,113 @@ function FloatingXrayObjects() {
 }
 
 /* ============================================================
+   RESPONSE / STATUS HELPERS
+   ============================================================ */
+function normalizeRegionForComparison(value) {
+  if (typeof value !== 'string') return '';
+  let key = value.trim().toLowerCase();
+  key = key.replace(/^(?:x[- ]?ray|xray|xr)[\s_-]*/, '');
+  key = key.replace(/[^a-z0-9]/g, '');
+  const aliases = {
+    finger: 'fingers',
+    digit: 'fingers',
+    digits: 'fingers',
+    thorax: 'chest',
+    thoracic: 'chest',
+    cranium: 'skull',
+  };
+  return aliases[key] || key;
+}
+
+// A conservative filename hint catches obvious conflicts such as
+// `Clinical Hand X-Ray Radiograph.png` when the user selected Ankle.
+// This is only a preliminary metadata check; it does NOT inspect image pixels.
+function inferRegionFromFilename(filename) {
+  if (typeof filename !== 'string' || !filename.trim()) return null;
+  const stem = filename
+    .replace(/\.[^.]+$/, '')
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase();
+
+  const hints = [
+    { region: 'fingers', pattern: /\b(finger|fingers|digit|digits|phalanges)\b/ },
+    { region: 'wrist', pattern: /\b(wrist|carpal)\b/ },
+    { region: 'elbow', pattern: /\b(elbow|olecranon)\b/ },
+    { region: 'forearm', pattern: /\b(forearm)\b/ },
+    { region: 'hand', pattern: /\b(hand|hands|metacarpal)\b/ },
+    { region: 'humerus', pattern: /\b(humerus|humeral)\b/ },
+    { region: 'shoulder', pattern: /\b(shoulder|clavicle|scapula)\b/ },
+    { region: 'ankle', pattern: /\b(ankle|malleolus)\b/ },
+    { region: 'foot', pattern: /\b(foot|feet|toe|toes|tarsal|metatarsal)\b/ },
+    { region: 'knee', pattern: /\b(knee|patella)\b/ },
+    { region: 'leg', pattern: /\b(leg|tibia|fibula|tibial|fibular)\b/ },
+    { region: 'hip', pattern: /\b(hip|femur|femoral)\b/ },
+    { region: 'pelvis', pattern: /\b(pelvis|pelvic)\b/ },
+    { region: 'skull', pattern: /\b(skull|cranium)\b/ },
+    { region: 'head', pattern: /\b(head)\b/ },
+    { region: 'chest', pattern: /\b(chest|thorax|thoracic|lung|lungs)\b/ },
+    { region: 'spine', pattern: /\b(spine|spinal|vertebra|vertebrae)\b/ },
+  ];
+
+  const matches = [...new Set(hints.filter((hint) => hint.pattern.test(stem)).map((hint) => hint.region))];
+  // Ambiguous filenames mentioning multiple body parts are not guessed.
+  return matches.length === 1 ? matches[0] : null;
+}
+
+function getImageStatusPresentation(item) {
+  switch (item.status) {
+    case 'READY':
+      return { className: 'status-ready', label: 'Ready for upload' };
+    case 'UPLOADING':
+      return { className: 'status-uploading', label: 'Uploading and analyzing...' };
+    case 'COMPLETED':
+      return { className: 'status-completed', label: 'Image inference completed' };
+    case 'ANALYSIS_UNAVAILABLE':
+      return {
+        className: 'status-failed',
+        label: item.error || 'Image uploaded; model analysis unavailable',
+      };
+    case 'REGION_MISMATCH':
+      return {
+        className: 'status-failed',
+        label: item.error || 'Returned region does not match the selected region',
+      };
+    case 'FAILED':
+    default:
+      return { className: 'status-failed', label: item.error || 'Image upload failed' };
+  }
+}
+
+function getReportStatusPresentation(item) {
+  switch (item.status) {
+    case 'READY':
+      return { className: 'status-ready', label: 'Ready for upload' };
+    case 'UPLOADING':
+      return { className: 'status-uploading', label: 'Uploading and extracting text...' };
+    case 'COMPLETED':
+      return { className: 'status-completed', label: 'Text extracted' };
+    case 'EXTRACTION_INCOMPLETE':
+      return {
+        className: 'status-failed',
+        label: item.error || 'Report uploaded; structured extraction incomplete',
+      };
+    case 'UNREADABLE':
+      return {
+        className: 'status-failed',
+        label: item.error || 'Report uploaded; text could not be read',
+      };
+    case 'REGION_MISMATCH':
+      return {
+        className: 'status-failed',
+        label: item.error || 'Radiology report region does not match the selected region',
+      };
+    case 'FAILED':
+    default:
+      return { className: 'status-failed', label: item.error || 'Report upload failed' };
+  }
+}
+
+/* ============================================================
    MAIN X-RAY & RADIOLOGY UPLOAD COMPONENT (MULTI-FILE)
    ============================================================ */
 export default function XrayUpload() {
@@ -264,6 +371,8 @@ export default function XrayUpload() {
   const [region, setRegion] = useState(''); // Initial state must be empty; user must explicitly select
   const [info, setInfo] = useState('');
   const [error, setError] = useState('');
+  const [regionMismatchMessage, setRegionMismatchMessage] = useState('');
+  const [regionStatusMessage, setRegionStatusMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [dragActiveImages, setDragActiveImages] = useState(false);
   const [dragActiveReports, setDragActiveReports] = useState(false);
@@ -285,6 +394,19 @@ export default function XrayUpload() {
 
   const ALLOWED_IMAGE_EXTS = ['.png', '.jpg', '.jpeg'];
   const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg'];
+
+  // Disable continuation immediately for a clear filename/selected-region conflict.
+  // This is intentionally conservative and does not claim visual anatomy verification.
+  const filenameRegionMismatches = xrayImages
+    .map((item) => ({ item, filenameRegion: inferRegionFromFilename(item.name) }))
+    .filter(({ filenameRegion }) => (
+      Boolean(region) &&
+      Boolean(filenameRegion) &&
+      normalizeRegionForComparison(filenameRegion) !== normalizeRegionForComparison(region)
+    ));
+  const hasRegionMismatch = Boolean(regionMismatchMessage) || filenameRegionMismatches.length > 0 ||
+    xrayImages.some((item) => item.status === 'REGION_MISMATCH') ||
+    xrayReports.some((item) => item.status === 'REGION_MISMATCH');
 
   const handleImageDrag = (e) => {
     e.preventDefault();
@@ -350,6 +472,10 @@ export default function XrayUpload() {
         size: file.size,
         type: file.type,
         status: 'READY',
+        uploadStatus: 'pending',
+        analysisStatus: null,
+        analysisMessage: null,
+        submittedRegion: null,
         error: null,
       });
     }
@@ -401,6 +527,8 @@ export default function XrayUpload() {
         size: file.size,
         type: file.type,
         status: 'READY',
+        uploadStatus: 'pending',
+        extractionStatus: null,
         error: null,
       });
     }
@@ -478,70 +606,276 @@ export default function XrayUpload() {
 
   const onContinue = async () => {
     setError('');
-    if (!assessmentId) return setError('No assessment in progress. Start a new assessment.');
+    setInfo('');
+    setRegionMismatchMessage('');
+    setRegionStatusMessage('');
 
-    const totalFiles = xrayImages.length + xrayReports.length;
-    if (totalFiles === 0) {
-      return setError('Please upload at least one X-ray image or X-ray report before continuing.');
+    if (!assessmentId) {
+      setError('No assessment is in progress. Start a new assessment first.');
+      return;
     }
 
-    if (xrayImages.length > 0 && (!region || !region.trim())) {
-      return setError('Please select an X-ray body region/type.');
+    // Goal 1: either source is valid on its own. A radiology PDF is optional.
+    if (xrayImages.length === 0 && xrayReports.length === 0) {
+      setError('Upload an X-ray image, a radiology report PDF, or both to continue.');
+      return;
+    }
+    if (xrayImages.length > 0 && !region.trim()) {
+      setError('Please select the anatomical region for the X-ray image(s).');
+      return;
+    }
+
+    if (filenameRegionMismatches.length > 0) {
+      const { item, filenameRegion } = filenameRegionMismatches[0];
+      setRegionMismatchMessage(
+        `Possible region mismatch: the selected region is "${region}", but the filename "${item.name}" suggests "${filenameRegion}". Change the selected region or upload the correct image. This preliminary check uses the filename only; it does not verify anatomy from image pixels.`
+      );
+      return;
     }
 
     setSubmitting(true);
-    let anyFailed = false;
+    let uploadFailed = false;
+    let regionMismatchDetected = false;
+    let unavailableImageAnalyses = 0;
+    let incompleteReports = 0;
+    let unreadableReports = 0;
+    let successfullyExtractedReports = 0;
+    let inlineMismatch = '';
+    let inlineRegionNotice = '';
 
-    // 1. Process Images
-    const updatedImages = xrayImages.map((item) => ({ ...item }));
-    for (let i = 0; i < updatedImages.length; i++) {
-      const item = updatedImages[i];
-      if (item.status === 'COMPLETED') continue;
+    const selectedRegionKey = normalizeRegionForComparison(region);
 
-      item.status = 'UPLOADING';
-      setXrayImages([...updatedImages]);
-
-      try {
-        await uploadXray(assessmentId, item.file, region);
-        item.status = 'COMPLETED';
-        item.error = null;
-      } catch (err) {
-        anyFailed = true;
-        item.status = 'FAILED';
-        item.error = err.message || 'Image upload failed';
-      }
-      setXrayImages([...updatedImages]);
-    }
-
-    // 2. Process X-Ray / Radiology Reports
+    // Upload optional radiology reports first, when the user supplied any.
+    // The backend compares the explicitly extracted report region with the
+    // selected region when an image is part of this assessment.
     const updatedReports = xrayReports.map((item) => ({ ...item }));
     for (let i = 0; i < updatedReports.length; i++) {
       const item = updatedReports[i];
-      if (item.status === 'COMPLETED') continue;
+
+      if (item.uploadStatus === 'uploaded') {
+        const existingRegion = normalizeRegionForComparison(item.reportRegion);
+        if (xrayImages.length > 0 && existingRegion && selectedRegionKey && existingRegion !== selectedRegionKey) {
+          regionMismatchDetected = true;
+          inlineMismatch = `Region mismatch: the selected X-ray region is "${region}", but this report identifies "${item.reportRegion}". Correct the region or report before continuing.`;
+          item.status = 'REGION_MISMATCH';
+          item.error = inlineMismatch;
+          break;
+        }
+        if (item.status === 'COMPLETED') successfullyExtractedReports += 1;
+        else if (item.status === 'EXTRACTION_INCOMPLETE') incompleteReports += 1;
+        else if (item.status === 'UNREADABLE') unreadableReports += 1;
+        continue;
+      }
 
       item.status = 'UPLOADING';
+      item.error = null;
       setXrayReports([...updatedReports]);
 
       try {
-        await uploadReport(assessmentId, item.file, 'xray_report');
-        item.status = 'COMPLETED';
-        item.error = null;
+        const response = await uploadReport(
+          assessmentId,
+          item.file,
+          'xray_report',
+          xrayImages.length > 0 ? region : null
+        );
+        const verification = response?.region_verification || response?.ocr_metadata?.region_verification || null;
+        const reportRegion = verification?.report_region || response?.report_region || null;
+        const verificationStatus = String(verification?.status || '').toUpperCase();
+
+        item.reportRegion = reportRegion;
+        item.regionVerificationStatus = verificationStatus || 'UNVERIFIED';
+        item.extractionStatus = response?.extraction_status || response?.status || 'unknown';
+
+        if (response?.status === 'region_mismatch' || verificationStatus === 'MISMATCH') {
+          regionMismatchDetected = true;
+          item.uploadStatus = response?.upload_status === 'rejected' ? 'failed' : 'uploaded';
+          item.status = 'REGION_MISMATCH';
+          item.error = verification?.message || response?.message || `The report region (${reportRegion || 'unknown'}) does not match the selected region (${region}).`;
+          inlineMismatch = item.error;
+          setXrayReports([...updatedReports]);
+          break;
+        }
+
+        // Fail closed on any explicit backend mismatch. A report with no
+        // confidently extractable region is unverified, not automatically a match.
+        if (xrayImages.length > 0 && reportRegion && selectedRegionKey &&
+            normalizeRegionForComparison(reportRegion) !== selectedRegionKey) {
+          regionMismatchDetected = true;
+          item.uploadStatus = response?.upload_status === 'rejected' ? 'failed' : 'uploaded';
+          item.status = 'REGION_MISMATCH';
+          item.error = `Region mismatch: selected region is "${region}", but the report says "${reportRegion}".`;
+          inlineMismatch = item.error;
+          setXrayReports([...updatedReports]);
+          break;
+        }
+
+        // A 200 response alone is not proof that OCR/extraction succeeded.
+        if (item.extractionStatus === 'successful' || response?.status === 'extracted') {
+          item.uploadStatus = response?.upload_status === 'rejected' ? 'failed' : 'uploaded';
+          item.status = 'COMPLETED';
+          item.error = null;
+          successfullyExtractedReports += 1;
+        } else if (item.extractionStatus === 'incomplete' || response?.status === 'extraction_incomplete') {
+          item.uploadStatus = 'uploaded';
+          item.status = 'EXTRACTION_INCOMPLETE';
+          item.error = response?.message || 'Text was extracted, but structured findings may be incomplete.';
+          incompleteReports += 1;
+        } else if (item.extractionStatus === 'unreadable' || response?.status === 'unreadable') {
+          item.uploadStatus = 'uploaded';
+          item.status = 'UNREADABLE';
+          item.error = response?.message || 'The report was uploaded but its text could not be read.';
+          unreadableReports += 1;
+        } else {
+          item.uploadStatus = response?.upload_status === 'rejected' ? 'failed' : 'uploaded';
+          item.status = 'EXTRACTION_INCOMPLETE';
+          item.error = response?.message || 'The report was uploaded, but extraction status was not confirmed.';
+          incompleteReports += 1;
+        }
+
+        if (xrayImages.length > 0 && verificationStatus === 'UNVERIFIED') {
+          inlineRegionNotice = verification?.message || 'The backend could not confidently identify the region in this report. The region has not been marked as verified.';
+        }
       } catch (err) {
-        anyFailed = true;
+        uploadFailed = true;
         item.status = 'FAILED';
-        item.error = err.message || 'Radiology report upload failed';
+        item.uploadStatus = 'failed';
+        item.error = err?.message || 'Radiology report upload failed.';
       }
       setXrayReports([...updatedReports]);
     }
 
+    setXrayReports([...updatedReports]);
+    if (regionMismatchDetected) {
+      setSubmitting(false);
+      setRegionMismatchMessage(inlineMismatch || 'The backend detected a region mismatch. Correct the selected region or radiology report before continuing.');
+      return;
+    }
+    if (uploadFailed) {
+      setSubmitting(false);
+      setError('A selected radiology report failed to upload. Retry it or remove it, then continue with the remaining valid input.');
+      return;
+    }
+
+    // A report-only assessment is permitted. At least one PDF must have yielded
+    // usable extracted text/findings if no image is present.
+    if (xrayImages.length === 0) {
+      setSubmitting(false);
+      if (successfullyExtractedReports === 0) {
+        setError('No usable radiology-report extraction is available. Upload a readable PDF or add an X-ray image to continue.');
+        return;
+      }
+
+      const reportNotices = [];
+      if (incompleteReports > 0) reportNotices.push(`${incompleteReports} report(s) had incomplete structured extraction`);
+      if (unreadableReports > 0) reportNotices.push(`${unreadableReports} report(s) could not be read`);
+      setInfo(reportNotices.length ? `${reportNotices.join('; ')}. The successfully extracted report(s) will be included in the assessment.` : 'Radiology report extraction completed.');
+      navigate('/assessment/processing');
+      return;
+    }
+
+    // Image-only is allowed. The backend currently routes by the selected region;
+    // without a dedicated anatomy classifier, it cannot prove anatomy from pixels.
+    const updatedImages = xrayImages.map((item) => ({ ...item }));
+    for (let i = 0; i < updatedImages.length; i++) {
+      const item = updatedImages[i];
+      if (item.uploadStatus === 'uploaded') {
+        const previousRegion = normalizeRegionForComparison(item.submittedRegion);
+        if (previousRegion && previousRegion !== selectedRegionKey) {
+          regionMismatchDetected = true;
+          inlineMismatch = `This image was previously submitted for "${item.submittedRegion}". Start a new assessment to use a different region.`;
+          item.status = 'REGION_MISMATCH';
+          item.error = inlineMismatch;
+          break;
+        }
+        if (item.status === 'REGION_MISMATCH') {
+          regionMismatchDetected = true;
+          inlineMismatch = item.error || 'The backend previously detected a region mismatch for this image.';
+          break;
+        }
+        if (item.status === 'ANALYSIS_UNAVAILABLE') unavailableImageAnalyses += 1;
+        continue;
+      }
+
+      item.status = 'UPLOADING';
+      item.error = null;
+      setXrayImages([...updatedImages]);
+      try {
+        const response = await uploadXray(assessmentId, item.file, region);
+        const responseRegion = normalizeRegionForComparison(response?.region);
+        const responseStatus = String(response?.status || '').trim().toLowerCase();
+        const hasPrediction = typeof response?.prediction === 'string' && response.prediction.trim().length > 0;
+        const hasFindings = Array.isArray(response?.findings) && response.findings.length > 0;
+        const imageVerification = response?.image_anatomy_verification || null;
+
+        item.uploadStatus = 'uploaded';
+        item.submittedRegion = region;
+        item.analysisStatus = responseStatus || 'unknown';
+        item.analysisMessage = response?.message || response?.diagnostic_message || null;
+        item.imageAnatomyVerificationStatus = String(imageVerification?.status || 'UNVERIFIED').toUpperCase();
+
+        if (imageVerification?.status && String(imageVerification.status).toUpperCase() === 'MISMATCH') {
+          regionMismatchDetected = true;
+          inlineMismatch = imageVerification.message || `The backend detected that the image anatomy does not match selected region "${region}".`;
+          item.status = 'REGION_MISMATCH';
+          item.error = inlineMismatch;
+        } else if (responseRegion && selectedRegionKey && responseRegion !== selectedRegionKey) {
+          regionMismatchDetected = true;
+          inlineMismatch = `The backend returned region "${response.region}", which differs from selected region "${region}".`;
+          item.status = 'REGION_MISMATCH';
+          item.error = inlineMismatch;
+        } else if (responseStatus === 'completed' && (hasPrediction || hasFindings)) {
+          item.status = 'COMPLETED';
+          item.error = null;
+          if (!imageVerification || String(imageVerification.status).toUpperCase() !== 'MATCH') {
+            inlineRegionNotice = imageVerification?.message || 'The backend processed this image using the selected region, but the image anatomy is not independently verified by the currently configured model.';
+          }
+        } else {
+          item.status = 'ANALYSIS_UNAVAILABLE';
+          item.error = item.analysisMessage || 'Image uploaded, but a usable model result was not returned.';
+          unavailableImageAnalyses += 1;
+          inlineRegionNotice = imageVerification?.message || 'Image anatomy could not be independently verified by the currently configured backend model.';
+        }
+      } catch (err) {
+        uploadFailed = true;
+        item.status = 'FAILED';
+        item.uploadStatus = 'failed';
+        item.error = err?.message || 'X-ray upload or inference request failed.';
+      }
+      setXrayImages([...updatedImages]);
+      if (regionMismatchDetected || uploadFailed) break;
+    }
+
+    setXrayImages([...updatedImages]);
     setSubmitting(false);
 
-    if (anyFailed) {
-      setError('Some X-ray files failed to upload. You can retry failed files or remove them.');
-    } else {
-      setInfo('All X-ray evidence uploaded successfully.');
-      navigate('/assessment/processing');
+    if (regionMismatchDetected) {
+      setRegionMismatchMessage(inlineMismatch || 'The backend detected a region mismatch. Correct the image, selected region, or report before continuing.');
+      return;
     }
+    if (uploadFailed) {
+      setError('An X-ray image failed to upload or process. Retry the failed item before continuing.');
+      return;
+    }
+
+    if (xrayReports.length === 0) {
+      inlineRegionNotice = inlineRegionNotice || 'No radiology report was supplied. The selected region is used for model routing; the current backend cannot independently verify image anatomy from pixels.';
+    }
+    if (inlineRegionNotice) setRegionStatusMessage(inlineRegionNotice);
+
+    const notices = [];
+    if (unavailableImageAnalyses > 0) notices.push(`${unavailableImageAnalyses} image(s) did not produce a usable model result`);
+    if (incompleteReports > 0) notices.push(`${incompleteReports} report(s) had incomplete structured extraction`);
+    if (unreadableReports > 0) notices.push(`${unreadableReports} report(s) could not be read`);
+    if (inlineRegionNotice) notices.push('image anatomy verification remains unavailable');
+
+    if (notices.length > 0) {
+      setInfo(`${notices.join('; ')}. These limitations should remain visible in the final assessment.`);
+    } else if (xrayReports.length > 0) {
+      setInfo('X-ray processing and the supplied radiology report processing completed. Review the source-specific findings in the assessment results.');
+    } else {
+      setInfo('X-ray processing completed. Review the available image findings and region-verification limitation in the assessment results.');
+    }
+    navigate('/assessment/processing');
   };
 
   return (
@@ -567,7 +901,7 @@ export default function XrayUpload() {
             X-Ray &amp; Radiology <span className="na-title-highlight">Evidence</span>
           </h1>
           <p className="na-description">
-            Upload X-ray images, radiology reports, or both. You can preview every file to verify it before proceeding.
+            Upload an X-ray image, a radiology report PDF, or both. A PDF is optional. Select a region when uploading images; the backend checks any identifiable report-region conflict.
           </p>
         </div>
 
@@ -612,14 +946,25 @@ export default function XrayUpload() {
         <XrayRegionSelector
           selectedRegion={region}
           onSelectRegion={(newRegion) => {
+            const hasSavedImage = xrayImages.some((item) => item.uploadStatus === 'uploaded');
+            const hasRegionBoundReport = xrayReports.some((item) => item.uploadStatus === 'uploaded' && item.reportRegion);
+            if (
+              (hasSavedImage || hasRegionBoundReport) &&
+              normalizeRegionForComparison(newRegion) !== normalizeRegionForComparison(region)
+            ) {
+              setError('The region cannot be changed after a related image or region-checked report has been saved to this assessment. Start a new assessment to avoid mixing regions.');
+              return;
+            }
             setRegion(newRegion);
+            setRegionMismatchMessage('');
+            setRegionStatusMessage('');
             if (error) setError('');
           }}
           required={xrayImages.length > 0}
         />
         {xrayReports.length > 0 && xrayImages.length === 0 ? (
           <p className="upload-hint-text" role="note">
-            A body region is not required for PDF reports. The report will be processed as radiology-report text, separately from image inference.
+            The full X-Ray workflow requires both a selected anatomical region and an image. Upload radiology report(s) for the same examination/region; reports are extracted before image inference is requested.
           </p>
         ) : null}
 
@@ -636,7 +981,7 @@ export default function XrayUpload() {
           </button>
         </div>
         <p className="upload-hint-text" style={{ textAlign: 'left', margin: '0 0 0.5rem 0' }}>
-          Accepted: PNG, JPG, JPEG. The selected body region applies to every image in this upload batch; upload images from one region at a time.
+          Optional input: PNG, JPG, JPEG. Select the body region shown. All images in one batch must use the same selected region. The backend may flag a mismatch when it can identify a conflicting report region.
         </p>
 
         <input
@@ -692,15 +1037,10 @@ export default function XrayUpload() {
                     </span>
                     <span className="file-card-meta">
                       {formatFileSize(img.size)} ·{' '}
-                      {img.status === 'READY' ? (
-                        <span className="status-ready">Ready for upload</span>
-                      ) : img.status === 'UPLOADING' ? (
-                        <span className="status-uploading">Uploading...</span>
-                      ) : img.status === 'COMPLETED' ? (
-                        <span className="status-completed">✓ Uploaded</span>
-                      ) : (
-                        <span className="status-failed">✗ {img.error || 'Upload failed'}</span>
-                      )}
+                      {(() => {
+                        const statusView = getImageStatusPresentation(img);
+                        return <span className={statusView.className}>{statusView.label}</span>;
+                      })()}
                     </span>
                   </div>
                 </div>
@@ -718,7 +1058,8 @@ export default function XrayUpload() {
                     type="button"
                     className="btn-card-remove"
                     onClick={() => handleRemoveImage(img.id)}
-                    disabled={submitting}
+                    disabled={submitting || img.uploadStatus === 'uploaded'}
+                    title={img.uploadStatus === 'uploaded' ? 'This file is already saved to the server; start a new assessment to replace it.' : 'Remove selected image'}
                     aria-label={`Remove ${img.name}`}
                   >
                     Remove
@@ -729,7 +1070,27 @@ export default function XrayUpload() {
           </div>
         ) : null}
 
-        {/* 3. X-RAY / RADIOLOGY REPORTS SECTION */}
+        {regionMismatchMessage ? (
+          <p role="alert" style={{ margin: '-0.25rem 0 1rem', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '0.55rem 0.7rem', fontSize: '0.82rem' }}>
+            {regionMismatchMessage}
+          </p>
+        ) : filenameRegionMismatches.length > 0 ? (
+          <p role="alert" style={{ margin: '-0.25rem 0 1rem', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '0.55rem 0.7rem', fontSize: '0.82rem' }}>
+            Possible region mismatch: selected region is <strong>{region}</strong>, but <strong>{filenameRegionMismatches[0].item.name}</strong> suggests <strong>{filenameRegionMismatches[0].filenameRegion}</strong>. Change the selected region or upload the correct image. Continue is disabled until this conflict is resolved.
+          </p>
+        ) : null}
+        {xrayImages.length > 0 && xrayReports.length === 0 && !hasRegionMismatch ? (
+          <p role="note" style={{ margin: '-0.25rem 0 1rem', color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '0.55rem 0.7rem', fontSize: '0.82rem' }}>
+            Image-only mode is allowed. The selected region is used for model routing, but the current backend does not independently verify the anatomy in the image pixels.
+          </p>
+        ) : null}
+        {regionStatusMessage ? (
+          <p role="status" style={{ margin: '-0.25rem 0 1rem', color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '0.55rem 0.7rem', fontSize: '0.82rem' }}>
+            {regionStatusMessage}
+          </p>
+        ) : null}
+
+        {/* 3. OPTIONAL X-RAY / RADIOLOGY REPORTS SECTION */}
         <div className="section-divider-title">
           <h3>X-Ray / Radiology Reports</h3>
           <button
@@ -741,7 +1102,7 @@ export default function XrayUpload() {
           </button>
         </div>
         <p className="upload-hint-text" style={{ textAlign: 'left', margin: '0 0 0.5rem 0' }}>
-          Accepted: PDF
+          Optional input: PDF. You can submit a radiology report without an image.
         </p>
 
         <input
@@ -801,15 +1162,10 @@ export default function XrayUpload() {
                       </span>
                       <span className="file-card-meta">
                         {formatFileSize(rep.size)} ·{' '}
-                        {rep.status === 'READY' ? (
-                          <span className="status-ready">Ready for OCR/NLP</span>
-                        ) : rep.status === 'UPLOADING' ? (
-                          <span className="status-uploading">Extracting text &amp; findings...</span>
-                        ) : rep.status === 'COMPLETED' ? (
-                          <span className="status-completed">✓ Extracted</span>
-                        ) : (
-                          <span className="status-failed">✗ {rep.error || 'Upload failed'}</span>
-                        )}
+                        {(() => {
+                          const statusView = getReportStatusPresentation(rep);
+                          return <span className={statusView.className}>{statusView.label}</span>;
+                        })()}
                       </span>
                     </div>
                   </div>
@@ -827,7 +1183,8 @@ export default function XrayUpload() {
                     type="button"
                     className="btn-card-remove"
                     onClick={() => handleRemoveReport(rep.id)}
-                    disabled={submitting}
+                    disabled={submitting || rep.uploadStatus === 'uploaded'}
+                    title={rep.uploadStatus === 'uploaded' ? 'This report is already saved to the server; start a new assessment to replace it.' : 'Remove selected report'}
                     aria-label={`Remove ${rep.name}`}
                   >
                     Remove
@@ -845,9 +1202,9 @@ export default function XrayUpload() {
             type="button"
             className="na-continue-btn"
             onClick={onContinue}
-            disabled={submitting || (xrayImages.length === 0 && xrayReports.length === 0)}
+            disabled={submitting || hasRegionMismatch || (xrayImages.length === 0 && xrayReports.length === 0) || (xrayImages.length > 0 && !region)}
           >
-            <span>{submitting ? 'Uploading...' : 'Continue'}</span>
+            <span>{submitting ? 'Uploading selected inputs and analyzing...' : 'Continue to Review'}</span>
             <span className="na-btn-arrow">
               <ArrowRightIcon size={18} color="#ffffff" />
             </span>

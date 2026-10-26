@@ -2,9 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ErrorMessage from '../components/ErrorMessage';
 import FilePreviewModal from '../components/FilePreviewModal';
-import XrayRegionSelector from '../components/XrayRegionSelector';
-import { uploadXray } from '../services/xrayService';
-import { uploadReport } from '../services/reportService';
+import { uploadXray, deleteXray } from '../services/xrayService';
+import { uploadReport, deleteReport } from '../services/reportService';
 import { useAssessment } from '../hooks/useAssessment';
 import './NewAssessment.css';
 
@@ -256,89 +255,37 @@ function FloatingXrayObjects() {
 /* ============================================================
    RESPONSE / STATUS HELPERS
    ============================================================ */
-function normalizeRegionForComparison(value) {
-  if (typeof value !== 'string') return '';
-  let key = value.trim().toLowerCase();
-  key = key.replace(/^(?:x[- ]?ray|xray|xr)[\s_-]*/, '');
-  key = key.replace(/[^a-z0-9]/g, '');
-  const aliases = {
-    finger: 'fingers',
-    digit: 'fingers',
-    digits: 'fingers',
-    thorax: 'chest',
-    thoracic: 'chest',
-    cranium: 'skull',
-  };
-  return aliases[key] || key;
-}
-
-// A conservative filename hint catches obvious conflicts such as
-// `Clinical Hand X-Ray Radiograph.png` when the user selected Ankle.
-// This is only a preliminary metadata check; it does NOT inspect image pixels.
-function inferRegionFromFilename(filename) {
-  if (typeof filename !== 'string' || !filename.trim()) return null;
-  const stem = filename
-    .replace(/\.[^.]+$/, '')
-    .replace(/[_-]+/g, ' ')
-    .toLowerCase();
-
-  const hints = [
-    { region: 'fingers', pattern: /\b(finger|fingers|digit|digits|phalanges)\b/ },
-    { region: 'wrist', pattern: /\b(wrist|carpal)\b/ },
-    { region: 'elbow', pattern: /\b(elbow|olecranon)\b/ },
-    { region: 'forearm', pattern: /\b(forearm)\b/ },
-    { region: 'hand', pattern: /\b(hand|hands|metacarpal)\b/ },
-    { region: 'humerus', pattern: /\b(humerus|humeral)\b/ },
-    { region: 'shoulder', pattern: /\b(shoulder|clavicle|scapula)\b/ },
-    { region: 'ankle', pattern: /\b(ankle|malleolus)\b/ },
-    { region: 'foot', pattern: /\b(foot|feet|toe|toes|tarsal|metatarsal)\b/ },
-    { region: 'knee', pattern: /\b(knee|patella)\b/ },
-    { region: 'leg', pattern: /\b(leg|tibia|fibula|tibial|fibular)\b/ },
-    { region: 'hip', pattern: /\b(hip|femur|femoral)\b/ },
-    { region: 'pelvis', pattern: /\b(pelvis|pelvic)\b/ },
-    { region: 'skull', pattern: /\b(skull|cranium)\b/ },
-    { region: 'head', pattern: /\b(head)\b/ },
-    { region: 'chest', pattern: /\b(chest|thorax|thoracic|lung|lungs)\b/ },
-    { region: 'spine', pattern: /\b(spine|spinal|vertebra|vertebrae)\b/ },
-  ];
-
-  const matches = [...new Set(hints.filter((hint) => hint.pattern.test(stem)).map((hint) => hint.region))];
-  // Ambiguous filenames mentioning multiple body parts are not guessed.
-  return matches.length === 1 ? matches[0] : null;
-}
-
 function getImageStatusPresentation(item) {
   switch (item.status) {
     case 'READY':
-      return { className: 'status-ready', label: 'Ready for upload' };
+      return { className: 'status-ready', label: 'Waiting to analyze' };
     case 'UPLOADING':
-      return { className: 'status-uploading', label: 'Uploading and analyzing...' };
+      return { className: 'status-uploading', label: 'Uploading and analyzing image...' };
+    case 'DELETING':
+      return { className: 'status-uploading', label: 'Removing saved image...' };
     case 'COMPLETED':
-      return { className: 'status-completed', label: 'Image inference completed' };
+      return { className: 'status-completed', label: 'Image analysis completed' };
     case 'ANALYSIS_UNAVAILABLE':
       return {
         className: 'status-failed',
-        label: item.error || 'Image uploaded; model analysis unavailable',
-      };
-    case 'REGION_MISMATCH':
-      return {
-        className: 'status-failed',
-        label: item.error || 'Returned region does not match the selected region',
+        label: item.error || 'Image uploaded; automated analysis unavailable',
       };
     case 'FAILED':
     default:
-      return { className: 'status-failed', label: item.error || 'Image upload failed' };
+      return { className: 'status-failed', label: item.error || 'Image upload or analysis failed' };
   }
 }
 
 function getReportStatusPresentation(item) {
   switch (item.status) {
     case 'READY':
-      return { className: 'status-ready', label: 'Ready for upload' };
+      return { className: 'status-ready', label: 'Waiting for extraction' };
     case 'UPLOADING':
-      return { className: 'status-uploading', label: 'Uploading and extracting text...' };
+      return { className: 'status-uploading', label: 'Uploading and extracting report...' };
+    case 'DELETING':
+      return { className: 'status-uploading', label: 'Removing saved report...' };
     case 'COMPLETED':
-      return { className: 'status-completed', label: 'Text extracted' };
+      return { className: 'status-completed', label: 'Report text extracted' };
     case 'EXTRACTION_INCOMPLETE':
       return {
         className: 'status-failed',
@@ -347,12 +294,7 @@ function getReportStatusPresentation(item) {
     case 'UNREADABLE':
       return {
         className: 'status-failed',
-        label: item.error || 'Report uploaded; text could not be read',
-      };
-    case 'REGION_MISMATCH':
-      return {
-        className: 'status-failed',
-        label: item.error || 'Radiology report region does not match the selected region',
+        label: item.error || 'Report uploaded; its text could not be read',
       };
     case 'FAILED':
     default:
@@ -360,113 +302,308 @@ function getReportStatusPresentation(item) {
   }
 }
 
+function normalizeStatus(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function getResponseFindings(response) {
+  const candidates = [
+    response?.findings,
+    response?.extracted_findings,
+    response?.structured_findings,
+    response?.report_findings,
+    response?.ocr_metadata?.findings,
+    response?.ocr_metadata?.structured_findings,
+  ];
+  return candidates.find(Array.isArray) || [];
+}
+
+function getResponseText(response) {
+  const candidates = [
+    response?.extracted_text,
+    response?.ocr_text,
+    response?.report_text,
+    response?.text,
+    response?.ocr_metadata?.extracted_text,
+    response?.ocr_metadata?.ocr_text,
+  ];
+  return candidates.find((value) => typeof value === 'string' && value.trim())?.trim() || '';
+}
+
+function prettyFinding(finding, index) {
+  if (typeof finding === 'string') return finding;
+  if (!finding || typeof finding !== 'object') return `Finding ${index + 1}: ${String(finding)}`;
+
+  const label = finding.label || finding.name || finding.finding || finding.finding_name || finding.class || `Finding ${index + 1}`;
+  const score = finding.score ?? finding.probability ?? finding.confidence;
+  if (typeof score === 'number' && Number.isFinite(score)) {
+    const formatted = score >= 0 && score <= 1 ? `${(score * 100).toFixed(1)}%` : score.toFixed(3);
+    return `${label} (${formatted})`;
+  }
+  const interpretation = finding.interpretation || finding.status || finding.value;
+  return interpretation !== undefined && interpretation !== null ? `${label}: ${interpretation}` : String(label);
+}
+
+function formatFileSize(bytes) {
+  if (!bytes) return '';
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(1)} KB`;
+  return `${(kb / 1024).toFixed(1)} MB`;
+}
+
 /* ============================================================
    MAIN X-RAY & RADIOLOGY UPLOAD COMPONENT (MULTI-FILE)
+
+   Goal 1 workflow:
+   1. Select image -> upload and analyze automatically.
+   2. Display body-part classification and available image findings.
+   3. Make report upload available after image processing (or immediately
+      for report-only mode); extract report text when selected.
+   4. Continue only after available inputs have finished processing.
    ============================================================ */
 export default function XrayUpload() {
   const navigate = useNavigate();
   const { assessmentId } = useAssessment();
   const [xrayImages, setXrayImages] = useState([]);
   const [xrayReports, setXrayReports] = useState([]);
-  const [region, setRegion] = useState(''); // Initial state must be empty; user must explicitly select
   const [info, setInfo] = useState('');
   const [error, setError] = useState('');
-  const [regionMismatchMessage, setRegionMismatchMessage] = useState('');
-  const [regionStatusMessage, setRegionStatusMessage] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [deletingImageIds, setDeletingImageIds] = useState(() => new Set());
+  const [deletingReportIds, setDeletingReportIds] = useState(() => new Set());
   const [dragActiveImages, setDragActiveImages] = useState(false);
   const [dragActiveReports, setDragActiveReports] = useState(false);
-  const [previewState, setPreviewState] = useState(null); // { id, file, name, size, previewUrl, previewType }
+  const [previewState, setPreviewState] = useState(null);
 
   const imageInputRef = useRef(null);
   const reportInputRef = useRef(null);
   const previewUrlRef = useRef(null);
-
-  // Clean up object URL when component genuinely unmounts
-  useEffect(() => {
-    return () => {
-      if (previewUrlRef.current) {
-        URL.revokeObjectURL(previewUrlRef.current);
-        previewUrlRef.current = null;
-      }
-    };
-  }, []);
+  const processingImageIdsRef = useRef(new Set());
+  const processingReportIdsRef = useRef(new Set());
 
   const ALLOWED_IMAGE_EXTS = ['.png', '.jpg', '.jpeg'];
   const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/jpg'];
 
-  // Disable continuation immediately for a clear filename/selected-region conflict.
-  // This is intentionally conservative and does not claim visual anatomy verification.
-  const filenameRegionMismatches = xrayImages
-    .map((item) => ({ item, filenameRegion: inferRegionFromFilename(item.name) }))
-    .filter(({ filenameRegion }) => (
-      Boolean(region) &&
-      Boolean(filenameRegion) &&
-      normalizeRegionForComparison(filenameRegion) !== normalizeRegionForComparison(region)
-    ));
-  const hasRegionMismatch = Boolean(regionMismatchMessage) || filenameRegionMismatches.length > 0 ||
-    xrayImages.some((item) => item.status === 'REGION_MISMATCH') ||
-    xrayReports.some((item) => item.status === 'REGION_MISMATCH');
+  useEffect(() => () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+  }, []);
+
+  const isProcessingFiles =
+    deletingImageIds.size > 0 ||
+    deletingReportIds.size > 0 ||
+    xrayImages.some((item) => item.status === 'READY' || item.status === 'UPLOADING' || item.status === 'DELETING') ||
+    xrayReports.some((item) => item.status === 'READY' || item.status === 'UPLOADING' || item.status === 'DELETING');
+
+  const hasUploadedImage = xrayImages.some((item) => item.uploadStatus === 'uploaded');
+  const hasExtractedReport = xrayReports.some((item) => item.status === 'COMPLETED' && item.uploadStatus === 'uploaded');
+  const hasAnySelectedInput = xrayImages.length > 0 || xrayReports.length > 0;
+  const hasImageStageSettled = xrayImages.length === 0 || xrayImages.every(
+    (item) => item.status !== 'READY' && item.status !== 'UPLOADING'
+  );
+  const reportStageVisible = xrayImages.length === 0 || hasImageStageSettled;
+
+  const updateImage = (id, patch) => {
+    setXrayImages((previous) => previous.map((item) => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const updateReport = (id, patch) => {
+    setXrayReports((previous) => previous.map((item) => item.id === id ? { ...item, ...patch } : item));
+  };
 
   const handleImageDrag = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActiveImages(true);
-    } else if (e.type === 'dragleave') {
-      setDragActiveImages(false);
-    }
+    if (e.type === 'dragenter' || e.type === 'dragover') setDragActiveImages(true);
+    else if (e.type === 'dragleave') setDragActiveImages(false);
   };
 
   const handleImageDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActiveImages(false);
-    if (e.dataTransfer.files) {
-      addImages(e.dataTransfer.files);
-    }
+    if (e.dataTransfer.files) addImages(e.dataTransfer.files);
   };
 
   const handleReportDrag = (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.type === 'dragenter' || e.type === 'dragover') {
-      setDragActiveReports(true);
-    } else if (e.type === 'dragleave') {
-      setDragActiveReports(false);
-    }
+    if (e.type === 'dragenter' || e.type === 'dragover') setDragActiveReports(true);
+    else if (e.type === 'dragleave') setDragActiveReports(false);
   };
 
   const handleReportDrop = (e) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActiveReports(false);
-    if (e.dataTransfer.files) {
-      addReports(e.dataTransfer.files);
+    if (e.dataTransfer.files) addReports(e.dataTransfer.files);
+  };
+
+  const analyzeImage = async (item) => {
+    if (!assessmentId) {
+      updateImage(item.id, {
+        status: 'FAILED',
+        uploadStatus: 'failed',
+        error: 'No assessment is active. Start a new assessment before uploading an X-ray.',
+      });
+      return;
+    }
+    if (processingImageIdsRef.current.has(item.id)) return;
+    processingImageIdsRef.current.add(item.id);
+    updateImage(item.id, {
+      status: 'UPLOADING',
+      uploadStatus: 'uploading',
+      error: null,
+      analysisMessage: 'Uploading image and running automatic image-type recognition...',
+    });
+
+    try {
+      const response = await uploadXray(assessmentId, item.file);
+      const responseStatus = normalizeStatus(response?.status);
+      const detection = response?.image_type_detection || response?.anatomy_detection || {};
+      const anatomyVerification = response?.image_anatomy_verification || {};
+      const detectionStatus = normalizeStatus(
+        response?.anatomy_verification_status || detection?.status || anatomyVerification?.status
+      );
+      const detectedRegion =
+        response?.detected_region ||
+        anatomyVerification?.detected_region ||
+        (detectionStatus === 'completed' ? detection?.body_part_label : null) ||
+        null;
+      const candidateRegion = detection?.candidate_body_part || response?.candidate_region || null;
+      const confidenceRaw = response?.body_part_confidence ?? detection?.body_part_confidence ?? anatomyVerification?.body_part_confidence;
+      const bodyPartConfidence = typeof confidenceRaw === 'number'
+        ? confidenceRaw
+        : Number.isFinite(Number(confidenceRaw)) && confidenceRaw !== null && confidenceRaw !== ''
+          ? Number(confidenceRaw)
+          : null;
+      const findings = getResponseFindings(response);
+      const prediction = typeof response?.prediction === 'string' ? response.prediction.trim() : '';
+      const hasUsableModelOutput = Boolean(prediction || findings.length > 0);
+      const isCompleted = responseStatus === 'completed' && hasUsableModelOutput;
+      const isSaved = Boolean(response?.xray_result_id) || ['completed', 'unavailable'].includes(responseStatus);
+      const message = response?.message || response?.diagnostic_message || detection?.message || anatomyVerification?.message || '';
+
+      updateImage(item.id, {
+        status: isCompleted ? 'COMPLETED' : 'ANALYSIS_UNAVAILABLE',
+        uploadStatus: isSaved ? 'uploaded' : 'failed',
+        analysisStatus: responseStatus || 'unknown',
+        analysisMessage: message || (isCompleted ? 'Image analysis completed.' : 'The backend did not return a usable image-analysis result.'),
+        error: isCompleted ? null : message || 'The image was received, but automated interpretation is unavailable for this image.',
+        detectedRegion: detectedRegion ? String(detectedRegion).toUpperCase() : null,
+        candidateRegion: candidateRegion ? String(candidateRegion).toUpperCase() : null,
+        bodyPartConfidence,
+        anatomyVerificationStatus: detectionStatus || 'unverified',
+        prediction: prediction || null,
+        findings,
+        modelVersion: response?.model_version || null,
+        resultId: response?.xray_result_id || null,
+        reportRegionVerification: response?.report_region_verification || null,
+        reasonCode: response?.reason_code || null,
+        uncertainty: response?.uncertainty || null,
+      });
+    } catch (err) {
+      updateImage(item.id, {
+        status: 'FAILED',
+        uploadStatus: 'failed',
+        error: err?.message || 'X-ray upload or analysis failed. Retry this image.',
+        analysisMessage: null,
+      });
+    } finally {
+      processingImageIdsRef.current.delete(item.id);
+    }
+  };
+
+  const extractReport = async (item) => {
+    if (!assessmentId) {
+      updateReport(item.id, {
+        status: 'FAILED',
+        uploadStatus: 'failed',
+        error: 'No assessment is active. Start a new assessment before uploading a report.',
+      });
+      return;
+    }
+    if (processingReportIdsRef.current.has(item.id)) return;
+    processingReportIdsRef.current.add(item.id);
+    updateReport(item.id, {
+      status: 'UPLOADING',
+      uploadStatus: 'uploading',
+      error: null,
+    });
+
+    try {
+      const response = await uploadReport(assessmentId, item.file, 'xray_report', null);
+      const rawStatus = normalizeStatus(response?.extraction_status || response?.status);
+      const extractedText = getResponseText(response);
+      const findings = getResponseFindings(response);
+      const verification = response?.region_verification || response?.ocr_metadata?.region_verification || null;
+      const reportRegion = verification?.report_region || response?.report_region || null;
+      const verificationStatus = String(verification?.status || '').toUpperCase();
+      const uploaded = response?.upload_status !== 'rejected' && response?.status !== 'failed';
+      const successfulStatus = ['successful', 'success', 'complete', 'completed', 'extracted'].includes(rawStatus) || response?.status === 'extracted';
+      const unreadable = ['unreadable', 'failed_to_read', 'no_text'].includes(rawStatus) || response?.status === 'unreadable';
+      const completed = successfulStatus || (uploaded && (Boolean(extractedText) || findings.length > 0) && !unreadable);
+      const status = completed ? 'COMPLETED' : unreadable ? 'UNREADABLE' : 'EXTRACTION_INCOMPLETE';
+      const mismatchMessage = verificationStatus === 'MISMATCH'
+        ? verification?.message || `The report identifies ${reportRegion || 'a region'} that conflicts with an X-ray image classification. Keep their findings separate until reviewed.`
+        : null;
+
+      updateReport(item.id, {
+        status,
+        uploadStatus: uploaded ? 'uploaded' : 'failed',
+        reportId: response?.report_id || response?.id || null,
+        extractionStatus: rawStatus || 'unknown',
+        extractedText,
+        extractedFindings: findings,
+        reportRegion,
+        regionVerificationStatus: verificationStatus || 'UNVERIFIED',
+        regionWarning: mismatchMessage,
+        error: completed ? null : response?.message || (unreadable ? 'The PDF text could not be read.' : 'The report uploaded, but extraction could not be confirmed.'),
+        extractionMessage: response?.message || (completed ? 'Radiology report extraction completed.' : ''),
+      });
+    } catch (err) {
+      updateReport(item.id, {
+        status: 'FAILED',
+        uploadStatus: 'failed',
+        error: err?.message || 'Radiology report upload or extraction failed. Retry this report.',
+      });
+    } finally {
+      processingReportIdsRef.current.delete(item.id);
+    }
+  };
+
+  const analyzeImagesSequentially = async (items) => {
+    // Keep inference requests sequential: the body-part classifier and regional
+    // checkpoints are large, so concurrent uploads can multiply memory use.
+    for (const item of items) {
+      await analyzeImage(item);
+    }
+  };
+
+  const extractReportsSequentially = async (items) => {
+    for (const item of items) {
+      await extractReport(item);
     }
   };
 
   const addImages = (fileList) => {
     if (!fileList || fileList.length === 0) return;
-
     const accepted = [];
     const rejected = [];
 
-    for (let i = 0; i < fileList.length; i++) {
+    for (let i = 0; i < fileList.length; i += 1) {
       const file = fileList[i];
       const ext = `.${(file.name.split('.').pop() || '').toLowerCase()}`;
       const validExtension = ALLOWED_IMAGE_EXTS.includes(ext);
       const validMime = ALLOWED_IMAGE_TYPES.includes((file.type || '').toLowerCase());
-
-      // Accept a known image extension when browsers provide an empty MIME type,
-      // but reject files whose extension and declared MIME type both look invalid.
       if (!validExtension || (file.type && !validMime)) {
         rejected.push(file.name);
         continue;
       }
-
       accepted.push({
-        id: `img-${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).substring(2, 9)}`,
+        id: `img-${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 9)}`,
         file,
         name: file.name,
         size: file.size,
@@ -475,53 +612,68 @@ export default function XrayUpload() {
         uploadStatus: 'pending',
         analysisStatus: null,
         analysisMessage: null,
-        submittedRegion: null,
+        detectedRegion: null,
+        candidateRegion: null,
+        bodyPartConfidence: null,
+        anatomyVerificationStatus: 'unverified',
+        prediction: null,
+        findings: [],
         error: null,
       });
     }
 
-    setXrayImages((previous) => {
-      const existingKeys = new Set(
-        previous.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`)
-      );
-      const additions = accepted.filter((item) => {
-        const key = `${item.file.name}|${item.file.size}|${item.file.lastModified}`;
-        if (existingKeys.has(key)) return false;
-        existingKeys.add(key);
-        return true;
-      });
-      return [...previous, ...additions];
+    const existingKeys = new Set(xrayImages.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`));
+    const additions = accepted.filter((item) => {
+      const key = `${item.file.name}|${item.file.size}|${item.file.lastModified}`;
+      if (existingKeys.has(key)) return false;
+      existingKeys.add(key);
+      return true;
     });
+
+    if (additions.length > 0) {
+      const queuedAdditions = additions.map((item) => ({
+        ...item,
+        status: 'UPLOADING',
+        uploadStatus: 'uploading',
+        analysisMessage: 'Queued for automatic image recognition and analysis...',
+      }));
+      setXrayImages((previous) => {
+        const latestKeys = new Set(previous.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`));
+        const safeAdditions = queuedAdditions.filter((item) => {
+          const key = `${item.file.name}|${item.file.size}|${item.file.lastModified}`;
+          if (latestKeys.has(key)) return false;
+          latestKeys.add(key);
+          return true;
+        });
+        return [...previous, ...safeAdditions];
+      });
+      setError('');
+      setInfo('Image selected. Automatic image-type recognition and X-ray analysis are starting now.');
+      // Run analysis immediately and sequentially; do not wait for Continue.
+      void analyzeImagesSequentially(queuedAdditions);
+    }
 
     if (rejected.length > 0) {
       setError(`Skipped unsupported image file(s): ${rejected.join(', ')}. Please use PNG, JPG, or JPEG images.`);
-    } else {
-      setError('');
     }
   };
 
   const addReports = (fileList) => {
     if (!fileList || fileList.length === 0) return;
-
     const accepted = [];
     const rejected = [];
 
-    for (let i = 0; i < fileList.length; i++) {
+    for (let i = 0; i < fileList.length; i += 1) {
       const file = fileList[i];
       const ext = `.${(file.name.split('.').pop() || '').toLowerCase()}`;
       const validExtension = ext === '.pdf';
       const validMime = !file.type || file.type.toLowerCase() === 'application/pdf';
-
       if (!validExtension || !validMime) {
         rejected.push(`${file.name} (not a PDF)`);
         continue;
       }
-
-      // Filename keywords are not reliable proof of document content.
-      // Let report processing classify the actual document rather than blocking
-      // a valid radiology PDF because its filename happens to contain "CBC", etc.
       accepted.push({
-        id: `rep-${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).substring(2, 9)}`,
+        id: `rep-${file.name}-${file.size}-${file.lastModified}-${Math.random().toString(36).slice(2, 9)}`,
         file,
         name: file.name,
         size: file.size,
@@ -529,27 +681,47 @@ export default function XrayUpload() {
         status: 'READY',
         uploadStatus: 'pending',
         extractionStatus: null,
+        extractedText: '',
+        extractedFindings: [],
+        reportRegion: null,
+        regionVerificationStatus: 'UNVERIFIED',
+        regionWarning: null,
         error: null,
       });
     }
 
-    setXrayReports((previous) => {
-      const existingKeys = new Set(
-        previous.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`)
-      );
-      const additions = accepted.filter((item) => {
-        const key = `${item.file.name}|${item.file.size}|${item.file.lastModified}`;
-        if (existingKeys.has(key)) return false;
-        existingKeys.add(key);
-        return true;
-      });
-      return [...previous, ...additions];
+    const existingKeys = new Set(xrayReports.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`));
+    const additions = accepted.filter((item) => {
+      const key = `${item.file.name}|${item.file.size}|${item.file.lastModified}`;
+      if (existingKeys.has(key)) return false;
+      existingKeys.add(key);
+      return true;
     });
+
+    if (additions.length > 0) {
+      const queuedAdditions = additions.map((item) => ({
+        ...item,
+        status: 'UPLOADING',
+        uploadStatus: 'uploading',
+      }));
+      setXrayReports((previous) => {
+        const latestKeys = new Set(previous.map((item) => `${item.file.name}|${item.file.size}|${item.file.lastModified}`));
+        const safeAdditions = queuedAdditions.filter((item) => {
+          const key = `${item.file.name}|${item.file.size}|${item.file.lastModified}`;
+          if (latestKeys.has(key)) return false;
+          latestKeys.add(key);
+          return true;
+        });
+        return [...previous, ...safeAdditions];
+      });
+      setError('');
+      setInfo('Radiology report selected. Upload and text extraction are starting now.');
+      // Extract reports sequentially so status and resource use remain predictable.
+      void extractReportsSequentially(queuedAdditions);
+    }
 
     if (rejected.length > 0) {
       setError(`Skipped unsupported report file(s): ${rejected.join(', ')}. Please use PDF radiology reports.`);
-    } else {
-      setError('');
     }
   };
 
@@ -583,334 +755,212 @@ export default function XrayUpload() {
     setPreviewState(null);
   };
 
-  const handleRemoveImage = (idToRemove) => {
-    if (previewState && previewState.id === idToRemove) {
-      handleClosePreview();
+  const handleRemoveImage = async (idToRemove) => {
+    const existing = xrayImages.find((item) => item.id === idToRemove);
+    if (!existing) return;
+    if (existing.status === 'UPLOADING' || existing.status === 'DELETING' || deletingImageIds.has(idToRemove)) {
+      return;
     }
-    setXrayImages((prev) => prev.filter((item) => item.id !== idToRemove));
+
+    // Files not yet persisted can be removed locally without a backend request.
+    if (existing.uploadStatus !== 'uploaded') {
+      if (previewState?.id === idToRemove) handleClosePreview();
+      setXrayImages((previous) => previous.filter((item) => item.id !== idToRemove));
+      setError('');
+      return;
+    }
+
+    // Uploaded images must be removed from the database and storage, not just hidden.
+    if (!assessmentId || !existing.resultId) {
+      setError(
+        'This image is saved on the server, but its result ID is missing. It cannot be safely removed from this screen. Refresh the assessment or contact support; do not hide the result locally.'
+      );
+      return;
+    }
+
+    setError('');
+    setDeletingImageIds((previous) => new Set(previous).add(idToRemove));
+    setXrayImages((previous) => previous.map((item) => (
+      item.id === idToRemove ? { ...item, status: 'DELETING', error: null } : item
+    )));
+
+    try {
+      const response = await deleteXray(assessmentId, existing.resultId);
+      if (normalizeStatus(response?.status) !== 'deleted') {
+        throw new Error(response?.message || 'The backend did not confirm deletion of this X-ray result.');
+      }
+
+      if (previewState?.id === idToRemove) handleClosePreview();
+      setXrayImages((previous) => previous.filter((item) => item.id !== idToRemove));
+      setInfo(response?.message || 'X-ray image and saved result removed from this assessment.');
+    } catch (err) {
+      setXrayImages((previous) => previous.map((item) => (
+        item.id === idToRemove
+          ? {
+              ...item,
+              status: existing.status === 'DELETING' ? 'ANALYSIS_UNAVAILABLE' : existing.status,
+              uploadStatus: 'uploaded',
+              error: err?.message || 'The saved X-ray could not be removed. Please retry.',
+            }
+          : item
+      )));
+      setError(err?.message || 'The saved X-ray could not be removed. The image remains in this assessment.');
+    } finally {
+      setDeletingImageIds((previous) => {
+        const next = new Set(previous);
+        next.delete(idToRemove);
+        return next;
+      });
+    }
   };
 
-  const handleRemoveReport = (idToRemove) => {
-    if (previewState && previewState.id === idToRemove) {
-      handleClosePreview();
+  const handleRemoveReport = async (idToRemove) => {
+    const existing = xrayReports.find((item) => item.id === idToRemove);
+    if (!existing) return;
+    if (
+      existing.status === 'UPLOADING' ||
+      existing.status === 'DELETING' ||
+      deletingReportIds.has(idToRemove)
+    ) return;
+
+    // A report that has not been saved can be removed from the local queue.
+    if (existing.uploadStatus !== 'uploaded') {
+      if (previewState?.id === idToRemove) handleClosePreview();
+      setXrayReports((previous) => previous.filter((item) => item.id !== idToRemove));
+      setError('');
+      return;
     }
-    setXrayReports((prev) => prev.filter((item) => item.id !== idToRemove));
+
+    // Do not hide a persisted report if its backend identifier is missing.
+    if (!assessmentId || !existing.reportId) {
+      setError(
+        'This radiology report is saved, but its report ID is missing. It cannot be safely removed. Refresh the assessment and try again.'
+      );
+      return;
+    }
+
+    setError('');
+    setDeletingReportIds((previous) => new Set(previous).add(idToRemove));
+    updateReport(idToRemove, { status: 'DELETING', error: null });
+
+    try {
+      const response = await deleteReport(assessmentId, existing.reportId);
+      if (normalizeStatus(response?.status) !== 'deleted') {
+        throw new Error(response?.message || 'The backend did not confirm deletion of this radiology report.');
+      }
+
+      if (previewState?.id === idToRemove) handleClosePreview();
+      setXrayReports((previous) => previous.filter((item) => item.id !== idToRemove));
+      setInfo(response?.message || 'Radiology report and its saved findings were removed from this assessment.');
+    } catch (err) {
+      setXrayReports((previous) => previous.map((item) => (
+        item.id === idToRemove
+          ? {
+              ...item,
+              status: existing.status,
+              uploadStatus: 'uploaded',
+              error: err?.message || 'The saved radiology report could not be removed. Please retry.',
+            }
+          : item
+      )));
+      setError(err?.message || 'The saved radiology report could not be removed. It remains in this assessment.');
+    } finally {
+      setDeletingReportIds((previous) => {
+        const next = new Set(previous);
+        next.delete(idToRemove);
+        return next;
+      });
+    }
   };
 
-  const formatFileSize = (bytes) => {
-    if (!bytes) return '';
-    const kb = bytes / 1024;
-    if (kb < 1024) return `${kb.toFixed(1)} KB`;
-    return `${(kb / 1024).toFixed(1)} MB`;
+  const retryImage = (item) => {
+    if (item.uploadStatus === 'uploaded') return;
+    void analyzeImage(item);
+  };
+
+  const retryReport = (item) => {
+    if (item.uploadStatus === 'uploaded') return;
+    void extractReport(item);
   };
 
   const onContinue = async () => {
     setError('');
     setInfo('');
-    setRegionMismatchMessage('');
-    setRegionStatusMessage('');
 
     if (!assessmentId) {
       setError('No assessment is in progress. Start a new assessment first.');
       return;
     }
-
-    // Goal 1: either source is valid on its own. A radiology PDF is optional.
-    if (xrayImages.length === 0 && xrayReports.length === 0) {
+    if (!hasAnySelectedInput) {
       setError('Upload an X-ray image, a radiology report PDF, or both to continue.');
       return;
     }
-    if (xrayImages.length > 0 && !region.trim()) {
-      setError('Please select the anatomical region for the X-ray image(s).');
+    if (isProcessingFiles || submitting) {
+      setError('Please wait until image analysis and report extraction finish.');
       return;
     }
 
-    if (filenameRegionMismatches.length > 0) {
-      const { item, filenameRegion } = filenameRegionMismatches[0];
-      setRegionMismatchMessage(
-        `Possible region mismatch: the selected region is "${region}", but the filename "${item.name}" suggests "${filenameRegion}". Change the selected region or upload the correct image. This preliminary check uses the filename only; it does not verify anatomy from image pixels.`
+    const usableImage = xrayImages.some((item) => item.uploadStatus === 'uploaded');
+    const usableReport = xrayReports.some((item) => item.uploadStatus === 'uploaded' && item.status === 'COMPLETED');
+
+    if (!usableImage && !usableReport) {
+      const failedImage = xrayImages.some((item) => item.status === 'FAILED');
+      const failedReport = xrayReports.some((item) => item.status === 'FAILED' || item.status === 'UNREADABLE' || item.status === 'EXTRACTION_INCOMPLETE');
+      setError(
+        failedImage || failedReport
+          ? 'No usable X-ray image or extracted radiology report is available. Retry a failed input or select a readable file.'
+          : 'Wait for at least one image analysis or report extraction to complete before continuing.'
       );
       return;
     }
 
     setSubmitting(true);
-    let uploadFailed = false;
-    let regionMismatchDetected = false;
-    let unavailableImageAnalyses = 0;
-    let incompleteReports = 0;
-    let unreadableReports = 0;
-    let successfullyExtractedReports = 0;
-    let inlineMismatch = '';
-    let inlineRegionNotice = '';
-
-    const selectedRegionKey = normalizeRegionForComparison(region);
-
-    // Upload optional radiology reports first, when the user supplied any.
-    // The backend compares the explicitly extracted report region with the
-    // selected region when an image is part of this assessment.
-    const updatedReports = xrayReports.map((item) => ({ ...item }));
-    for (let i = 0; i < updatedReports.length; i++) {
-      const item = updatedReports[i];
-
-      if (item.uploadStatus === 'uploaded') {
-        const existingRegion = normalizeRegionForComparison(item.reportRegion);
-        if (xrayImages.length > 0 && existingRegion && selectedRegionKey && existingRegion !== selectedRegionKey) {
-          regionMismatchDetected = true;
-          inlineMismatch = `Region mismatch: the selected X-ray region is "${region}", but this report identifies "${item.reportRegion}". Correct the region or report before continuing.`;
-          item.status = 'REGION_MISMATCH';
-          item.error = inlineMismatch;
-          break;
-        }
-        if (item.status === 'COMPLETED') successfullyExtractedReports += 1;
-        else if (item.status === 'EXTRACTION_INCOMPLETE') incompleteReports += 1;
-        else if (item.status === 'UNREADABLE') unreadableReports += 1;
-        continue;
-      }
-
-      item.status = 'UPLOADING';
-      item.error = null;
-      setXrayReports([...updatedReports]);
-
-      try {
-        const response = await uploadReport(
-          assessmentId,
-          item.file,
-          'xray_report',
-          xrayImages.length > 0 ? region : null
-        );
-        const verification = response?.region_verification || response?.ocr_metadata?.region_verification || null;
-        const reportRegion = verification?.report_region || response?.report_region || null;
-        const verificationStatus = String(verification?.status || '').toUpperCase();
-
-        item.reportRegion = reportRegion;
-        item.regionVerificationStatus = verificationStatus || 'UNVERIFIED';
-        item.extractionStatus = response?.extraction_status || response?.status || 'unknown';
-
-        if (response?.status === 'region_mismatch' || verificationStatus === 'MISMATCH') {
-          regionMismatchDetected = true;
-          item.uploadStatus = response?.upload_status === 'rejected' ? 'failed' : 'uploaded';
-          item.status = 'REGION_MISMATCH';
-          item.error = verification?.message || response?.message || `The report region (${reportRegion || 'unknown'}) does not match the selected region (${region}).`;
-          inlineMismatch = item.error;
-          setXrayReports([...updatedReports]);
-          break;
-        }
-
-        // Fail closed on any explicit backend mismatch. A report with no
-        // confidently extractable region is unverified, not automatically a match.
-        if (xrayImages.length > 0 && reportRegion && selectedRegionKey &&
-            normalizeRegionForComparison(reportRegion) !== selectedRegionKey) {
-          regionMismatchDetected = true;
-          item.uploadStatus = response?.upload_status === 'rejected' ? 'failed' : 'uploaded';
-          item.status = 'REGION_MISMATCH';
-          item.error = `Region mismatch: selected region is "${region}", but the report says "${reportRegion}".`;
-          inlineMismatch = item.error;
-          setXrayReports([...updatedReports]);
-          break;
-        }
-
-        // A 200 response alone is not proof that OCR/extraction succeeded.
-        if (item.extractionStatus === 'successful' || response?.status === 'extracted') {
-          item.uploadStatus = response?.upload_status === 'rejected' ? 'failed' : 'uploaded';
-          item.status = 'COMPLETED';
-          item.error = null;
-          successfullyExtractedReports += 1;
-        } else if (item.extractionStatus === 'incomplete' || response?.status === 'extraction_incomplete') {
-          item.uploadStatus = 'uploaded';
-          item.status = 'EXTRACTION_INCOMPLETE';
-          item.error = response?.message || 'Text was extracted, but structured findings may be incomplete.';
-          incompleteReports += 1;
-        } else if (item.extractionStatus === 'unreadable' || response?.status === 'unreadable') {
-          item.uploadStatus = 'uploaded';
-          item.status = 'UNREADABLE';
-          item.error = response?.message || 'The report was uploaded but its text could not be read.';
-          unreadableReports += 1;
-        } else {
-          item.uploadStatus = response?.upload_status === 'rejected' ? 'failed' : 'uploaded';
-          item.status = 'EXTRACTION_INCOMPLETE';
-          item.error = response?.message || 'The report was uploaded, but extraction status was not confirmed.';
-          incompleteReports += 1;
-        }
-
-        if (xrayImages.length > 0 && verificationStatus === 'UNVERIFIED') {
-          inlineRegionNotice = verification?.message || 'The backend could not confidently identify the region in this report. The region has not been marked as verified.';
-        }
-      } catch (err) {
-        uploadFailed = true;
-        item.status = 'FAILED';
-        item.uploadStatus = 'failed';
-        item.error = err?.message || 'Radiology report upload failed.';
-      }
-      setXrayReports([...updatedReports]);
+    const warnings = [];
+    if (xrayImages.some((item) => item.uploadStatus === 'uploaded' && item.status === 'ANALYSIS_UNAVAILABLE')) {
+      warnings.push('one or more images were uploaded but did not produce a usable model result');
+    }
+    if (xrayImages.some((item) => item.status === 'FAILED')) warnings.push('some image uploads failed and were excluded');
+    if (xrayReports.some((item) => item.status === 'EXTRACTION_INCOMPLETE')) warnings.push('some reports had incomplete structured extraction');
+    if (xrayReports.some((item) => item.status === 'UNREADABLE')) warnings.push('some reports could not be read');
+    if (xrayReports.some((item) => item.status === 'FAILED')) warnings.push('some reports failed to upload and were excluded');
+    if (xrayReports.some((item) => item.regionVerificationStatus === 'MISMATCH' || item.regionWarning)) {
+      warnings.push('a report/image type conflict was identified; conflicting findings must remain separate during assessment');
     }
 
-    setXrayReports([...updatedReports]);
-    if (regionMismatchDetected) {
-      setSubmitting(false);
-      setRegionMismatchMessage(inlineMismatch || 'The backend detected a region mismatch. Correct the selected region or radiology report before continuing.');
-      return;
-    }
-    if (uploadFailed) {
-      setSubmitting(false);
-      setError('A selected radiology report failed to upload. Retry it or remove it, then continue with the remaining valid input.');
-      return;
-    }
+    if (warnings.length > 0) setInfo(`${warnings.join('; ')}. These limitations should remain visible in the final assessment.`);
+    else setInfo('Available X-ray image analysis and radiology report extraction completed. Continuing to combined assessment.');
 
-    // A report-only assessment is permitted. At least one PDF must have yielded
-    // usable extracted text/findings if no image is present.
-    if (xrayImages.length === 0) {
-      setSubmitting(false);
-      if (successfullyExtractedReports === 0) {
-        setError('No usable radiology-report extraction is available. Upload a readable PDF or add an X-ray image to continue.');
-        return;
-      }
-
-      const reportNotices = [];
-      if (incompleteReports > 0) reportNotices.push(`${incompleteReports} report(s) had incomplete structured extraction`);
-      if (unreadableReports > 0) reportNotices.push(`${unreadableReports} report(s) could not be read`);
-      setInfo(reportNotices.length ? `${reportNotices.join('; ')}. The successfully extracted report(s) will be included in the assessment.` : 'Radiology report extraction completed.');
-      navigate('/assessment/processing');
-      return;
-    }
-
-    // Image-only is allowed. The backend currently routes by the selected region;
-    // without a dedicated anatomy classifier, it cannot prove anatomy from pixels.
-    const updatedImages = xrayImages.map((item) => ({ ...item }));
-    for (let i = 0; i < updatedImages.length; i++) {
-      const item = updatedImages[i];
-      if (item.uploadStatus === 'uploaded') {
-        const previousRegion = normalizeRegionForComparison(item.submittedRegion);
-        if (previousRegion && previousRegion !== selectedRegionKey) {
-          regionMismatchDetected = true;
-          inlineMismatch = `This image was previously submitted for "${item.submittedRegion}". Start a new assessment to use a different region.`;
-          item.status = 'REGION_MISMATCH';
-          item.error = inlineMismatch;
-          break;
-        }
-        if (item.status === 'REGION_MISMATCH') {
-          regionMismatchDetected = true;
-          inlineMismatch = item.error || 'The backend previously detected a region mismatch for this image.';
-          break;
-        }
-        if (item.status === 'ANALYSIS_UNAVAILABLE') unavailableImageAnalyses += 1;
-        continue;
-      }
-
-      item.status = 'UPLOADING';
-      item.error = null;
-      setXrayImages([...updatedImages]);
-      try {
-        const response = await uploadXray(assessmentId, item.file, region);
-        const responseRegion = normalizeRegionForComparison(response?.region);
-        const responseStatus = String(response?.status || '').trim().toLowerCase();
-        const hasPrediction = typeof response?.prediction === 'string' && response.prediction.trim().length > 0;
-        const hasFindings = Array.isArray(response?.findings) && response.findings.length > 0;
-        const imageVerification = response?.image_anatomy_verification || null;
-
-        item.uploadStatus = 'uploaded';
-        item.submittedRegion = region;
-        item.analysisStatus = responseStatus || 'unknown';
-        item.analysisMessage = response?.message || response?.diagnostic_message || null;
-        item.imageAnatomyVerificationStatus = String(imageVerification?.status || 'UNVERIFIED').toUpperCase();
-
-        if (imageVerification?.status && String(imageVerification.status).toUpperCase() === 'MISMATCH') {
-          regionMismatchDetected = true;
-          inlineMismatch = imageVerification.message || `The backend detected that the image anatomy does not match selected region "${region}".`;
-          item.status = 'REGION_MISMATCH';
-          item.error = inlineMismatch;
-        } else if (responseRegion && selectedRegionKey && responseRegion !== selectedRegionKey) {
-          regionMismatchDetected = true;
-          inlineMismatch = `The backend returned region "${response.region}", which differs from selected region "${region}".`;
-          item.status = 'REGION_MISMATCH';
-          item.error = inlineMismatch;
-        } else if (responseStatus === 'completed' && (hasPrediction || hasFindings)) {
-          item.status = 'COMPLETED';
-          item.error = null;
-          if (!imageVerification || String(imageVerification.status).toUpperCase() !== 'MATCH') {
-            inlineRegionNotice = imageVerification?.message || 'The backend processed this image using the selected region, but the image anatomy is not independently verified by the currently configured model.';
-          }
-        } else {
-          item.status = 'ANALYSIS_UNAVAILABLE';
-          item.error = item.analysisMessage || 'Image uploaded, but a usable model result was not returned.';
-          unavailableImageAnalyses += 1;
-          inlineRegionNotice = imageVerification?.message || 'Image anatomy could not be independently verified by the currently configured backend model.';
-        }
-      } catch (err) {
-        uploadFailed = true;
-        item.status = 'FAILED';
-        item.uploadStatus = 'failed';
-        item.error = err?.message || 'X-ray upload or inference request failed.';
-      }
-      setXrayImages([...updatedImages]);
-      if (regionMismatchDetected || uploadFailed) break;
-    }
-
-    setXrayImages([...updatedImages]);
-    setSubmitting(false);
-
-    if (regionMismatchDetected) {
-      setRegionMismatchMessage(inlineMismatch || 'The backend detected a region mismatch. Correct the image, selected region, or report before continuing.');
-      return;
-    }
-    if (uploadFailed) {
-      setError('An X-ray image failed to upload or process. Retry the failed item before continuing.');
-      return;
-    }
-
-    if (xrayReports.length === 0) {
-      inlineRegionNotice = inlineRegionNotice || 'No radiology report was supplied. The selected region is used for model routing; the current backend cannot independently verify image anatomy from pixels.';
-    }
-    if (inlineRegionNotice) setRegionStatusMessage(inlineRegionNotice);
-
-    const notices = [];
-    if (unavailableImageAnalyses > 0) notices.push(`${unavailableImageAnalyses} image(s) did not produce a usable model result`);
-    if (incompleteReports > 0) notices.push(`${incompleteReports} report(s) had incomplete structured extraction`);
-    if (unreadableReports > 0) notices.push(`${unreadableReports} report(s) could not be read`);
-    if (inlineRegionNotice) notices.push('image anatomy verification remains unavailable');
-
-    if (notices.length > 0) {
-      setInfo(`${notices.join('; ')}. These limitations should remain visible in the final assessment.`);
-    } else if (xrayReports.length > 0) {
-      setInfo('X-ray processing and the supplied radiology report processing completed. Review the source-specific findings in the assessment results.');
-    } else {
-      setInfo('X-ray processing completed. Review the available image findings and region-verification limitation in the assessment results.');
-    }
+    // The backend has already saved image results and uploaded/extracted reports.
+    // Assessment processing is responsible for combining the persisted evidence.
     navigate('/assessment/processing');
   };
 
   return (
     <div className="assessment-workflow-page">
-      {/* 3D Radiology Background Elements */}
       <NeuralNetworkCanvas />
       <ThoracicRibcageVisual />
       <RadiologyFilmScreenVisual />
       <FloatingXrayObjects />
 
-      {/* Central Floating 3D Glass Content Panel */}
-      <section className="assessment-glass-panel panel-narrow" aria-label="X-Ray & Radiology Evidence Panel">
-        {/* Top Badge */}
+      <section className="assessment-glass-panel panel-narrow" aria-label="X-Ray and radiology evidence panel">
         <div className="na-top-badge">
           <span className="na-top-badge-pulse" />
           <SparkleIcon size={14} color="#0284c7" />
-          <span>Radiological Vision &amp; Report Analysis · Step 2</span>
+          <span>Automatic X-Ray &amp; Radiology Analysis · Goal 1</span>
         </div>
 
-        {/* Title & Description */}
         <div className="na-header-section">
           <h1 className="na-title">
             X-Ray &amp; Radiology <span className="na-title-highlight">Evidence</span>
           </h1>
           <p className="na-description">
-            Upload an X-ray image, a radiology report PDF, or both. A PDF is optional. Select a region when uploading images; the backend checks any identifiable report-region conflict.
+            Upload an X-ray image to automatically identify its supported image type and show available model findings. After image analysis finishes, you can optionally add a radiology report PDF. A report can also be processed on its own.
           </p>
         </div>
 
-        {/* Progress Indicator 1 — 2 — 3 — 4 */}
-        <div className="na-progress-bar" aria-label="Assessment Progress">
+        <div className="na-progress-bar" aria-label="Assessment progress">
           <div className="na-progress-step completed">
-            <span className="na-progress-number">
-              <CheckIcon size={13} color="#ffffff" />
-            </span>
+            <span className="na-progress-number"><CheckIcon size={13} color="#ffffff" /></span>
             <span>Input</span>
           </div>
           <div className="na-progress-line completed" />
@@ -921,7 +971,7 @@ export default function XrayUpload() {
           <div className="na-progress-line" />
           <div className="na-progress-step">
             <span className="na-progress-number">3</span>
-            <span>Analysis</span>
+            <span>Combine</span>
           </div>
           <div className="na-progress-line" />
           <div className="na-progress-step">
@@ -937,51 +987,25 @@ export default function XrayUpload() {
         ) : null}
 
         {info ? (
-          <div className="info-banner" style={{ width: '100%', marginBottom: '1rem' }}>
+          <div className="info-banner" style={{ width: '100%', marginBottom: '1rem' }} role="status">
             {info}
           </div>
         ) : null}
 
-        {/* 1. Dynamic, Searchable Anatomical Region & X-Ray Type Selector */}
-        <XrayRegionSelector
-          selectedRegion={region}
-          onSelectRegion={(newRegion) => {
-            const hasSavedImage = xrayImages.some((item) => item.uploadStatus === 'uploaded');
-            const hasRegionBoundReport = xrayReports.some((item) => item.uploadStatus === 'uploaded' && item.reportRegion);
-            if (
-              (hasSavedImage || hasRegionBoundReport) &&
-              normalizeRegionForComparison(newRegion) !== normalizeRegionForComparison(region)
-            ) {
-              setError('The region cannot be changed after a related image or region-checked report has been saved to this assessment. Start a new assessment to avoid mixing regions.');
-              return;
-            }
-            setRegion(newRegion);
-            setRegionMismatchMessage('');
-            setRegionStatusMessage('');
-            if (error) setError('');
-          }}
-          required={xrayImages.length > 0}
-        />
-        {xrayReports.length > 0 && xrayImages.length === 0 ? (
-          <p className="upload-hint-text" role="note">
-            The full X-Ray workflow requires both a selected anatomical region and an image. Upload radiology report(s) for the same examination/region; reports are extracted before image inference is requested.
-          </p>
-        ) : null}
-
-
-        {/* 2. X-RAY IMAGES SECTION */}
+        {/* Stage 1: image upload and immediate automatic analysis */}
         <div className="section-divider-title">
-          <h3>X-Ray Images</h3>
+          <h3>1. X-Ray Images</h3>
           <button
             type="button"
             className="section-upload-btn"
             onClick={() => imageInputRef.current?.click()}
+            disabled={isProcessingFiles || submitting}
           >
             + Upload X-Ray Image
           </button>
         </div>
         <p className="upload-hint-text" style={{ textAlign: 'left', margin: '0 0 0.5rem 0' }}>
-          Optional input: PNG, JPG, JPEG. Select the body region shown. All images in one batch must use the same selected region. The backend may flag a mismatch when it can identify a conflicting report region.
+          Accepted: PNG, JPG, JPEG. No body-region selection is required. Each image is uploaded and analyzed automatically after selection.
         </p>
 
         <input
@@ -997,7 +1021,6 @@ export default function XrayUpload() {
           aria-hidden="true"
         />
 
-        {/* X-Ray Image Upload Dropzone (Always Visible) */}
         <div
           className={`assessment-upload-dropzone ${dragActiveImages ? 'drag-active' : ''}`}
           style={{ padding: '1.25rem 1rem', minHeight: '90px', marginBottom: xrayImages.length > 0 ? '0.75rem' : '1.25rem' }}
@@ -1005,12 +1028,12 @@ export default function XrayUpload() {
           onDragLeave={handleImageDrag}
           onDragOver={handleImageDrag}
           onDrop={handleImageDrop}
-          onClick={() => imageInputRef.current?.click()}
+          onClick={() => !isProcessingFiles && imageInputRef.current?.click()}
           role="button"
           tabIndex={0}
           aria-label="Upload X-ray images"
           onKeyDown={(e) => {
-            if (e.key === ' ' || e.key === 'Enter') {
+            if ((e.key === ' ' || e.key === 'Enter') && !isProcessingFiles) {
               e.preventDefault();
               imageInputRef.current?.click();
             }
@@ -1021,205 +1044,246 @@ export default function XrayUpload() {
           </p>
         </div>
 
-        {/* Selected Images List */}
         {xrayImages.length > 0 ? (
           <div className="file-list-container" style={{ marginBottom: '1.25rem' }}>
             <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#475569' }}>
               Selected Images ({xrayImages.length}):
             </span>
-            {xrayImages.map((img) => (
-              <div key={img.id} className="file-card-item">
-                <div className="file-card-left">
-                  <div className="file-card-icon-badge badge-img">IMG</div>
-                  <div className="file-card-info">
-                    <span className="file-card-name" title={img.name}>
-                      ✓ {img.name}
-                    </span>
-                    <span className="file-card-meta">
-                      {formatFileSize(img.size)} ·{' '}
-                      {(() => {
-                        const statusView = getImageStatusPresentation(img);
-                        return <span className={statusView.className}>{statusView.label}</span>;
-                      })()}
-                    </span>
+            {xrayImages.map((img) => {
+              const statusView = getImageStatusPresentation(img);
+              return (
+                <div key={img.id} className="file-card-item" style={{ display: 'block' }}>
+                  <div className="file-card-left" style={{ display: 'flex', alignItems: 'center', gap: '0.7rem' }}>
+                    <div className="file-card-icon-badge badge-img">IMG</div>
+                    <div className="file-card-info" style={{ flex: 1, minWidth: 0 }}>
+                      <span className="file-card-name" title={img.name}>{img.name}</span>
+                      <span className="file-card-meta">
+                        {formatFileSize(img.size)} · <span className={statusView.className}>{statusView.label}</span>
+                      </span>
+                    </div>
+                    <div className="file-card-actions">
+                      <button type="button" className="btn-card-view" onClick={() => handleOpenPreview(img)} aria-label={`View ${img.name}`}>
+                        View
+                      </button>
+                      {(img.status === 'FAILED') ? (
+                        <button type="button" className="btn-card-view" onClick={() => retryImage(img)} disabled={isProcessingFiles || submitting}>
+                          Retry
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        className="btn-card-remove"
+                        onClick={() => handleRemoveImage(img.id)}
+                        disabled={submitting || img.status === 'UPLOADING' || img.status === 'DELETING' || deletingImageIds.has(img.id)}
+                        title={img.uploadStatus === 'uploaded' ? 'Delete this image and its saved result from the assessment.' : 'Remove selected image'}
+                        aria-label={`Remove ${img.name}`}
+                      >
+                        {deletingImageIds.has(img.id) ? 'Removing...' : 'Remove'}
+                      </button>
+                    </div>
                   </div>
-                </div>
 
-                <div className="file-card-actions">
-                  <button
-                    type="button"
-                    className="btn-card-view"
-                    onClick={() => handleOpenPreview(img)}
-                    aria-label={`View ${img.name}`}
-                  >
-                    View
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-card-remove"
-                    onClick={() => handleRemoveImage(img.id)}
-                    disabled={submitting || img.uploadStatus === 'uploaded'}
-                    title={img.uploadStatus === 'uploaded' ? 'This file is already saved to the server; start a new assessment to replace it.' : 'Remove selected image'}
-                    aria-label={`Remove ${img.name}`}
-                  >
-                    Remove
-                  </button>
+                  {(img.status === 'UPLOADING' || img.analysisMessage || img.error) ? (
+                    <div style={{ margin: '0.65rem 0 0 2.8rem', fontSize: '0.83rem', color: img.status === 'FAILED' || img.status === 'ANALYSIS_UNAVAILABLE' ? '#92400e' : '#475569' }}>
+                      {img.analysisMessage || img.error}
+                    </div>
+                  ) : null}
+
+                  {(img.detectedRegion || img.candidateRegion || img.prediction || img.findings?.length > 0) ? (
+                    <div style={{ margin: '0.75rem 0 0 2.8rem', padding: '0.75rem', borderRadius: '10px', border: '1px solid #dbeafe', background: '#f8fbff' }}>
+                      <div style={{ fontWeight: 700, color: '#075985', marginBottom: '0.4rem' }}>Automatic image-analysis feedback</div>
+                      {img.detectedRegion ? (
+                        <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
+                          <strong>Detected image type:</strong> {img.detectedRegion.replace(/_/g, ' ')}
+                        </p>
+                      ) : img.candidateRegion ? (
+                        <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
+                          <strong>Unverified candidate:</strong> {img.candidateRegion.replace(/_/g, ' ')}
+                        </p>
+                      ) : null}
+                      {typeof img.bodyPartConfidence === 'number' ? (
+                        <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
+                          <strong>Classifier confidence:</strong> {(img.bodyPartConfidence * 100).toFixed(1)}% <span style={{ color: '#64748b' }}>(not a calibrated clinical probability)</span>
+                        </p>
+                      ) : null}
+                      {img.prediction ? (
+                        <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}><strong>Model output:</strong> {img.prediction}</p>
+                      ) : null}
+                      {Array.isArray(img.findings) && img.findings.length > 0 ? (
+                        <div style={{ marginTop: '0.4rem' }}>
+                          <strong style={{ fontSize: '0.85rem' }}>Available model findings:</strong>
+                          <ul style={{ margin: '0.3rem 0 0 1.1rem', padding: 0, fontSize: '0.84rem' }}>
+                            {img.findings.slice(0, 8).map((finding, index) => (
+                              <li key={`${img.id}-finding-${index}`}>{prettyFinding(finding, index)}</li>
+                            ))}
+                          </ul>
+                          {img.findings.length > 8 ? <p style={{ margin: '0.25rem 0', fontSize: '0.8rem', color: '#64748b' }}>Showing 8 of {img.findings.length} findings.</p> : null}
+                        </div>
+                      ) : null}
+                      {img.uncertainty ? <p style={{ margin: '0.4rem 0 0', fontSize: '0.83rem' }}><strong>Limitation:</strong> {img.uncertainty}</p> : null}
+                      {img.modelVersion ? <p style={{ margin: '0.3rem 0 0', fontSize: '0.78rem', color: '#64748b' }}>Model version: {img.modelVersion}</p> : null}
+                    </div>
+                  ) : null}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : null}
 
-        {regionMismatchMessage ? (
-          <p role="alert" style={{ margin: '-0.25rem 0 1rem', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '0.55rem 0.7rem', fontSize: '0.82rem' }}>
-            {regionMismatchMessage}
-          </p>
-        ) : filenameRegionMismatches.length > 0 ? (
-          <p role="alert" style={{ margin: '-0.25rem 0 1rem', color: '#b91c1c', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', padding: '0.55rem 0.7rem', fontSize: '0.82rem' }}>
-            Possible region mismatch: selected region is <strong>{region}</strong>, but <strong>{filenameRegionMismatches[0].item.name}</strong> suggests <strong>{filenameRegionMismatches[0].filenameRegion}</strong>. Change the selected region or upload the correct image. Continue is disabled until this conflict is resolved.
-          </p>
-        ) : null}
-        {xrayImages.length > 0 && xrayReports.length === 0 && !hasRegionMismatch ? (
-          <p role="note" style={{ margin: '-0.25rem 0 1rem', color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '0.55rem 0.7rem', fontSize: '0.82rem' }}>
-            Image-only mode is allowed. The selected region is used for model routing, but the current backend does not independently verify the anatomy in the image pixels.
-          </p>
-        ) : null}
-        {regionStatusMessage ? (
-          <p role="status" style={{ margin: '-0.25rem 0 1rem', color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '0.55rem 0.7rem', fontSize: '0.82rem' }}>
-            {regionStatusMessage}
+        {!hasImageStageSettled && xrayImages.length > 0 ? (
+          <p role="status" className="upload-hint-text" style={{ margin: '0 0 1rem' }}>
+            Image processing is in progress. The optional radiology-report section will appear when the image request returns.
           </p>
         ) : null}
 
-        {/* 3. OPTIONAL X-RAY / RADIOLOGY REPORTS SECTION */}
-        <div className="section-divider-title">
-          <h3>X-Ray / Radiology Reports</h3>
-          <button
-            type="button"
-            className="section-upload-btn"
-            onClick={() => reportInputRef.current?.click()}
-          >
-            + Upload X-Ray Report
-          </button>
-        </div>
-        <p className="upload-hint-text" style={{ textAlign: 'left', margin: '0 0 0.5rem 0' }}>
-          Optional input: PDF. You can submit a radiology report without an image.
-        </p>
+        {/* Stage 2: report upload appears after image analysis, or immediately in report-only mode */}
+        {reportStageVisible ? (
+          <>
+            <div className="section-divider-title">
+              <h3>2. Optional Radiology Report</h3>
+              <button
+                type="button"
+                className="section-upload-btn"
+                onClick={() => reportInputRef.current?.click()}
+                disabled={isProcessingFiles || submitting}
+              >
+                + Upload Radiology Report
+              </button>
+            </div>
+            <p className="upload-hint-text" style={{ textAlign: 'left', margin: '0 0 0.5rem 0' }}>
+              Accepted: PDF. The report is optional. After selection, MediSense AI uploads it, extracts text and displays available report information.
+            </p>
 
-        <input
-          ref={reportInputRef}
-          type="file"
-          multiple
-          accept="application/pdf,.pdf"
-          style={{ display: 'none' }}
-          onChange={(e) => {
-            addReports(e.target.files);
-            e.target.value = '';
-          }}
-          aria-hidden="true"
-        />
+            <input
+              ref={reportInputRef}
+              type="file"
+              multiple
+              accept="application/pdf,.pdf"
+              style={{ display: 'none' }}
+              onChange={(e) => {
+                addReports(e.target.files);
+                e.target.value = '';
+              }}
+              aria-hidden="true"
+            />
 
-        {/* Radiology Report Upload Dropzone (Always Visible) */}
-        <div
-          className={`assessment-upload-dropzone ${dragActiveReports ? 'drag-active' : ''}`}
-          style={{ padding: '1.25rem 1rem', minHeight: '90px', marginBottom: xrayReports.length > 0 ? '0.75rem' : '1.25rem' }}
-          onDragEnter={handleReportDrag}
-          onDragLeave={handleReportDrag}
-          onDragOver={handleReportDrag}
-          onDrop={handleReportDrop}
-          onClick={() => reportInputRef.current?.click()}
-          role="button"
-          tabIndex={0}
-          aria-label="Upload radiology reports"
-          onKeyDown={(e) => {
-            if (e.key === ' ' || e.key === 'Enter') {
-              e.preventDefault();
-              reportInputRef.current?.click();
-            }
-          }}
-        >
-          <p className="upload-primary-text" style={{ margin: 0, fontSize: '0.92rem' }}>
-            Drag &amp; drop radiology reports, or <span className="upload-browse-link">Browse reports</span>
-          </p>
-        </div>
+            <div
+              className={`assessment-upload-dropzone ${dragActiveReports ? 'drag-active' : ''}`}
+              style={{ padding: '1.25rem 1rem', minHeight: '90px', marginBottom: xrayReports.length > 0 ? '0.75rem' : '1.25rem' }}
+              onDragEnter={handleReportDrag}
+              onDragLeave={handleReportDrag}
+              onDragOver={handleReportDrag}
+              onDrop={handleReportDrop}
+              onClick={() => !isProcessingFiles && reportInputRef.current?.click()}
+              role="button"
+              tabIndex={0}
+              aria-label="Upload radiology reports"
+              onKeyDown={(e) => {
+                if ((e.key === ' ' || e.key === 'Enter') && !isProcessingFiles) {
+                  e.preventDefault();
+                  reportInputRef.current?.click();
+                }
+              }}
+            >
+              <p className="upload-primary-text" style={{ margin: 0, fontSize: '0.92rem' }}>
+                Drag &amp; drop a radiology PDF, or <span className="upload-browse-link">Browse reports</span>
+              </p>
+            </div>
 
-        {/* Selected Reports List */}
-        {xrayReports.length > 0 ? (
-          <div className="file-list-container" style={{ marginBottom: '1rem' }}>
-            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#475569' }}>
-              Selected Reports ({xrayReports.length}):
-            </span>
-            {xrayReports.map((rep) => {
-              const isPdf = rep.name.toLowerCase().endsWith('.pdf');
-              return (
-                <div key={rep.id} className="file-card-item">
-                  <div className="file-card-left">
-                    <div className={`file-card-icon-badge ${isPdf ? 'badge-pdf' : 'badge-img'}`}>
-                      {isPdf ? 'PDF' : 'DOC'}
+            {xrayReports.length > 0 ? (
+              <div className="file-list-container" style={{ marginBottom: '1rem' }}>
+                <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#475569' }}>
+                  Selected Reports ({xrayReports.length}):
+                </span>
+                {xrayReports.map((rep) => {
+                  const statusView = getReportStatusPresentation(rep);
+                  return (
+                    <div key={rep.id} className="file-card-item" style={{ display: 'block' }}>
+                      <div className="file-card-left" style={{ display: 'flex', alignItems: 'center', gap: '0.7rem' }}>
+                        <div className="file-card-icon-badge badge-pdf">PDF</div>
+                        <div className="file-card-info" style={{ flex: 1, minWidth: 0 }}>
+                          <span className="file-card-name" title={rep.name}>{rep.name}</span>
+                          <span className="file-card-meta">
+                            {formatFileSize(rep.size)} · <span className={statusView.className}>{statusView.label}</span>
+                          </span>
+                        </div>
+                        <div className="file-card-actions">
+                          <button type="button" className="btn-card-view" onClick={() => handleOpenPreview(rep)} aria-label={`View ${rep.name}`}>
+                            View
+                          </button>
+                          {rep.status === 'FAILED' ? (
+                            <button type="button" className="btn-card-view" onClick={() => retryReport(rep)} disabled={isProcessingFiles || submitting}>
+                              Retry
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="btn-card-remove"
+                            onClick={() => handleRemoveReport(rep.id)}
+                            disabled={submitting || rep.status === 'UPLOADING' || rep.status === 'DELETING' || deletingReportIds.has(rep.id)}
+                            title={rep.uploadStatus === 'uploaded' ? 'Delete this radiology report and its saved findings from the assessment.' : 'Remove selected report'}
+                            aria-label={`Remove ${rep.name}`}
+                          >
+                            {deletingReportIds.has(rep.id) ? 'Removing...' : 'Remove'}
+                          </button>
+                        </div>
+                      </div>
+
+                      {rep.error ? (
+                        <p role="alert" style={{ margin: '0.6rem 0 0 2.8rem', color: '#92400e', fontSize: '0.83rem' }}>{rep.error}</p>
+                      ) : null}
+                      {rep.regionWarning ? (
+                        <p role="note" style={{ margin: '0.6rem 0 0 2.8rem', color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '0.5rem 0.65rem', fontSize: '0.82rem' }}>
+                          {rep.regionWarning}
+                        </p>
+                      ) : null}
+                      {(rep.extractedText || rep.extractedFindings?.length > 0) ? (
+                        <div style={{ margin: '0.7rem 0 0 2.8rem', padding: '0.75rem', borderRadius: '10px', border: '1px solid #d1fae5', background: '#f0fdf4' }}>
+                          <div style={{ fontWeight: 700, color: '#065f46', marginBottom: '0.35rem' }}>Extracted report information</div>
+                          {rep.reportRegion ? <p style={{ margin: '0.2rem 0', fontSize: '0.84rem' }}><strong>Region mentioned by report:</strong> {rep.reportRegion}</p> : null}
+                          {rep.extractedFindings?.length > 0 ? (
+                            <ul style={{ margin: '0.3rem 0 0 1.1rem', padding: 0, fontSize: '0.84rem' }}>
+                              {rep.extractedFindings.slice(0, 10).map((finding, index) => (
+                                <li key={`${rep.id}-report-finding-${index}`}>{prettyFinding(finding, index)}</li>
+                              ))}
+                            </ul>
+                          ) : null}
+                          {rep.extractedText ? (
+                            <details style={{ marginTop: '0.45rem' }}>
+                              <summary style={{ cursor: 'pointer', fontSize: '0.83rem', fontWeight: 600 }}>View extracted text</summary>
+                              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '220px', overflow: 'auto', marginTop: '0.4rem', fontSize: '0.8rem', fontFamily: 'inherit' }}>
+                                {rep.extractedText.slice(0, 12000)}{rep.extractedText.length > 12000 ? '\n\n[Text truncated in preview.]' : ''}
+                              </pre>
+                            </details>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="file-card-info">
-                      <span className="file-card-name" title={rep.name}>
-                        ✓ {rep.name}
-                      </span>
-                      <span className="file-card-meta">
-                        {formatFileSize(rep.size)} ·{' '}
-                        {(() => {
-                          const statusView = getReportStatusPresentation(rep);
-                          return <span className={statusView.className}>{statusView.label}</span>;
-                        })()}
-                      </span>
-                    </div>
-                  </div>
-
-                <div className="file-card-actions">
-                  <button
-                    type="button"
-                    className="btn-card-view"
-                    onClick={() => handleOpenPreview(rep)}
-                    aria-label={`View ${rep.name}`}
-                  >
-                    View
-                  </button>
-                  <button
-                    type="button"
-                    className="btn-card-remove"
-                    onClick={() => handleRemoveReport(rep.id)}
-                    disabled={submitting || rep.uploadStatus === 'uploaded'}
-                    title={rep.uploadStatus === 'uploaded' ? 'This report is already saved to the server; start a new assessment to replace it.' : 'Remove selected report'}
-                    aria-label={`Remove ${rep.name}`}
-                  >
-                    Remove
-                  </button>
-                </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
-      ) : null}
+            ) : null}
+          </>
+        ) : null}
 
-        {/* Panel Footer */}
         <div className="na-panel-footer" style={{ marginTop: '1.5rem' }}>
           <button
             type="button"
             className="na-continue-btn"
             onClick={onContinue}
-            disabled={submitting || hasRegionMismatch || (xrayImages.length === 0 && xrayReports.length === 0) || (xrayImages.length > 0 && !region)}
+            disabled={submitting || isProcessingFiles || !hasAnySelectedInput || (!hasUploadedImage && !hasExtractedReport)}
           >
-            <span>{submitting ? 'Uploading selected inputs and analyzing...' : 'Continue to Review'}</span>
-            <span className="na-btn-arrow">
-              <ArrowRightIcon size={18} color="#ffffff" />
-            </span>
+            <span>{isProcessingFiles ? 'Analyzing selected inputs...' : submitting ? 'Opening combined assessment...' : 'Combine Evidence & Continue'}</span>
+            <span className="na-btn-arrow"><ArrowRightIcon size={18} color="#ffffff" /></span>
           </button>
 
           <div className="na-security-footnote">
-            <span className="na-security-icon">
-              <ShieldLockIcon size={15} color="#10b981" />
-            </span>
+            <span className="na-security-icon"><ShieldLockIcon size={15} color="#10b981" /></span>
             <span>Secure Upload · AI-assisted processing · Not a medical diagnosis</span>
           </div>
         </div>
       </section>
 
-      {/* Independent Verification Preview Modal */}
       {previewState ? (
         <FilePreviewModal
           file={previewState.file}
@@ -1231,4 +1295,3 @@ export default function XrayUpload() {
     </div>
   );
 }
-

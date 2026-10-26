@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 import os
 import re
+import threading
 from typing import Any, Optional
 
 from app.core.config import get_settings
@@ -1038,8 +1039,140 @@ def get_all_registry_entries() -> list[dict[str, Any]]:
     return [entry.to_dict() for entry in XRAY_MODEL_REGISTRY.values()]
 
 
+# Lazy singleton: load the anatomy classifier only when an image is routed without
+# a user-supplied region. This keeps import/startup of unrelated API modules cheap.
+_BODY_PART_CLASSIFIER = None
+_BODY_PART_CLASSIFIER_LOCK = threading.Lock()
+
+
+def _get_body_part_classifier():
+    """Load and cache the pretrained image-based anatomy classifier."""
+    global _BODY_PART_CLASSIFIER
+    if _BODY_PART_CLASSIFIER is not None:
+        return _BODY_PART_CLASSIFIER
+
+    with _BODY_PART_CLASSIFIER_LOCK:
+        if _BODY_PART_CLASSIFIER is None:
+            from app.ai.xray_anatomy_classifier import XRayAnatomyClassifier
+
+            classifier = XRayAnatomyClassifier()
+            classifier.load()
+            _BODY_PART_CLASSIFIER = classifier
+    return _BODY_PART_CLASSIFIER
+
+
 def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[str, Any]:
-    """Route an X-ray upload based on anatomical region and model registry availability."""
+    """Route an X-ray by image-detected anatomy when no region is supplied.
+
+    The automatic path uses the separate body-part classifier first. It only
+    reaches the existing regional model registry when the classifier's configured
+    confidence gate is passed. Explicit `declared_region` remains temporarily
+    supported for legacy API callers; the X-Ray upload endpoint will be updated in
+    the next Goal 1 step to omit that parameter entirely.
+    """
+    if not isinstance(declared_region, str) or not declared_region.strip():
+        try:
+            anatomy_classifier = _get_body_part_classifier()
+        except Exception as exc:
+            logger.exception("Unable to load the automatic X-ray anatomy classifier")
+            return {
+                "region": "unknown",
+                "canonical_region": "unknown",
+                "supported": False,
+                "is_supported": False,
+                "is_available": False,
+                "is_recognized": False,
+                "region_source": "image_classifier",
+                "anatomy_verification_status": "unavailable",
+                "reason_code": "anatomy_classifier_unavailable",
+                "registry_entry": None,
+                "diagnostic_message": str(exc),
+                "message": (
+                    "Automatic X-ray type recognition is currently unavailable. "
+                    "No regional model was selected; please retry after the model is configured."
+                ),
+            }
+
+        try:
+            anatomy_result = anatomy_classifier.predict_file(image_path)
+        except Exception as exc:
+            logger.exception("Automatic X-ray anatomy classification failed")
+            return {
+                "region": "unknown",
+                "canonical_region": "unknown",
+                "supported": False,
+                "is_supported": False,
+                "is_available": False,
+                "is_recognized": False,
+                "region_source": "image_classifier",
+                "anatomy_verification_status": "failed",
+                "reason_code": "anatomy_classification_failed",
+                "registry_entry": None,
+                "diagnostic_message": str(exc),
+                "message": (
+                    "The X-ray image could not be classified automatically. "
+                    "No regional model was selected. Please upload a readable X-ray image."
+                ),
+            }
+
+        detected_label = anatomy_result.get("body_part_label")
+        if anatomy_result.get("status") != "completed" or not isinstance(detected_label, str) or not detected_label.strip():
+            candidate = anatomy_result.get("candidate_body_part")
+            confidence = anatomy_result.get("body_part_confidence")
+            return {
+                "region": "unknown",
+                "canonical_region": "unknown",
+                "candidate_region": str(candidate).lower() if candidate else None,
+                "supported": False,
+                "is_supported": False,
+                "is_available": False,
+                "is_recognized": False,
+                "region_source": "image_classifier",
+                "anatomy_verification_status": "unverified",
+                "body_part_confidence": confidence,
+                "anatomy_detection": anatomy_result,
+                "reason_code": "anatomy_unverified",
+                "registry_entry": None,
+                "message": anatomy_result.get(
+                    "message",
+                    "The image body part could not be verified confidently. No regional model was selected.",
+                ),
+            }
+
+        detected_region, detected_region_recognized = normalize_region_name(detected_label)
+        if not detected_region_recognized:
+            logger.error("Body-part classifier returned an unknown label: %r", detected_label)
+            return {
+                "region": "unknown",
+                "canonical_region": "unknown",
+                "supported": False,
+                "is_supported": False,
+                "is_available": False,
+                "is_recognized": False,
+                "region_source": "image_classifier",
+                "anatomy_verification_status": "failed",
+                "anatomy_detection": anatomy_result,
+                "reason_code": "unsupported_classifier_label",
+                "registry_entry": None,
+                "message": "The automatic classifier returned an unsupported body-part label. No regional model was selected.",
+            }
+
+        # Reuse the existing registry availability checks and model metadata.
+        # The recursive call passes the image-detected region, not user input.
+        routed_result = route_xray(image_path, declared_region=detected_region)
+        confidence = anatomy_result.get("body_part_confidence")
+        routed_result["region_source"] = "image_classifier"
+        routed_result["detected_region"] = detected_region
+        routed_result["anatomy_verification_status"] = "completed"
+        routed_result["body_part_confidence"] = confidence
+        routed_result["anatomy_detection"] = anatomy_result
+        routed_result["message"] = (
+            f"Automatically classified this image as {detected_region.title()} "
+            f"(classifier confidence: {float(confidence):.1%}). "
+            f"{routed_result.get('message', '')}"
+        ).strip()
+        return routed_result
+
     canonical_region, is_recognized = normalize_region_name(declared_region)
     entry = XRAY_MODEL_REGISTRY.get(canonical_region)
 

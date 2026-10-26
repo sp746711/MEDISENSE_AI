@@ -11,11 +11,11 @@ Task 1 safeguards:
 import uuid
 import logging
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 import math
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, File, HTTPException, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.ai.xray_model import get_xray_model_service
@@ -54,61 +54,17 @@ async def upload_xray(
     current_user: CurrentUser,
     db: DbSession,
     file: UploadFile = File(...),
-    region: Optional[str] = Form(None),
 ) -> dict:
-    """Validate, store, route and analyse one X-ray image for an owned assessment."""
+    """Automatically identify, route and analyse an X-ray image for an owned assessment.
+
+    The body region is derived from image pixels; no user-selected region is required.
+    """
     assessment = _owned(db, assessment_id, current_user.user_id)
-    if not isinstance(region, str) or not region.strip():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Select the anatomical region before uploading an X-ray image.",
-        )
-    selected_region, selected_region_recognized = normalize_region_name(region)
-    if not selected_region_recognized:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="The selected X-ray region is not recognized by the backend catalogue.",
-        )
     if "xray" not in (assessment.input_types or []):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="This assessment was not configured for X-ray input.",
         )
-
-    # Defence in depth: if an X-ray report was uploaded first, compare its
-    # backend-extracted examination region with the region supplied for this image.
-    # This validates report/selection consistency. It does NOT independently
-    # identify anatomy from image pixels; that requires a separate trained verifier.
-    saved_xray_reports = (
-        db.query(MedicalReport)
-        .filter(
-            MedicalReport.assessment_id == assessment.assessment_id,
-            MedicalReport.report_category == "xray_report",
-        )
-        .all()
-    )
-    matched_report_regions: list[str] = []
-    for saved_report in saved_xray_reports:
-        metadata = saved_report.ocr_metadata if isinstance(saved_report.ocr_metadata, dict) else {}
-        report_region = metadata.get("report_region")
-        if not isinstance(report_region, str) or not report_region.strip():
-            verification = metadata.get("region_verification")
-            report_region = verification.get("report_region") if isinstance(verification, dict) else None
-        if not isinstance(report_region, str) or not report_region.strip():
-            continue
-        canonical_report_region, report_region_recognized = normalize_region_name(report_region)
-        if not report_region_recognized:
-            continue
-        if canonical_report_region != selected_region:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"Region mismatch: selected X-ray region is '{selected_region}', "
-                    f"but the uploaded radiology report identifies '{canonical_report_region}'. "
-                    "Correct the region or report before image analysis."
-                ),
-            )
-        matched_report_regions.append(canonical_report_region)
 
     settings = get_settings()
     max_bytes = int(settings.max_upload_size_mb * 1024 * 1024)
@@ -163,15 +119,84 @@ async def upload_xray(
     try:
         dest.write_bytes(content)
 
-        # Route first so unrecognized/unsupported regions are never interpreted
-        # as if they were supported. The registry's availability diagnostic is
-        # also retained instead of being hidden by a generic model message.
-        routing = route_xray(str(dest), declared_region=region)
+        # Route strictly from image pixels; never use a user-selected region.
+        routing = route_xray(str(dest))
         resolved_region = routing.get("region")
         if not isinstance(resolved_region, str) or not resolved_region.strip():
             resolved_region = "unknown"
         else:
-            resolved_region = resolved_region.strip()
+            resolved_region = resolved_region.strip().lower()
+
+        region_source = routing.get("region_source") or "unknown"
+        anatomy_status = str(routing.get("anatomy_verification_status") or "unverified").lower()
+        anatomy_detection = routing.get("anatomy_detection")
+        body_part_confidence = routing.get("body_part_confidence")
+        if body_part_confidence is not None:
+            try:
+                body_part_confidence = float(body_part_confidence)
+            except (TypeError, ValueError, OverflowError):
+                body_part_confidence = None
+            if body_part_confidence is not None and (
+                not math.isfinite(body_part_confidence)
+                or body_part_confidence < 0.0
+                or body_part_confidence > 1.0
+            ):
+                body_part_confidence = None
+
+        # If a report already exists, compare its extracted region against the
+        # automatic image classification. A mismatch prevents later combination,
+        # but does not discard otherwise valid image-only findings.
+        saved_xray_reports = (
+            db.query(MedicalReport)
+            .filter(
+                MedicalReport.assessment_id == assessment.assessment_id,
+                MedicalReport.report_category == "xray_report",
+            )
+            .all()
+        )
+        report_regions: list[str] = []
+        unrecognized_report_regions = 0
+        for saved_report in saved_xray_reports:
+            metadata = saved_report.ocr_metadata if isinstance(saved_report.ocr_metadata, dict) else {}
+            report_region = metadata.get("report_region")
+            if not isinstance(report_region, str) or not report_region.strip():
+                verification = metadata.get("region_verification")
+                report_region = verification.get("report_region") if isinstance(verification, dict) else None
+            if not isinstance(report_region, str) or not report_region.strip():
+                continue
+            canonical_report_region, report_region_recognized = normalize_region_name(report_region)
+            if report_region_recognized:
+                report_regions.append(canonical_report_region)
+            else:
+                unrecognized_report_regions += 1
+
+        report_region_mismatch = bool(
+            resolved_region != "unknown"
+            and any(report_region != resolved_region for report_region in report_regions)
+        )
+        report_region_match = (
+            None if not report_regions or resolved_region == "unknown"
+            else not report_region_mismatch
+        )
+        report_region_verification = {
+            "status": (
+                "MISMATCH" if report_region_mismatch
+                else "MATCH" if report_region_match is True
+                else "UNVERIFIED"
+            ),
+            "detected_image_region": None if resolved_region == "unknown" else resolved_region,
+            "report_regions": report_regions,
+            "unrecognized_report_region_count": unrecognized_report_regions,
+            "can_combine": report_region_match is not False,
+            "message": (
+                "The radiology report region conflicts with the automatically detected image type. "
+                "Keep the image and report findings separate until the mismatch is reviewed."
+                if report_region_mismatch
+                else "The detected image type agrees with the recognized radiology report region."
+                if report_region_match is True
+                else "Report/image region consistency could not be verified from available metadata."
+            ),
+        }
 
         route_supported = bool(
             routing.get("is_supported", routing.get("supported", False))
@@ -327,19 +352,25 @@ async def upload_xray(
             )
 
         image_anatomy_verification = {
-            "status": "UNVERIFIED",
-            "selected_region": selected_region,
-            "report_region": matched_report_regions[0] if matched_report_regions else None,
-            "report_region_match": bool(matched_report_regions),
-            "message": (
-                "The report region matches the selected region, but the current backend does not independently classify image anatomy."
-                if matched_report_regions else
-                "The image was routed using the selected region. The current backend does not independently verify anatomy from image pixels."
+            "status": anatomy_status.upper(),
+            "source": region_source,
+            "detected_region": None if resolved_region == "unknown" else resolved_region,
+            "candidate_region": routing.get("candidate_region"),
+            "body_part_confidence": body_part_confidence,
+            "confidence_threshold_validated": (
+                anatomy_detection.get("confidence_threshold_validated", False)
+                if isinstance(anatomy_detection, dict) else False
+            ),
+            "message": routing.get("message") or (
+                "The image type could not be verified automatically. No regional model was selected."
             ),
         }
         base_result_message = analysis.get("message") or routing.get("message")
         verification_message = image_anatomy_verification["message"]
-        persisted_message = f"{base_result_message} {verification_message}" if base_result_message else verification_message
+        persisted_parts = [part for part in (base_result_message, verification_message) if part]
+        if report_region_mismatch:
+            persisted_parts.append(report_region_verification["message"])
+        persisted_message = " ".join(dict.fromkeys(persisted_parts))
 
         result = XrayResult(
             assessment_id=assessment.assessment_id,
@@ -380,6 +411,12 @@ async def upload_xray(
             "reason_code": analysis.get("reason_code"),
             "diagnostic_message": analysis.get("diagnostic_message"),
             "image_anatomy_verification": image_anatomy_verification,
+            "image_type_detection": anatomy_detection,
+            "detected_region": None if resolved_region == "unknown" else resolved_region,
+            "region_source": region_source,
+            "anatomy_verification_status": anatomy_status,
+            "body_part_confidence": body_part_confidence,
+            "report_region_verification": report_region_verification,
         }
     except HTTPException:
         _remove_file(dest)
@@ -414,6 +451,72 @@ async def upload_xray(
         await file.close()
 
 
+@router.delete("/{assessment_id}/xray/{xray_result_id}")
+def delete_xray(
+    assessment_id: UUID,
+    xray_result_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> dict:
+    """Delete an uploaded X-ray result and its stored image for an owned assessment.
+
+    This endpoint is used by the Goal 1 upload page's Remove action. It removes
+    the persistent database row as well as the corresponding file, so the UI
+    does not merely hide a result that would still be included in assessment.
+    """
+    _owned(db, assessment_id, current_user.user_id)
+    result = (
+        db.query(XrayResult)
+        .filter(
+            XrayResult.assessment_id == assessment_id,
+            XrayResult.xray_result_id == xray_result_id,
+        )
+        .first()
+    )
+    if result is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="X-ray result not found")
+
+    stored_name = result.stored_name
+    result_id = str(result.xray_result_id)
+    try:
+        db.delete(result)
+        db.commit()
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "X-ray delete failed for assessment_id=%s, xray_result_id=%s",
+            assessment_id,
+            xray_result_id,
+        )
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The X-ray result could not be removed. Please try again.",
+        ) from exc
+
+    # stored_name is created by the server as a UUID filename. Never allow a
+    # database value containing a path to escape the X-ray upload directory.
+    if isinstance(stored_name, str) and stored_name and Path(stored_name).name == stored_name:
+        try:
+            xray_dir = (get_settings().upload_path / "xrays").resolve()
+            stored_path = (xray_dir / stored_name).resolve()
+            if stored_path.parent == xray_dir:
+                _remove_file(stored_path)
+            else:
+                logger.warning("Refusing to delete X-ray path outside upload directory: %s", stored_name)
+        except OSError:
+            logger.exception(
+                "X-ray result row deleted but its image file cleanup failed for xray_result_id=%s",
+                xray_result_id,
+            )
+
+    return {
+        "status": "deleted",
+        "assessment_id": str(assessment_id),
+        "xray_result_id": result_id,
+        "message": "X-ray image and saved result removed from this assessment.",
+    }
+
+
 @router.get("/{assessment_id}/xray")
 def get_xray(
     assessment_id: UUID,
@@ -443,10 +546,11 @@ def get_xray(
                 "status": row.status,
                 "message": row.message,
                 "image_anatomy_verification": {
-                    "status": "UNVERIFIED",
-                    "selected_region": row.region,
+                    "status": "RESULT_METADATA_NOT_PERSISTED",
+                    "detected_region": row.region,
                     "message": (
-                        "The current backend routes by the selected region but does not independently classify anatomy from image pixels."
+                        "The saved result contains the detected region and analysis message. "
+                        "Detailed body-part classifier confidence is available in the original upload response."
                     ),
                 },
                 "created_at": row.created_at.isoformat() if row.created_at else None,

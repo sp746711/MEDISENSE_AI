@@ -458,3 +458,75 @@ def list_reports(
             for r in rows
         ],
     }
+
+@router.delete("/{assessment_id}/reports/{report_id}")
+def delete_radiology_report(
+    assessment_id: UUID,
+    report_id: UUID,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> dict:
+    """Delete one uploaded radiology report from an owned assessment.
+
+    The database record is deleted first. The stored file is removed only after
+    the transaction commits, so a database failure cannot report a deletion
+    while the report remains part of the assessment evidence.
+    """
+    _owned(db, assessment_id, current_user.user_id)
+
+    report = (
+        db.query(MedicalReport)
+        .filter(
+            MedicalReport.assessment_id == assessment_id,
+            MedicalReport.report_id == report_id,
+        )
+        .first()
+    )
+    if report is None or report.report_category != "xray_report":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Radiology report not found in this assessment.",
+        )
+
+    file_name = report.file_name
+    stored_name = Path(report.stored_name or "").name
+    reports_dir = (Path(get_settings().upload_path) / "reports").resolve()
+    stored_path = (reports_dir / stored_name).resolve() if stored_name else None
+    safe_to_delete_file = bool(
+        stored_path is not None
+        and stored_name not in {".", ".."}
+        and stored_path.parent == reports_dir
+    )
+
+    try:
+        db.delete(report)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The radiology report could not be removed. Please retry.",
+        ) from exc
+
+    file_deleted = False
+    if safe_to_delete_file and stored_path is not None:
+        try:
+            stored_path.unlink(missing_ok=True)
+            file_deleted = True
+        except OSError:
+            # The database record is gone, so the report no longer contributes
+            # to assessment evidence. Report file-cleanup status transparently.
+            file_deleted = False
+
+    return {
+        "status": "deleted",
+        "report_id": str(report_id),
+        "file_name": file_name,
+        "file_deleted": file_deleted,
+        "message": (
+            "Radiology report removed from the assessment."
+            if file_deleted
+            else "Radiology report removed from the assessment, but its stored file could not be cleaned up."
+        ),
+    }
+

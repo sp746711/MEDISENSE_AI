@@ -1,13 +1,7 @@
 import { apiRequest } from './api';
 
 /**
- * Upload a medical or radiology report.
- *
- * @param {string|number} assessmentId
- * @param {File} file
- * @param {string} reportCategory
- * @param {string|null} selectedRegion
- * @returns {Promise<object>}
+ * Upload a medical report or radiology report.
  */
 export async function uploadReport(
   assessmentId,
@@ -15,8 +9,15 @@ export async function uploadReport(
   reportCategory = 'medical_report',
   selectedRegion = null
 ) {
-  const form = new FormData();
+  if (!assessmentId) {
+    throw new Error('An assessment ID is required to upload a report.');
+  }
 
+  if (!file) {
+    throw new Error('Please select a report file to upload.');
+  }
+
+  const form = new FormData();
   form.append('file', file);
 
   if (reportCategory) {
@@ -35,11 +36,26 @@ export async function uploadReport(
 }
 
 /**
- * Retrieve reports associated with an assessment.
- *
- * @param {string|number} assessmentId
- * @returns {Promise<object>}
+ * Retrieve reports belonging to an assessment.
  */
 export async function getReports(assessmentId) {
+  if (!assessmentId) {
+    throw new Error('An assessment ID is required to retrieve reports.');
+  }
+
   return apiRequest(`/assessments/${assessmentId}/reports`);
+}
+
+/**
+ * Delete an uploaded radiology report and its saved findings.
+ */
+export async function deleteReport(assessmentId, reportId) {
+  if (!assessmentId || !reportId) {
+    throw new Error('Assessment ID and report ID are required.');
+  }
+
+  return apiRequest(
+    `/assessments/${assessmentId}/reports/${reportId}`,
+    { method: 'DELETE' }
+  );
 }

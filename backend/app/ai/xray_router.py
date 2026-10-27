@@ -861,7 +861,11 @@ REGION_ALIASES: dict[str, str] = {
     "extremity": "extremity",
     "upper extremity": "upper extremity",
     "lower extremity": "lower extremity",
-    "head region": "head region",
+    # Generic head selections should resolve to the catalogue's Skull X-Ray region.
+    "head": "skull",
+    "head region": "skull",
+    "cranium": "skull",
+    "skull": "skull",
     "leg": "lower extremity",
     # Exact classifier labels with no configured compatible regional model.
     "nasopharynx": "nasopharynx",
@@ -889,8 +893,10 @@ REGION_ALIASES: dict[str, str] = {
     # Shoulder
     "shoulder": "shoulder",
     "shoulder joint": "shoulder",
-    # Humerus
+    # Humerus / upper arm
     "humerus": "humerus",
+    "upper arm": "humerus",
+    "upper-arm": "humerus",
     # "arm" is broad; do not silently treat the whole arm as a humerus X-ray.
     "arm": "upper extremity",
     # Clavicle
@@ -944,8 +950,9 @@ REGION_ALIASES: dict[str, str] = {
     "tailbone": "sacrum",
     "sacrococcygeal": "sacrum",
     # Head & Neck
-    # "head" is broad; only an explicit skull/cranium label maps to skull.
-    "head": "head region",
+    # User-entered "head" is the catalogue alias for Skull X-Ray.
+    # The separate anatomy-classifier broad-label guard remains unchanged.
+    "head": "skull",
     "skull": "skull",
     "cranium": "skull",
     "calvarium": "skull",
@@ -1101,7 +1108,10 @@ def _broad_anatomy_route_result(
         "is_available": False,
         "is_recognized": True,
         "region_source": "image_classifier",
-        "anatomy_verification_status": "completed",
+        # Broad categories are candidates, not verified specific X-ray regions.
+        "anatomy_verification_status": "unverified",
+        "anatomy_verified": False,
+        "is_broad_region": True,
         "body_part_confidence": confidence,
         "anatomy_detection": anatomy_result,
         "reason_code": "broad_anatomy_label",
@@ -1215,6 +1225,91 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
             }
 
         confidence = anatomy_result.get("body_part_confidence")
+
+        # Defense in depth: never route to a regional interpretation model solely
+        # because an upstream classifier marked its output completed. Enforce the
+        # configured confidence threshold here too, and reject close top-two scores
+        # when the classifier provides them. This does not change the model or lower
+        # the threshold; it prevents ambiguous anatomy from reaching disease inference.
+        try:
+            confidence_value = float(confidence)
+        except (TypeError, ValueError, OverflowError):
+            confidence_value = None
+
+        threshold_value = anatomy_result.get(
+            "confidence_threshold",
+            anatomy_result.get("min_confidence", 0.60),
+        )
+        try:
+            threshold_value = float(threshold_value)
+        except (TypeError, ValueError, OverflowError):
+            threshold_value = 0.60
+        if not (0.0 <= threshold_value <= 1.0):
+            threshold_value = 0.60
+
+        candidate_list = (
+            anatomy_result.get("top_predictions")
+            or anatomy_result.get("top_candidates")
+            or anatomy_result.get("candidates")
+            or []
+        )
+        candidate_scores: list[float] = []
+        if isinstance(candidate_list, list):
+            for item in candidate_list[:5]:
+                if not isinstance(item, dict):
+                    continue
+                raw_score = item.get("probability", item.get("score", item.get("confidence")))
+                try:
+                    score = float(raw_score)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if 0.0 <= score <= 1.0:
+                    candidate_scores.append(score)
+
+        min_margin_value = anatomy_result.get("min_confidence_margin", 0.10)
+        try:
+            min_margin_value = float(min_margin_value)
+        except (TypeError, ValueError, OverflowError):
+            min_margin_value = 0.10
+        if not (0.0 <= min_margin_value <= 1.0):
+            min_margin_value = 0.10
+
+        candidate_scores.sort(reverse=True)
+        low_confidence = confidence_value is None or confidence_value < threshold_value
+        ambiguous_top_two = (
+            len(candidate_scores) >= 2
+            and (candidate_scores[0] - candidate_scores[1]) < min_margin_value
+        )
+        if low_confidence or ambiguous_top_two:
+            candidate = anatomy_result.get("candidate_body_part") or detected_label
+            reason_code = "anatomy_confidence_below_threshold" if low_confidence else "ambiguous_anatomy_prediction"
+            if ambiguous_top_two and not low_confidence:
+                message = (
+                    "The two leading body-region predictions are too close to select a region reliably. "
+                    "No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray."
+                )
+            else:
+                message = (
+                    f"The candidate body region did not meet the required confidence threshold ({threshold_value:.0%}). "
+                    "No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray."
+                )
+            return {
+                "region": "unknown",
+                "canonical_region": "unknown",
+                "candidate_region": str(candidate).strip().lower().replace("_", " ") if candidate else None,
+                "supported": False,
+                "is_supported": False,
+                "is_available": False,
+                "is_recognized": False,
+                "region_source": "image_classifier",
+                "anatomy_verification_status": "unverified",
+                "body_part_confidence": confidence_value,
+                "anatomy_detection": anatomy_result,
+                "reason_code": reason_code,
+                "registry_entry": None,
+                "message": message,
+            }
+
         detected_region, detected_region_recognized, is_broad_label = (
             _normalize_anatomy_classifier_label(detected_label)
         )
@@ -1252,6 +1347,8 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
         routed_result["region_source"] = "image_classifier"
         routed_result["detected_region"] = detected_region
         routed_result["anatomy_verification_status"] = "completed"
+        routed_result["anatomy_verified"] = True
+        routed_result["is_broad_region"] = False
         routed_result["body_part_confidence"] = confidence
         routed_result["anatomy_detection"] = anatomy_result
         try:

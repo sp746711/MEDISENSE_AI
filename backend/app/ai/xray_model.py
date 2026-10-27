@@ -210,6 +210,7 @@ class XRayModelService:
         entry = get_model_registry_entry(canonical_region) if recognized else None
         self._load_failure_code = None
         self._load_failure_reason = None
+        self._checkpoint_path = None
         self._model = None
         self._loaded = False
         self._provider = None
@@ -218,7 +219,14 @@ class XRayModelService:
         self._active_region = canonical_region
         self._active_classes = list(entry.class_label_mapping) if entry else []
 
-        # MURA regions have their own verified DenseNet121 binary checkpoints.
+        # Wrist has a dedicated strict loader. Keep this branch before the
+        # general MURA-region branch because wrist is also in MURA_REGION_NAMES.
+        # The wrist loader requires the expected XR_WRIST and 224px metadata.
+        if canonical_region == "wrist":
+            self._active_classes = list(MURA_BINARY_LABELS)
+            return self._load_mura_wrist_checkpoint(entry)
+
+        # Other MURA regions have their own verified DenseNet121 binary checkpoints.
         # They can be enabled even while the catalogue's legacy ResNet entry is marked unsupported.
         if canonical_region in MURA_REGION_NAMES:
             self._active_classes = list(MURA_BINARY_LABELS)
@@ -235,13 +243,38 @@ class XRayModelService:
             "chest_densenet121", "densenet121", "torchxrayvision",
             "torch_xray_vision", "xrv_densenet121",
         }:
-            return self._load_torchxrayvision()
+            # Prefer the configured TorchXRayVision model. If that optional
+            # dependency is unavailable, permit a strictly validated, explicitly
+            # configured chest ResNet18 checkpoint as a fallback. Never invent
+            # a checkpoint path or bypass integrity/state-dict validation.
+            if self._load_torchxrayvision():
+                return True
+
+            densenet_failure_code = self._load_failure_code
+            densenet_failure_reason = self._load_failure_reason
+            configured_resnet_checkpoint = (
+                (os.getenv("XRAY_CHEST_CHECKPOINT", "") or "").strip()
+                or (getattr(self.settings, "xray_chest_checkpoint", "") or "").strip()
+            )
+            if configured_resnet_checkpoint:
+                fallback_path = Path(configured_resnet_checkpoint).expanduser()
+                if not fallback_path.is_absolute() and not fallback_path.exists():
+                    fallback_path = Path(self.settings.xray_model_path).expanduser() / fallback_path
+                if fallback_path.is_file():
+                    if self._load_resnet_checkpoint(entry):
+                        logger.info(
+                            "Loaded validated chest ResNet18 fallback because TorchXRayVision was unavailable."
+                        )
+                        return True
+                    # Keep the concrete checkpoint failure visible; do not hide
+                    # a bad/mismatched fallback behind the original import error.
+                    return False
+
+            self._load_failure_code = densenet_failure_code
+            self._load_failure_reason = densenet_failure_reason
+            return False
 
         architecture = (entry.model_architecture or "").strip().lower()
-        if canonical_region == "wrist" and architecture in {
-            "mura_densenet121", "densenet121", "mura-densenet121"
-        }:
-            return self._load_mura_wrist_checkpoint(entry)
         if "resnet18" not in architecture:
             self._load_failure_code = "unsupported_model_architecture"
             self._load_failure_reason = (
@@ -548,8 +581,17 @@ class XRayModelService:
             logger.warning("ResNet image preprocessing failed: %s", exc)
             return None
 
-    def preprocess_mura_wrist(self, image_path: str) -> Optional[torch.Tensor]:
-        """Preprocess wrist images with 224px RGB and ImageNet normalization."""
+    def preprocess_mura_region(self, image_path: str, region: str) -> Optional[torch.Tensor]:
+        """Preprocess an image for a region-specific MURA DenseNet121 checkpoint.
+
+        The current MURA checkpoints share the same documented 224px RGB/ImageNet
+        tensor contract. This helper does not decide anatomy or make a region
+        prediction; the router must supply a verified, matching region first.
+        """
+        canonical_region, recognized = normalize_region_name(region)
+        if not recognized or canonical_region not in MURA_REGION_NAMES:
+            logger.warning("Refusing MURA preprocessing for unsupported region: %s", region)
+            return None
         try:
             from PIL import ImageOps
             with Image.open(image_path) as image:
@@ -560,11 +602,15 @@ class XRayModelService:
             std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
             array = (array - mean) / std
             if array.shape != (224, 224, 3) or not np.isfinite(array).all():
-                raise ValueError("Unexpected or non-finite wrist image tensor.")
+                raise ValueError(f"Unexpected or non-finite {canonical_region} image tensor.")
             return torch.from_numpy(array.transpose(2, 0, 1).copy()).unsqueeze(0).to(self.device)
         except Exception as exc:
-            logger.warning("MURA wrist image preprocessing failed: %s", exc)
+            logger.warning("MURA %s image preprocessing failed: %s", canonical_region, exc)
             return None
+
+    def preprocess_mura_wrist(self, image_path: str) -> Optional[torch.Tensor]:
+        """Backward-compatible wrist preprocessing wrapper."""
+        return self.preprocess_mura_region(image_path, "wrist")
 
     def preprocess_torchxrayvision(self, image_path: str) -> Optional[torch.Tensor]:
         """Use TorchXRayVision's own grayscale loading, crop, resize, and normalization."""
@@ -693,7 +739,16 @@ class XRayModelService:
 
     def _analyze_mura_region(self, image_path: str, region: str) -> dict[str, Any]:
         """Run a region-matched MURA binary classifier; output is research-only."""
-        tensor = self.preprocess_mura_wrist(image_path)
+        # Never infer with a MURA checkpoint unless its region matches the active
+        # model and the region-specific preprocessing contract accepts that region.
+        if region != self._active_region or region not in MURA_REGION_NAMES:
+            return self._unavailable(
+                region, "provider_region_mismatch",
+                "MURA checkpoint does not match the requested anatomical region.",
+                self.model_version,
+                "The selected X-ray region does not match the configured model. No image prediction was generated.",
+            )
+        tensor = self.preprocess_mura_region(image_path, region)
         if tensor is None:
             return self._unavailable(
                 region, "preprocessing_failed", f"Unable to decode and preprocess {region} image.",

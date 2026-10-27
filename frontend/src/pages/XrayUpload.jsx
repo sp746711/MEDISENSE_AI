@@ -467,12 +467,39 @@ export default function XrayUpload() {
       const detectionStatus = normalizeStatus(
         response?.anatomy_verification_status || detection?.status || anatomyVerification?.status
       );
-      const detectedRegion =
+
+      // A completed routing request is not enough to verify anatomy. Broad
+      // categories cannot identify a specific X-ray region for model routing.
+      const rawRegion =
         response?.detected_region ||
+        response?.canonical_region ||
         anatomyVerification?.detected_region ||
-        (detectionStatus === 'completed' ? detection?.body_part_label : null) ||
+        detection?.body_part_label ||
         null;
-      const candidateRegion = detection?.candidate_body_part || response?.candidate_region || null;
+      const regionKey = String(rawRegion || response?.region || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[ _-]+/g, ' ');
+      const broadRegions = new Set([
+        'extremity', 'upper extremity', 'lower extremity', 'head region',
+        'arm', 'leg', 'head', 'unknown',
+      ]);
+      const reasonCode = String(response?.reason_code || anatomyVerification?.reason_code || '').toLowerCase();
+      const statusAllowsVerification = ['completed', 'verified', 'confirmed'].includes(detectionStatus);
+      const anatomyVerified = statusAllowsVerification &&
+        !broadRegions.has(regionKey) &&
+        reasonCode !== 'broad_anatomy_label' &&
+        response?.anatomy_verified !== false &&
+        anatomyVerification?.anatomy_verified !== false &&
+        response?.is_broad_region !== true &&
+        anatomyVerification?.is_broad_region !== true;
+      const detectedRegion = anatomyVerified ? rawRegion : null;
+      const candidateRegion = anatomyVerified ? null : (
+        detection?.candidate_body_part ||
+        response?.candidate_region ||
+        rawRegion ||
+        null
+      );
       const confidenceRaw = response?.body_part_confidence ?? detection?.body_part_confidence ?? anatomyVerification?.body_part_confidence;
       const bodyPartConfidence = typeof confidenceRaw === 'number'
         ? confidenceRaw
@@ -1102,13 +1129,19 @@ export default function XrayUpload() {
                       <div style={{ fontWeight: 700, color: '#075985', marginBottom: '0.4rem' }}>Automatic image-analysis feedback</div>
                       {img.detectedRegion ? (
                         <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
-                          <strong>Detected image type:</strong> {img.detectedRegion.replace(/_/g, ' ')}
+                          <strong>Verified image region:</strong> {img.detectedRegion.replace(/_/g, ' ')}
                         </p>
                       ) : img.candidateRegion ? (
                         <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
-                          <strong>Unverified candidate:</strong> {img.candidateRegion.replace(/_/g, ' ')}
+                          <strong>Unverified region candidate:</strong> {img.candidateRegion.replace(/_/g, ' ')}
+                          {' — '}
+                          <span style={{ color: '#92400e' }}>the system has not confirmed this body region, so it must not be treated as verified.</span>
                         </p>
-                      ) : null}
+                      ) : (
+                        <p style={{ margin: '0.2rem 0', fontSize: '0.85rem', color: '#92400e' }}>
+                          <strong>Body region:</strong> Not verified. No region-specific model should be assumed from this result.
+                        </p>
+                      )}
                       {typeof img.bodyPartConfidence === 'number' ? (
                         <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
                           <strong>Classifier confidence:</strong> {(img.bodyPartConfidence * 100).toFixed(1)}% <span style={{ color: '#64748b' }}>(not a calibrated clinical probability)</span>

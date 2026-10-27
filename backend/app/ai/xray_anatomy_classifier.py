@@ -220,20 +220,45 @@ class XRayAnatomyClassifier:
         outputs = self.session.run([self.output_name], {self.input_name: tensor})
         if not outputs:
             raise ValueError("ONNX anatomy model returned no outputs.")
-        probabilities = np.asarray(outputs[0], dtype=np.float32)
-        if probabilities.ndim != 2 or probabilities.shape != (1, len(self.classes)):
+        raw_scores = np.asarray(outputs[0], dtype=np.float32)
+        if raw_scores.ndim != 2 or raw_scores.shape != (1, len(self.classes)):
             raise ValueError(
-                f"ONNX anatomy output has shape {probabilities.shape}; expected (1, {len(self.classes)})."
+                f"ONNX anatomy output has shape {raw_scores.shape}; expected (1, {len(self.classes)})."
             )
-        probabilities = probabilities[0]
-        if not np.isfinite(probabilities).all():
+        scores = raw_scores[0]
+        if not np.isfinite(scores).all():
             raise ValueError("ONNX anatomy model returned non-finite scores.")
-        if (probabilities < -1e-5).any() or (probabilities > 1.00001).any():
-            raise ValueError("ONNX output is not a probability distribution; expected softmax probabilities.")
+
+        # ONNX exports may expose post-softmax probabilities or raw logits.
+        # Accept a plausible probability distribution; otherwise convert logits
+        # with numerically stable softmax instead of rejecting them outright.
+        score_sum = float(scores.sum())
+        looks_like_probabilities = (
+            bool((scores >= 0.0).all())
+            and bool((scores <= 1.0).all())
+            and score_sum > 0.0
+            and abs(score_sum - 1.0) <= 0.03
+        )
+        if looks_like_probabilities:
+            probabilities = scores
+        else:
+            shifted = scores - float(np.max(scores))
+            exp_scores = np.exp(shifted).astype(np.float32, copy=False)
+            exp_sum = float(exp_scores.sum())
+            if not np.isfinite(exp_sum) or exp_sum <= 0.0:
+                raise ValueError("ONNX anatomy logits could not be converted to probabilities.")
+            probabilities = exp_scores / exp_sum
+
         probability_sum = float(probabilities.sum())
-        if probability_sum <= 0 or abs(probability_sum - 1.0) > 0.03:
+        if (
+            not np.isfinite(probabilities).all()
+            or (probabilities < 0.0).any()
+            or (probabilities > 1.0).any()
+            or probability_sum <= 0.0
+            or abs(probability_sum - 1.0) > 1e-4
+        ):
             raise ValueError(
-                f"ONNX output does not sum to approximately 1 (sum={probability_sum:.4f}); refusing to mislabel scores."
+                f"ONNX anatomy probabilities are invalid (sum={probability_sum:.6f}); refusing to route."
             )
 
         ranked_indices = np.argsort(probabilities)[::-1]

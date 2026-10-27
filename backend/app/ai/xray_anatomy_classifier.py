@@ -176,6 +176,42 @@ class XRayAnatomyClassifier:
             self.model_name, len(self.classes), self.device, self.model_path, self.labels_path,
         )
 
+    def _validate_image_content(self, image: Any) -> None:
+        """Reject obvious blank/placeholder inputs before anatomy inference.
+
+        This conservative technical check is not a medical image authenticity
+        detector. It does not reject images based on dimensions alone and does
+        not establish that an image is a genuine radiograph.
+        """
+        import numpy as np
+        from PIL import Image, ImageOps
+
+        checked = ImageOps.exif_transpose(image).convert("L")
+        checked.thumbnail((256, 256), resample=Image.Resampling.BILINEAR)
+        pixels = np.asarray(checked, dtype=np.uint8)
+
+        if pixels.size == 0 or pixels.ndim != 2:
+            raise ValueError("The provided X-ray image is empty or invalid.")
+
+        min_value = int(pixels.min())
+        max_value = int(pixels.max())
+        std_value = float(pixels.std())
+        bright_fraction = float(np.mean(pixels >= 245))
+        dark_fraction = float(np.mean(pixels <= 20))
+
+        # Do not reject all uniform/low-contrast images here: this can create
+        # false positives for synthetic test fixtures and some low-contrast
+        # radiographs. Apply only the targeted placeholder-card heuristic below.
+
+        # Detect a mostly-white placeholder card with only a small amount of
+        # dark text. This is deliberately conservative and may need tuning
+        # against a representative, labelled validation set.
+        if bright_fraction >= 0.90 and dark_fraction <= 0.04 and std_value < 35.0:
+            raise ValueError(
+                "Image rejected: the image appears to be a blank/placeholder "
+                "card rather than a radiograph. Upload the actual X-ray image."
+            )
+
     def _preprocess(self, pil_image: Any):
         """Prepare an RGB NCHW tensor using the currently configured transform.
 
@@ -197,6 +233,9 @@ class XRayAnatomyClassifier:
         width, height = image.size
         if width <= 0 or height <= 0:
             raise ValueError("The provided X-ray image has invalid dimensions.")
+
+        # Reject obvious blank placeholders before resize and center crop.
+        self._validate_image_content(image)
 
         scale = IMAGE_SIZE / min(width, height)
         resized_width = max(IMAGE_SIZE, int(round(width * scale)))

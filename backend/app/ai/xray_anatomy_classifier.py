@@ -177,7 +177,12 @@ class XRayAnatomyClassifier:
         )
 
     def _preprocess(self, pil_image: Any):
-        """Match the published model card: RGB, resize-short-edge, center crop, ImageNet norm."""
+        """Prepare an RGB NCHW tensor using the currently configured transform.
+
+        IMPORTANT: the model's original training/model-card preprocessing has not
+        been independently verified in this repository. This transform must not
+        be described as confirmed training parity until that source is available.
+        """
         if not self.is_loaded:
             self.load()
 
@@ -265,6 +270,12 @@ class XRayAnatomyClassifier:
         best_idx = int(ranked_indices[0])
         candidate = self.classes[best_idx]
         confidence = float(probabilities[best_idx])
+        second_idx = int(ranked_indices[1]) if len(ranked_indices) > 1 else best_idx
+        second_candidate = self.classes[second_idx]
+        second_confidence = float(probabilities[second_idx])
+        top_two_margin = max(0.0, confidence - second_confidence)
+        # Keep the existing confidence gate unchanged. Margin is exposed as
+        # diagnostic evidence; the router owns its existing ambiguity policy.
         accepted = confidence >= self.min_confidence
         top_predictions = [
             {"label": self.classes[int(i)], "probability": round(float(probabilities[int(i)]), 4)}
@@ -277,8 +288,12 @@ class XRayAnatomyClassifier:
             "body_part_label": candidate if accepted else None,
             "candidate_body_part": candidate,
             "body_part_confidence": round(confidence, 4),
+            "second_candidate_body_part": second_candidate,
+            "second_candidate_confidence": round(second_confidence, 4),
+            "top_two_margin": round(top_two_margin, 4),
             "confidence_threshold": self.min_confidence,
             "confidence_threshold_validated": False,
+            "preprocessing_verified_against_training": False,
             "model_name": self.model_name,
             "model_checkpoint": self.model_path.name,
             "model_license": "Apache-2.0; see upstream model card",

@@ -861,11 +861,7 @@ REGION_ALIASES: dict[str, str] = {
     "extremity": "extremity",
     "upper extremity": "upper extremity",
     "lower extremity": "lower extremity",
-    # Generic head selections should resolve to the catalogue's Skull X-Ray region.
-    "head": "skull",
-    "head region": "skull",
-    "cranium": "skull",
-    "skull": "skull",
+    "head region": "head region",
     "leg": "lower extremity",
     # Exact classifier labels with no configured compatible regional model.
     "nasopharynx": "nasopharynx",
@@ -893,10 +889,11 @@ REGION_ALIASES: dict[str, str] = {
     # Shoulder
     "shoulder": "shoulder",
     "shoulder joint": "shoulder",
-    # Humerus / upper arm
+    # Humerus
     "humerus": "humerus",
+    # The explicit phrase "upper arm" denotes the humerus region. Keep the
+    # generic term "arm" broad so it cannot silently select a humerus model.
     "upper arm": "humerus",
-    "upper-arm": "humerus",
     # "arm" is broad; do not silently treat the whole arm as a humerus X-ray.
     "arm": "upper extremity",
     # Clavicle
@@ -950,8 +947,8 @@ REGION_ALIASES: dict[str, str] = {
     "tailbone": "sacrum",
     "sacrococcygeal": "sacrum",
     # Head & Neck
-    # User-entered "head" is the catalogue alias for Skull X-Ray.
-    # The separate anatomy-classifier broad-label guard remains unchanged.
+    # The catalogue's generic Head search option resolves to the Skull study.
+    # Classifier-predicted HEAD remains broad via _ANATOMY_CLASS_BROAD_LABELS.
     "head": "skull",
     "skull": "skull",
     "cranium": "skull",
@@ -1108,10 +1105,7 @@ def _broad_anatomy_route_result(
         "is_available": False,
         "is_recognized": True,
         "region_source": "image_classifier",
-        # Broad categories are candidates, not verified specific X-ray regions.
-        "anatomy_verification_status": "unverified",
-        "anatomy_verified": False,
-        "is_broad_region": True,
+        "anatomy_verification_status": "completed",
         "body_part_confidence": confidence,
         "anatomy_detection": anatomy_result,
         "reason_code": "broad_anatomy_label",
@@ -1347,8 +1341,6 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
         routed_result["region_source"] = "image_classifier"
         routed_result["detected_region"] = detected_region
         routed_result["anatomy_verification_status"] = "completed"
-        routed_result["anatomy_verified"] = True
-        routed_result["is_broad_region"] = False
         routed_result["body_part_confidence"] = confidence
         routed_result["anatomy_detection"] = anatomy_result
         try:

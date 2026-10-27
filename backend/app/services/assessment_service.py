@@ -31,21 +31,6 @@ from app.utils.logging import get_logger
 logger = get_logger(__name__)
 
 
-def _has_xray_result(item: Any) -> bool:
-    """A completed image result may contain multi-label findings instead of one prediction."""
-    if not isinstance(item, dict):
-        return False
-    prediction = item.get("prediction")
-    findings = item.get("findings")
-    has_prediction = isinstance(prediction, str) and bool(prediction.strip())
-    has_findings = isinstance(findings, list) and any(
-        isinstance(finding, dict)
-        and str(finding.get("label") or finding.get("name") or finding.get("finding") or "").strip()
-        for finding in findings
-    )
-    return has_prediction or has_findings
-
-
 def _xray_finding_is_actionable(item: Any) -> bool:
     """Only accept explicit positive/actionable findings as clinical candidates."""
     if not isinstance(item, dict):
@@ -54,6 +39,39 @@ def _xray_finding_is_actionable(item: Any) -> bool:
         return True
     state = str(item.get("state") or item.get("status") or "").strip().upper()
     return state in {"PRESENT", "POSITIVE", "DETECTED"}
+
+
+def _has_xray_result(item: Any) -> bool:
+    """Require a prediction or an explicitly actionable finding, not raw score labels."""
+    if not isinstance(item, dict):
+        return False
+    prediction = item.get("prediction")
+    has_prediction = isinstance(prediction, str) and bool(prediction.strip())
+    findings = item.get("findings")
+    has_actionable_findings = isinstance(findings, list) and any(
+        _xray_finding_is_actionable(finding) for finding in findings
+    )
+    return has_prediction or has_actionable_findings
+
+
+def _is_xray_region_mismatch(item: Any) -> bool:
+    """Normalize region-mismatch signals from current and legacy X-ray result payloads."""
+    if not isinstance(item, dict):
+        return False
+    status = str(item.get("status") or "").strip().upper()
+    verification_status = str(item.get("region_verification_status") or "").strip().upper()
+    if status in {"REGION_MISMATCH", "MISMATCH"} or verification_status in {"REGION_MISMATCH", "MISMATCH"}:
+        return True
+    verification = item.get("region_verification")
+    if isinstance(verification, dict):
+        return str(verification.get("status") or "").strip().upper() in {"REGION_MISMATCH", "MISMATCH"}
+    if isinstance(verification, list):
+        return any(
+            isinstance(record, dict)
+            and str(record.get("status") or "").strip().upper() in {"REGION_MISMATCH", "MISMATCH"}
+            for record in verification
+        )
+    return False
 
 
 def _format_xray_findings(findings: Any) -> list[str]:
@@ -213,11 +231,7 @@ def generate_assessment_feedback(
             x for x in xray_images_list
             if str(x.get("status") or "").strip().upper() == "COMPLETED" and _has_xray_result(x)
         ]
-        mismatched = [
-            x for x in xray_images_list
-            if str(x.get("status") or "").strip().upper() == "REGION_MISMATCH"
-            or str(x.get("region_verification_status") or "").strip().upper() == "MISMATCH"
-        ]
+        mismatched = [x for x in xray_images_list if _is_xray_region_mismatch(x)]
         unavailable = [
             x for x in xray_images_list
             if str(x.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR", "INVALID", "REJECTED"}
@@ -365,11 +379,7 @@ def generate_assessment_feedback(
                 img for img in xray_images_list
                 if str(img.get("status") or "").strip().upper() == "COMPLETED" and _has_xray_result(img)
             ]
-            mismatched_imgs = [
-                img for img in xray_images_list
-                if str(img.get("status") or "").strip().upper() == "REGION_MISMATCH"
-                or str(img.get("region_verification_status") or "").strip().upper() == "MISMATCH"
-            ]
+            mismatched_imgs = [img for img in xray_images_list if _is_xray_region_mismatch(img)]
             unavailable_imgs = [
                 img for img in xray_images_list
                 if str(img.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR", "INVALID", "REJECTED"}
@@ -464,7 +474,7 @@ def generate_assessment_feedback(
                 status == "COMPLETED" and _has_xray_result(img)
                 for status, img in zip(image_statuses, xray_images_list)
             )
-            mismatch_count = sum(status == "REGION_MISMATCH" for status in image_statuses)
+            mismatch_count = sum(_is_xray_region_mismatch(img) for img in xray_images_list)
             unavailable_count = sum(
                 status in {"UNAVAILABLE", "FAILED", "ERROR", "INVALID", "REJECTED"}
                 for status in image_statuses
@@ -487,6 +497,12 @@ def generate_assessment_feedback(
             "status": effective_status,
             "region": xray_region.title() if (has_xray_images and xray_region not in {"not declared", "unknown"}) else "Not declared",
             "model": xray_meta.get("model_version") or "N/A" if has_xray_images else "N/A",
+            "anatomy_metadata": (
+                xray_images_list[0].get("anatomy_metadata")
+                if len(xray_images_list) == 1 and isinstance(xray_images_list[0], dict)
+                else [image.get("anatomy_metadata") for image in xray_images_list
+                      if isinstance(image, dict) and image.get("anatomy_metadata") is not None]
+            ),
             "prediction": (
                 xray_pred if has_xray_images and len(xray_images_list) <= 1 else None
             ),
@@ -1065,6 +1081,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "region": xr.region,
             "prediction": xr.prediction,
             "findings": getattr(xr, "findings", None) or [],
+            "anatomy_metadata": getattr(xr, "anatomy_metadata", None),
             "confidence_if_valid": xr.confidence_if_valid,
             "uncertainty": xr.uncertainty,
             "model_version": xr.model_version,

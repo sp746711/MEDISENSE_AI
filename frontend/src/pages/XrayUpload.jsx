@@ -741,6 +741,14 @@ export default function XrayUpload() {
         size: item.size,
         previewUrl: url,
         previewType: isPdf ? 'pdf' : 'image',
+        // Carry the existing backend classification into the preview modal.
+        detectedRegion: item.detectedRegion || null,
+        candidateRegion: item.candidateRegion || null,
+        bodyPartConfidence:
+          typeof item.bodyPartConfidence === 'number'
+            ? item.bodyPartConfidence
+            : null,
+        anatomyVerificationStatus: item.anatomyVerificationStatus || 'unverified',
       });
     } catch {
       setError(`Unable to generate preview for ${item.name}.`);
@@ -1290,6 +1298,10 @@ export default function XrayUpload() {
           previewUrl={previewState.previewUrl}
           previewType={previewState.previewType}
           onClose={handleClosePreview}
+          detectedRegion={previewState.detectedRegion}
+          candidateRegion={previewState.candidateRegion}
+          bodyPartConfidence={previewState.bodyPartConfidence}
+          anatomyVerificationStatus={previewState.anatomyVerificationStatus}
         />
       ) : null}
     </div>

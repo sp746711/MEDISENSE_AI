@@ -39,7 +39,7 @@ def _symptom_key(value: Any) -> str:
     """Normalize common wording variants without inferring clinical state."""
     text = _text(value)
     text = re.sub(r"[_-]+", " ", text)
-    text = re.sub(r"\\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
     aliases = {
         "shortness of breath": "difficulty breathing",
         "breathlessness": "difficulty breathing",

@@ -191,7 +191,9 @@ class XrayResult(Base):
     #           "candidate_region": "KNEE", "top_candidates": [...],
     #           "classifier_version": "convnext_tiny_onnx_33class"}
     anatomy_metadata: Mapped[Any] = mapped_column(JSONType, nullable=True)
-    confidence_if_valid: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # Confidence is numeric model output in the inclusive range [0.0, 1.0].
+    # Store it as a numeric column so route/API code does not persist floats as strings.
+    confidence_if_valid: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     uncertainty: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     explainability_artifact: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="pending")

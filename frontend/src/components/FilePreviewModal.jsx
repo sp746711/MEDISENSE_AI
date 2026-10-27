@@ -1,6 +1,15 @@
 import { useState, useEffect } from 'react';
 
-export default function FilePreviewModal({ file, previewUrl, previewType, onClose }) {
+export default function FilePreviewModal({
+  file,
+  previewUrl,
+  previewType,
+  onClose,
+  detectedRegion = null,
+  candidateRegion = null,
+  bodyPartConfidence = null,
+  anatomyVerificationStatus = 'unverified',
+}) {
   const [zoom, setZoom] = useState(1);
 
   useEffect(() => {
@@ -156,6 +165,50 @@ export default function FilePreviewModal({ file, previewUrl, previewType, onClos
               </p>
             </div>
           )}
+
+          {isImage && (detectedRegion || candidateRegion) ? (
+            <section
+              aria-label="Automatic X-ray body-region classification"
+              style={{
+                margin: '1rem auto',
+                padding: '0.85rem 1rem',
+                width: 'min(100% - 2rem, 600px)',
+                boxSizing: 'border-box',
+                border: '1px solid #dbeafe',
+                borderRadius: '10px',
+                background: '#f8fbff',
+                color: '#0f172a',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: '0.4rem', color: '#075985' }}>
+                Automatic body-region detection
+              </div>
+              {detectedRegion ? (
+                <p style={{ margin: '0.25rem 0' }}>
+                  <strong>Detected region:</strong>{' '}
+                  {String(detectedRegion).replace(/_/g, ' ')}
+                </p>
+              ) : (
+                <p style={{ margin: '0.25rem 0' }}>
+                  <strong>Unverified candidate:</strong>{' '}
+                  {String(candidateRegion).replace(/_/g, ' ')}
+                </p>
+              )}
+              {typeof bodyPartConfidence === 'number' && Number.isFinite(bodyPartConfidence) ? (
+                <p style={{ margin: '0.25rem 0' }}>
+                  <strong>Classifier confidence:</strong>{' '}
+                  {(bodyPartConfidence * 100).toFixed(1)}%
+                  <span style={{ color: '#64748b' }}> (not a calibrated clinical probability)</span>
+                </p>
+              ) : null}
+              <p style={{ margin: '0.5rem 0 0', fontSize: '0.82rem', color: '#64748b' }}>
+                This is an automated image classification, not a confirmed medical finding. Verify the body region before relying on subsequent analysis.
+                {String(anatomyVerificationStatus).toLowerCase() !== 'completed' && !detectedRegion
+                  ? ' The region has not been verified.'
+                  : ''}
+              </p>
+            </section>
+          ) : null}
         </div>
 
         {/* Modal Footer Note */}

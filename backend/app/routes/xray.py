@@ -85,8 +85,27 @@ def _build_anatomy_metadata(
 ) -> dict[str, Any]:
     """Build durable anatomy-classifier metadata, separate from disease findings."""
     detection = routing.get("anatomy_detection")
-    detection = detection if isinstance(detection, dict) else {}
-    candidate_region = routing.get("candidate_region")
+    if not isinstance(detection, dict):
+        detection = {
+            "candidate_body_part": routing.get("classifier_candidate"),
+            "status": routing.get("classifier_status"),
+            "confidence": routing.get("classifier_confidence"),
+            "top_predictions": routing.get("classifier_top_predictions")
+            or routing.get("top_predictions"),
+            "classifier_version": routing.get("classifier_version"),
+            "model_version": routing.get("classifier_model_version"),
+            "model_name": routing.get("classifier_model_name"),
+            "architecture": routing.get("classifier_architecture"),
+            "confidence_threshold_validated": routing.get(
+                "confidence_threshold_validated", False
+            ),
+        }
+        if not any(value is not None for value in detection.values()):
+            detection = {}
+    candidate_region = (
+        routing.get("candidate_region")
+        or routing.get("classifier_candidate")
+    )
     if not isinstance(candidate_region, str) or not candidate_region.strip():
         candidate_region = detection.get("candidate_body_part") or detection.get("candidate_region")
     if isinstance(candidate_region, str):
@@ -347,7 +366,36 @@ async def upload_xray(
         region_source = routing.get("region_source") or "unknown"
         anatomy_status = str(routing.get("anatomy_verification_status") or "unverified").lower()
         anatomy_detection = routing.get("anatomy_detection")
+        if not isinstance(anatomy_detection, dict):
+            # Older/current router responses may expose classifier values as
+            # flat fields rather than an `anatomy_detection` object. Normalize
+            # them here so API responses and durable metadata do not lose the
+            # actual classifier candidate/status/confidence.
+            anatomy_detection = {
+                "candidate_body_part": routing.get("classifier_candidate")
+                or routing.get("candidate_region"),
+                "status": routing.get("classifier_status")
+                or routing.get("anatomy_verification_status"),
+                "confidence": routing.get("classifier_confidence")
+                if routing.get("classifier_confidence") is not None
+                else routing.get("body_part_confidence"),
+                "top_predictions": routing.get("classifier_top_predictions")
+                or routing.get("top_predictions"),
+                "classifier_version": routing.get("classifier_version"),
+                "model_version": routing.get("classifier_model_version"),
+                "model_name": routing.get("classifier_model_name"),
+                "architecture": routing.get("classifier_architecture"),
+                "confidence_threshold_validated": routing.get(
+                    "confidence_threshold_validated", False
+                ),
+            }
+            # Do not emit an empty synthetic object when the router has no
+            # classifier metadata at all.
+            if not any(value is not None for value in anatomy_detection.values()):
+                anatomy_detection = None
         body_part_confidence = routing.get("body_part_confidence")
+        if body_part_confidence is None and isinstance(anatomy_detection, dict):
+            body_part_confidence = anatomy_detection.get("confidence")
         if body_part_confidence is not None:
             try:
                 body_part_confidence = float(body_part_confidence)
@@ -557,7 +605,15 @@ async def upload_xray(
             "status": anatomy_status.upper(),
             "source": region_source,
             "detected_region": None if resolved_region == "unknown" else resolved_region,
-            "candidate_region": routing.get("candidate_region"),
+            "candidate_region": (
+                routing.get("candidate_region")
+                or routing.get("classifier_candidate")
+                or (
+                    anatomy_detection.get("candidate_body_part")
+                    if isinstance(anatomy_detection, dict)
+                    else None
+                )
+            ),
             "body_part_confidence": body_part_confidence,
             "confidence_threshold_validated": (
                 anatomy_detection.get("confidence_threshold_validated", False)

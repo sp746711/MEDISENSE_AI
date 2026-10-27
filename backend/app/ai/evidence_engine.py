@@ -202,21 +202,27 @@ def _as_dict_list(value: Any) -> list[dict[str, Any]]:
 
 
 def _report_has_extracted_content(report: dict[str, Any]) -> bool:
-    """Whether a report has readable text or at least one structured finding."""
+    """Whether a report has readable text or at least one structured finding.
+
+    Accept both the nested ``structured_findings`` schema and the legacy/top-level
+    qualitative/narrative lists used by some extraction callers.
+    """
     text = report.get("extracted_text") or report.get("text")
     if isinstance(text, str) and text.strip():
         return True
 
     structured = report.get("structured_findings")
-    if not isinstance(structured, dict):
-        return False
+    structured = structured if isinstance(structured, dict) else {}
 
-    for key in ("lab_parameters", "qualitative_findings", "narrative_findings"):
-        value = structured.get(key)
-        if isinstance(value, (list, tuple)) and any(isinstance(item, dict) and item for item in value):
-            return True
+    for source in (structured, report):
+        for key in ("lab_parameters", "qualitative_findings", "narrative_findings"):
+            value = source.get(key)
+            if isinstance(value, (list, tuple)) and any(
+                isinstance(item, dict) and bool(item) for item in value
+            ):
+                return True
 
-    total = structured.get("total_extracted")
+    total = structured.get("total_extracted", report.get("total_extracted"))
     try:
         return int(total) > 0
     except (TypeError, ValueError, OverflowError):
@@ -751,15 +757,31 @@ def combine_evidence(
     processed_xray_reports: list[dict[str, Any]] = []
     for idx, xr in enumerate(xray_reports):
         xr_fname = xr.get("file_name") or f"xray_report_{idx+1}.pdf"
-        struct = xr.get("structured_findings") or {}
-        xr_qual = _as_dict_list(struct.get("qualitative_findings", [])) if isinstance(struct, dict) else []
-        xr_narr = _as_dict_list(struct.get("narrative_findings", [])) if isinstance(struct, dict) else []
+        struct = xr.get("structured_findings")
+        struct = dict(struct) if isinstance(struct, dict) else {}
+        # Support both nested and top-level extractor payloads. Nested values
+        # take precedence when present; top-level values are a compatibility
+        # fallback, not a second copy of the same findings.
+        xr_qual = _as_dict_list(
+            struct.get("qualitative_findings")
+            if struct.get("qualitative_findings") is not None
+            else xr.get("qualitative_findings", [])
+        )
+        xr_narr = _as_dict_list(
+            struct.get("narrative_findings")
+            if struct.get("narrative_findings") is not None
+            else xr.get("narrative_findings", [])
+        )
+        if "qualitative_findings" not in struct and xr_qual:
+            struct["qualitative_findings"] = xr_qual
+        if "narrative_findings" not in struct and xr_narr:
+            struct["narrative_findings"] = xr_narr
         xr_entry = {
             "id": xr.get("id") or xr.get("report_id"),
             "file_name": xr_fname,
             "source_type": "XRAY_REPORT",
             "source_file": xr_fname,
-            "status": "EXTRACTED" if (xr.get("extracted_text") or struct) else "UNREADABLE",
+            "status": "EXTRACTED" if _report_has_extracted_content(xr) else "UNREADABLE",
             "structured_findings": struct,
             "qualitative_findings": xr_qual,
             "narrative_findings": xr_narr,
@@ -789,49 +811,70 @@ def combine_evidence(
     all_declared_image_regions = {r for r in normalized_image_regions.values() if r}
 
     def _report_linked_image_names(report: dict[str, Any]) -> list[str]:
-        explicit_ids = {
-            str(report.get(k)).strip()
-            for k in ("xray_result_id", "xray_image_id", "image_id", "linked_xray_result_id", "source_xray_result_id")
-            if report.get(k)
-        }
-        if explicit_ids:
-            matches = [
-                str(img.get("file_name") or "xray_image")
-                for img in processed_images
-                if explicit_ids.intersection({str(img.get("id") or ""), str(img.get("xray_result_id") or "")})
-            ]
-            if matches:
-                return matches
-        # Auto-pair only when this assessment has exactly one image and one
-        # radiology report. With multiple reports, a single image is not enough
-        # to prove which report belongs to it; require explicit IDs or matching
-        # filenames instead.
-        if len(processed_images) == 1 and len(processed_xray_reports) == 1:
-            return [str(processed_images[0].get("file_name") or "xray_image")]
-        report_stem = Path(str(report.get("file_name") or "")).stem.casefold()
-        # Only a strong file-stem relationship is used for multi-image batches.
-        matches = []
-        if report_stem:
-            report_tokens = {t for t in re.split(r"[^a-z0-9]+", report_stem) if t and t not in {"report", "radiology", "xray", "ray", "image", "scan", "current", "prior", "previous"}}
-            for img in processed_images:
-                img_name = str(img.get("file_name") or "")
-                img_stem = Path(img_name).stem.casefold()
-                img_tokens = {t for t in re.split(r"[^a-z0-9]+", img_stem) if t and t not in {"report", "radiology", "xray", "ray", "image", "scan", "current", "prior", "previous"}}
-                if report_stem == img_stem or (report_tokens and img_tokens and len(report_tokens.intersection(img_tokens)) >= min(2, len(report_tokens), len(img_tokens))):
-                    matches.append(img_name)
-        if matches:
-            return matches
-        # One report may describe a batch only when it is the sole report in
-        # this X-Ray assessment and every image has the same known region. With
-        # multiple reports, never pair by region alone.
-        if (
-            processed_images
-            and len(processed_xray_reports) == 1
-            and len(all_declared_image_regions) == 1
-            and all_declared_image_regions
+        """Return image names only for an explicitly confirmed persisted association.
+
+        Region compatibility, filename similarity, assessment membership, or a
+        one-image/one-report batch are not user confirmation. Keep those sources
+        separate until the pairing workflow persists an explicit confirmation.
+        """
+        import re
+
+        status_candidates = (
+            report.get("association_status"),
+            report.get("pairing_status"),
+            report.get("report_image_association_status"),
+            report.get("link_status"),
+            report.get("association_decision"),
+        )
+        status_values = {str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
+                         for value in status_candidates}
+        explicit_confirmed = any(value in {
+            "CONFIRMED", "USER_CONFIRMED", "EXPLICITLY_CONFIRMED",
+            "CONFIRMED_MATCH", "ACCEPTED", "APPROVED",
+        } for value in status_values) or any(
+            report.get(key) is True
+            for key in (
+                "association_confirmed", "pairing_confirmed",
+                "user_confirmed_pair", "explicitly_confirmed",
+                "report_image_confirmed",
+            )
+        )
+        # A rejected association must never be revived by another field.
+        if any(value in {"REJECTED", "DECLINED", "DISMISSED", "CANCELLED"}
+               for value in status_values) or any(
+            report.get(key) is True
+            for key in ("association_rejected", "pairing_rejected", "user_rejected_pair")
         ):
-            return [str(img.get("file_name") or "xray_image") for img in processed_images]
-        return []
+            return []
+        if not explicit_confirmed:
+            return []
+
+        explicit_ids = {
+            str(report.get(key)).strip()
+            for key in (
+                "xray_result_id", "xray_image_id", "image_id",
+                "linked_xray_result_id", "source_xray_result_id",
+                "confirmed_xray_result_id", "confirmed_image_id",
+            )
+            if report.get(key) not in (None, "")
+        }
+        explicit_names = {
+            str(report.get(key)).strip()
+            for key in ("confirmed_image_file", "linked_image_file", "xray_image_file")
+            if isinstance(report.get(key), str) and report.get(key).strip()
+        }
+        matches = []
+        for img in processed_images:
+            image_ids = {
+                str(img.get(key)).strip()
+                for key in ("id", "xray_result_id", "image_id")
+                if img.get(key) not in (None, "")
+            }
+            image_name = str(img.get("file_name") or "xray_image")
+            if (explicit_ids and explicit_ids.intersection(image_ids)) or image_name in explicit_names:
+                matches.append(image_name)
+        # Do not infer links from filenames, anatomy, batch membership, or counts.
+        return list(dict.fromkeys(matches))
 
     for report in processed_xray_reports:
         # Locate original record for full OCR metadata and explicit region hints.
@@ -882,6 +925,8 @@ def combine_evidence(
                         "reason": f"Image declared region '{item['image_region']}' differs from report-identified region '{report_region}' (source: {region_source}).",
                     })
             elif linked_region_values and all(region == report_region for region in linked_region_values):
+                # The region check is informative only. The report was not paired
+                # unless the upstream workflow persisted an explicit confirmation.
                 verification_status = "MATCH"
             else:
                 verification_status = "UNVERIFIED"
@@ -893,8 +938,21 @@ def combine_evidence(
             "matched_image_files": linked_images,
             "mismatches": mismatch_regions,
             "verified_match": verification_status == "MATCH",
+            "association_confirmed": bool(linked_images),
+            "association_status": (
+                str(
+                    source_report.get("association_status")
+                    or source_report.get("pairing_status")
+                    or source_report.get("report_image_association_status")
+                    or source_report.get("link_status")
+                    or source_report.get("association_decision")
+                    or ("CONFIRMED" if linked_images else "UNCONFIRMED")
+                ).strip().upper()
+            ),
             "message": (
-                "Image and radiology-report regions match based on the available declared metadata/text."
+                "Image/report association was explicitly confirmed and the regions match."
+                if verification_status == "MATCH" and linked_images
+                else "The report and image regions appear compatible, but no explicit report-to-image confirmation is recorded."
                 if verification_status == "MATCH"
                 else "Image region and report region disagree; keep the sources unlinked and correct the pairing."
                 if verification_status == "MISMATCH"
@@ -993,9 +1051,12 @@ def combine_evidence(
 
     for rep in processed_xray_reports:
         region_status = str((rep.get("region_verification") or {}).get("status") or "").upper()
-        if processed_images and region_status == "MISMATCH":
-            # Preserve report text in xray.reports for display/audit, but don't
-            # merge a report known to describe a different region into image evidence.
+        if processed_images and region_status in {"MISMATCH", "UNVERIFIED", "UNPAIRED"}:
+            # Preserve report text in xray.reports for display/audit, but do not
+            # merge unverified sources into image evidence.
+            continue
+        if processed_images and not bool((rep.get("region_verification") or {}).get("association_confirmed")):
+            # Matching anatomy is not explicit user confirmation of the pairing.
             continue
         for qf in rep.get("qualitative_findings", []):
             if not isinstance(qf, dict):
@@ -1272,7 +1333,10 @@ def combine_evidence(
     definite_qualitative_signals += sum(
         1
         for report in processed_xray_reports
-        if not (processed_images and str((report.get("region_verification") or {}).get("status") or "").upper() in {"MISMATCH", "UNVERIFIED", "UNPAIRED"})
+        if not processed_images or (
+            str((report.get("region_verification") or {}).get("status") or "").upper() not in {"MISMATCH", "UNVERIFIED", "UNPAIRED"}
+            and bool((report.get("region_verification") or {}).get("association_confirmed"))
+        )
         for item in report.get("qualitative_findings", [])
         if isinstance(item, dict)
         and str(item.get("state") or item.get("status") or "UNKNOWN").strip().upper() in {"PRESENT", "ABSENT"}
@@ -1318,7 +1382,10 @@ def combine_evidence(
         isinstance(item, dict)
         and str(item.get("state") or item.get("status") or "UNKNOWN").strip().upper() in {"PRESENT", "ABSENT"}
         for report in processed_xray_reports
-        if not processed_images or str((report.get("region_verification") or {}).get("status") or "").upper() not in {"MISMATCH", "UNVERIFIED", "UNPAIRED"}
+        if not processed_images or (
+            str((report.get("region_verification") or {}).get("status") or "").upper() not in {"MISMATCH", "UNVERIFIED", "UNPAIRED"}
+            and bool((report.get("region_verification") or {}).get("association_confirmed"))
+        )
         for item in report.get("qualitative_findings", [])
     )
     has_definite_report_evidence = has_definite_medical_report_evidence or has_definite_radiology_report_evidence

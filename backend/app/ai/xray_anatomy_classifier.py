@@ -1,12 +1,11 @@
 """Automatic full-body X-ray anatomy suggestion for MediSense AI Goal 1.
 
-Uses the 33-class ConvNeXt-Tiny ONNX model stored at
-backend/models/xray/bodypart_full/model.onnx, with class order from classes.txt.
+Uses the 33-class ONNX anatomy model and classes.txt label order.
 
-This module identifies likely anatomy only. It does not detect fractures or
-other pathology, and its confidence threshold is a workflow gate, not a
-clinically calibrated probability. Unsupported/uncertain results must not be
-routed to an unrelated regional abnormality model.
+This module suggests anatomy only; it does not diagnose fractures or other
+pathology. Confidence is a workflow signal, not a clinically calibrated
+probability. A high score must not be described as independently verified
+anatomy.
 """
 from __future__ import annotations
 
@@ -21,14 +20,29 @@ MODEL_NAME = "convnext_tiny_onnx_33class"
 DEFAULT_MIN_CONFIDENCE = 0.60
 IMAGE_SIZE = 224
 CLASS_COUNT = 33
+PROBABILITY_SUM_TOLERANCE = 0.03
 
-# These are anatomy classifier labels, not a list of regions with supported
-# disease/abnormality models. The router independently checks model availability.
+# These labels describe broad regions or study groupings rather than a specific
+# anatomical site. They must not be silently converted into a specific site.
+BROAD_ANATOMY_LABELS = {
+    "EXTREMITY",
+    "LOWER_EXTREMITY",
+    "UPPER_EXTREMITY",
+    "SPINE",
+}
+
+
+def _is_specific_anatomy_label(label: str) -> bool:
+    return str(label).strip().upper() not in BROAD_ANATOMY_LABELS
+
 
 def _default_model_path() -> Path:
     return (
         Path(__file__).resolve().parents[2]
-        / "models" / "xray" / "bodypart_full" / "model.onnx"
+        / "models"
+        / "xray"
+        / "bodypart_full"
+        / "model.onnx"
     )
 
 
@@ -42,30 +56,29 @@ def _read_labels(path: Path) -> list[str]:
             f"X-ray anatomy class labels were not found at '{path}'. "
             "The 33 labels must be kept beside model.onnx."
         )
-    labels = [line.strip().upper() for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
+
+    labels = [
+        line.strip().upper()
+        for line in path.read_text(encoding="utf-8-sig").splitlines()
+        if line.strip()
+    ]
+
     if len(labels) != CLASS_COUNT:
         raise ValueError(
-            f"Expected {CLASS_COUNT} anatomy labels in '{path}', found {len(labels)}."
+            f"Expected {CLASS_COUNT} anatomy labels in '{path}', "
+            f"found {len(labels)}."
         )
+
     if len(set(labels)) != len(labels):
-        raise ValueError(f"Anatomy label file contains duplicate labels: '{path}'.")
+        raise ValueError(
+            f"Anatomy label file contains duplicate labels: '{path}'."
+        )
+
     return labels
 
 
 class XRayAnatomyClassifier:
-    """Load the broader 33-class ONNX anatomy classifier.
-
-    Constructor compatibility:
-      - ``checkpoint_path`` may be passed positionally/by keyword as in the
-        earlier class. It now points to an ONNX model, not a PyTorch .pth file.
-      - ``XRAY_BODYPART_ONNX_PATH`` optionally overrides the default model path.
-      - ``XRAY_BODYPART_CLASSES_PATH`` optionally overrides classes.txt.
-      - ``XRAY_ANATOMY_MIN_CONFIDENCE`` configures the provisional routing gate.
-
-    The existing MURA regional abnormality checkpoints remain separate and are
-    still selected by xray_router only if its model registry says they are
-    compatible and available.
-    """
+    """Load the 33-class ONNX anatomy classifier."""
 
     def __init__(
         self,
@@ -74,28 +87,52 @@ class XRayAnatomyClassifier:
         min_confidence: float | None = None,
         labels_path: str | Path | None = None,
     ) -> None:
-        explicit_or_env_model = checkpoint_path or os.getenv("XRAY_BODYPART_ONNX_PATH")
-        # Continue accepting the historical env var only if it explicitly names
-        # an ONNX file. A former .pth path must not be mistaken for this model.
+        explicit_or_env_model = (
+            checkpoint_path or os.getenv("XRAY_BODYPART_ONNX_PATH")
+        )
+
         if not explicit_or_env_model:
-            legacy_env_path = os.getenv("XRAY_BODYPART_CHECKPOINT", "").strip()
+            legacy_env_path = os.getenv(
+                "XRAY_BODYPART_CHECKPOINT", ""
+            ).strip()
+
             if legacy_env_path and Path(legacy_env_path).suffix.lower() == ".onnx":
                 explicit_or_env_model = legacy_env_path
-        self.model_path = Path(explicit_or_env_model or _default_model_path()).expanduser()
-        self.checkpoint_path = self.model_path  # backwards-compatible attribute
-        labels_override = labels_path or os.getenv("XRAY_BODYPART_CLASSES_PATH")
-        self.labels_path = Path(labels_override).expanduser() if labels_override else _default_labels_path(self.model_path)
 
-        confidence_text = os.getenv("XRAY_ANATOMY_MIN_CONFIDENCE", str(DEFAULT_MIN_CONFIDENCE))
-        threshold = min_confidence if min_confidence is not None else float(confidence_text)
+        self.model_path = Path(
+            explicit_or_env_model or _default_model_path()
+        ).expanduser()
+
+        self.checkpoint_path = self.model_path
+
+        labels_override = (
+            labels_path or os.getenv("XRAY_BODYPART_CLASSES_PATH")
+        )
+
+        self.labels_path = (
+            Path(labels_override).expanduser()
+            if labels_override
+            else _default_labels_path(self.model_path)
+        )
+
+        confidence_text = os.getenv(
+            "XRAY_ANATOMY_MIN_CONFIDENCE",
+            str(DEFAULT_MIN_CONFIDENCE),
+        )
+
+        threshold = (
+            min_confidence
+            if min_confidence is not None
+            else float(confidence_text)
+        )
+
         if not 0.0 <= float(threshold) <= 1.0:
             raise ValueError("min_confidence must be between 0 and 1.")
-        self.min_confidence = float(threshold)
 
-        # The published ONNX model is CPU-friendly. Honor an explicit CUDA request
-        # only when ONNX Runtime actually exposes the CUDA provider; otherwise use CPU.
+        self.min_confidence = float(threshold)
         self.requested_device = (device or "cpu").strip().lower()
         self.device = "cpu"
+
         self.session = None
         self.input_name: str | None = None
         self.output_name: str | None = None
@@ -110,58 +147,98 @@ class XRayAnatomyClassifier:
         return self.session is not None and bool(self.classes)
 
     def load(self) -> None:
-        """Load ONNX model and validate its input/output contract and labels."""
+        """Load the ONNX model and validate its interface."""
         if self.is_loaded:
             return
+
         if self.model_path.suffix.lower() != ".onnx":
             raise ValueError(
                 "The full-body anatomy classifier requires model.onnx. "
-                f"Received '{self.model_path}'. Keep the older MURA .pth checkpoint "
-                "in its existing bodypart folder; do not use it as this model."
+                f"Received '{self.model_path}'."
             )
-        if not self.model_path.is_file() or self.model_path.stat().st_size <= 0:
+
+        if (
+            not self.model_path.is_file()
+            or self.model_path.stat().st_size <= 0
+        ):
             raise FileNotFoundError(
-                f"Full-body X-ray anatomy model was not found or is empty: '{self.model_path}'."
+                "Full-body X-ray anatomy model was not found or is empty: "
+                f"'{self.model_path}'."
             )
 
         import onnxruntime as ort
 
         labels = _read_labels(self.labels_path)
+
         available_providers = set(ort.get_available_providers())
-        providers: list[str] = ["CPUExecutionProvider"]
+        providers = ["CPUExecutionProvider"]
         selected_device = "cpu"
-        if self.requested_device.startswith("cuda") and "CUDAExecutionProvider" in available_providers:
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+
+        if (
+            self.requested_device.startswith("cuda")
+            and "CUDAExecutionProvider" in available_providers
+        ):
+            providers = [
+                "CUDAExecutionProvider",
+                "CPUExecutionProvider",
+            ]
             selected_device = "cuda"
 
-        session = ort.InferenceSession(str(self.model_path), providers=providers)
+        session = ort.InferenceSession(
+            str(self.model_path),
+            providers=providers,
+        )
+
         inputs = session.get_inputs()
         outputs = session.get_outputs()
+
         if len(inputs) != 1 or len(outputs) < 1:
             raise ValueError(
-                "Unexpected ONNX model interface: expected one image input and at least one output."
+                "Unexpected ONNX interface: expected one image input "
+                "and at least one output."
             )
 
         input_meta = inputs[0]
         input_shape = input_meta.shape
+
         if len(input_shape) != 4:
-            raise ValueError(f"Expected NCHW image input shape [N,3,224,224], got {input_shape}.")
-        expected_dims = {1: 3, 2: IMAGE_SIZE, 3: IMAGE_SIZE}
+            raise ValueError(
+                "Expected NCHW input [N,3,224,224], "
+                f"got {input_shape}."
+            )
+
+        expected_dims = {
+            1: 3,
+            2: IMAGE_SIZE,
+            3: IMAGE_SIZE,
+        }
+
         for axis, expected in expected_dims.items():
             actual = input_shape[axis]
+
             if isinstance(actual, int) and actual != expected:
                 raise ValueError(
-                    f"ONNX input dimension {axis} must be {expected}; model reports {actual}."
+                    f"Input dimension {axis} must be {expected}; "
+                    f"model reports {actual}."
                 )
 
         output_meta = outputs[0]
         output_shape = output_meta.shape
+
         if len(output_shape) != 2:
-            raise ValueError(f"Expected class output shape [N,{CLASS_COUNT}], got {output_shape}.")
-        output_classes = output_shape[1]
-        if isinstance(output_classes, int) and output_classes != len(labels):
             raise ValueError(
-                f"ONNX output has {output_classes} classes but classes.txt has {len(labels)} labels."
+                f"Expected output [N,{CLASS_COUNT}], got {output_shape}."
+            )
+
+        output_classes = output_shape[1]
+
+        if (
+            isinstance(output_classes, int)
+            and output_classes != len(labels)
+        ):
+            raise ValueError(
+                f"ONNX output has {output_classes} classes, but "
+                f"classes.txt has {len(labels)} labels."
             )
 
         self._ort = ort
@@ -171,53 +248,52 @@ class XRayAnatomyClassifier:
         self.classes = labels
         self.idx_to_class = dict(enumerate(labels))
         self.device = selected_device
+
         logger.info(
-            "Loaded full-body X-ray anatomy classifier: model=%s classes=%d device=%s model_path=%s labels_path=%s",
-            self.model_name, len(self.classes), self.device, self.model_path, self.labels_path,
+            "Loaded anatomy classifier: model=%s classes=%d device=%s",
+            self.model_name,
+            len(self.classes),
+            self.device,
         )
 
     def _validate_image_content(self, image: Any) -> None:
-        """Reject obvious blank/placeholder inputs before anatomy inference.
-
-        This conservative technical check is not a medical image authenticity
-        detector. It does not reject images based on dimensions alone and does
-        not establish that an image is a genuine radiograph.
-        """
+        """Reject obvious blank placeholder cards."""
         import numpy as np
         from PIL import Image, ImageOps
 
         checked = ImageOps.exif_transpose(image).convert("L")
-        checked.thumbnail((256, 256), resample=Image.Resampling.BILINEAR)
+        checked.thumbnail(
+            (256, 256),
+            resample=Image.Resampling.BILINEAR,
+        )
+
         pixels = np.asarray(checked, dtype=np.uint8)
 
         if pixels.size == 0 or pixels.ndim != 2:
-            raise ValueError("The provided X-ray image is empty or invalid.")
+            raise ValueError(
+                "The provided X-ray image is empty or invalid."
+            )
 
-        min_value = int(pixels.min())
-        max_value = int(pixels.max())
-        std_value = float(pixels.std())
         bright_fraction = float(np.mean(pixels >= 245))
         dark_fraction = float(np.mean(pixels <= 20))
+        std_value = float(pixels.std())
 
-        # Do not reject all uniform/low-contrast images here: this can create
-        # false positives for synthetic test fixtures and some low-contrast
-        # radiographs. Apply only the targeted placeholder-card heuristic below.
-
-        # Detect a mostly-white placeholder card with only a small amount of
-        # dark text. This is deliberately conservative and may need tuning
-        # against a representative, labelled validation set.
-        if bright_fraction >= 0.90 and dark_fraction <= 0.04 and std_value < 35.0:
+        if (
+            bright_fraction >= 0.90
+            and dark_fraction <= 0.04
+            and std_value < 35.0
+        ):
             raise ValueError(
-                "Image rejected: the image appears to be a blank/placeholder "
-                "card rather than a radiograph. Upload the actual X-ray image."
+                "Image rejected: this appears to be a blank/placeholder "
+                "card rather than a radiograph. Upload the actual X-ray."
             )
 
     def _preprocess(self, pil_image: Any):
-        """Prepare an RGB NCHW tensor using the currently configured transform.
+        """Current RGB, center-crop and ImageNet-normalization pipeline.
 
-        IMPORTANT: the model's original training/model-card preprocessing has not
-        been independently verified in this repository. This transform must not
-        be described as confirmed training parity until that source is available.
+        Training-pipeline parity remains unverified. Do not represent this
+        transform as confirmed training parity until authoritative model
+        preprocessing details have been established.
         """
         if not self.is_loaded:
             self.load()
@@ -229,71 +305,129 @@ class XRayAnatomyClassifier:
             image = pil_image
         else:
             image = Image.open(pil_image)
+
         image = ImageOps.exif_transpose(image).convert("RGB")
         width, height = image.size
-        if width <= 0 or height <= 0:
-            raise ValueError("The provided X-ray image has invalid dimensions.")
 
-        # Reject obvious blank placeholders before resize and center crop.
+        if width <= 0 or height <= 0:
+            raise ValueError(
+                "The provided X-ray image has invalid dimensions."
+            )
+
         self._validate_image_content(image)
 
         scale = IMAGE_SIZE / min(width, height)
-        resized_width = max(IMAGE_SIZE, int(round(width * scale)))
-        resized_height = max(IMAGE_SIZE, int(round(height * scale)))
-        image = image.resize((resized_width, resized_height), resample=Image.Resampling.BILINEAR)
+
+        resized_width = max(
+            IMAGE_SIZE,
+            int(round(width * scale)),
+        )
+        resized_height = max(
+            IMAGE_SIZE,
+            int(round(height * scale)),
+        )
+
+        image = image.resize(
+            (resized_width, resized_height),
+            resample=Image.Resampling.BILINEAR,
+        )
+
         left = (resized_width - IMAGE_SIZE) // 2
         top = (resized_height - IMAGE_SIZE) // 2
-        image = image.crop((left, top, left + IMAGE_SIZE, top + IMAGE_SIZE))
+
+        image = image.crop(
+            (
+                left,
+                top,
+                left + IMAGE_SIZE,
+                top + IMAGE_SIZE,
+            )
+        )
 
         array = np.asarray(image, dtype=np.float32) / np.float32(255.0)
-        mean = np.asarray([0.485, 0.456, 0.406], dtype=np.float32)
-        std = np.asarray([0.229, 0.224, 0.225], dtype=np.float32)
+
+        mean = np.asarray(
+            [0.485, 0.456, 0.406],
+            dtype=np.float32,
+        )
+        std = np.asarray(
+            [0.229, 0.224, 0.225],
+            dtype=np.float32,
+        )
+
         array = (array - mean) / std
-        tensor = np.transpose(array, (2, 0, 1))[None, ...].astype(np.float32, copy=False)
-        if tensor.shape != (1, 3, IMAGE_SIZE, IMAGE_SIZE):
-            raise ValueError(f"Preprocessed tensor has unexpected shape: {tensor.shape}.")
+
+        tensor = np.transpose(array, (2, 0, 1))[None, ...].astype(
+            np.float32,
+            copy=False,
+        )
+
+        expected_shape = (1, 3, IMAGE_SIZE, IMAGE_SIZE)
+
+        if tensor.shape != expected_shape:
+            raise ValueError(
+                f"Preprocessed tensor has unexpected shape: {tensor.shape}."
+            )
+
         return tensor
 
-    def predict_image(self, pil_image: Any) -> dict[str, Any]:
-        """Return the top anatomy candidate, confidence, and top-5 suggestions."""
-        if not self.is_loaded:
-            self.load()
+    def _interpret_output_scores(self, raw_scores):
+        """Validate scores without silently converting arbitrary values."""
         import numpy as np
 
-        tensor = self._preprocess(pil_image)
-        outputs = self.session.run([self.output_name], {self.input_name: tensor})
-        if not outputs:
-            raise ValueError("ONNX anatomy model returned no outputs.")
-        raw_scores = np.asarray(outputs[0], dtype=np.float32)
-        if raw_scores.ndim != 2 or raw_scores.shape != (1, len(self.classes)):
-            raise ValueError(
-                f"ONNX anatomy output has shape {raw_scores.shape}; expected (1, {len(self.classes)})."
-            )
-        scores = raw_scores[0]
-        if not np.isfinite(scores).all():
-            raise ValueError("ONNX anatomy model returned non-finite scores.")
+        scores = np.asarray(raw_scores, dtype=np.float32).reshape(-1)
 
-        # ONNX exports may expose post-softmax probabilities or raw logits.
-        # Accept a plausible probability distribution; otherwise convert logits
-        # with numerically stable softmax instead of rejecting them outright.
-        score_sum = float(scores.sum())
-        looks_like_probabilities = (
-            bool((scores >= 0.0).all())
-            and bool((scores <= 1.0).all())
-            and score_sum > 0.0
-            and abs(score_sum - 1.0) <= 0.03
-        )
-        if looks_like_probabilities:
-            probabilities = scores
-        else:
+        if not np.isfinite(scores).all():
+            raise ValueError(
+                "ONNX anatomy model returned non-finite scores."
+            )
+
+        output_name = (self.output_name or "").strip().lower()
+
+        if "logit" in output_name:
             shifted = scores - float(np.max(scores))
-            exp_scores = np.exp(shifted).astype(np.float32, copy=False)
-            exp_sum = float(exp_scores.sum())
-            if not np.isfinite(exp_sum) or exp_sum <= 0.0:
-                raise ValueError("ONNX anatomy logits could not be converted to probabilities.")
-            probabilities = exp_scores / exp_sum
+            exp_scores = np.exp(shifted).astype(
+                np.float32,
+                copy=False,
+            )
+
+            denominator = float(exp_scores.sum())
+
+            if (
+                not np.isfinite(denominator)
+                or denominator <= 0.0
+            ):
+                raise ValueError(
+                    "ONNX anatomy logits could not be converted "
+                    "to probabilities."
+                )
+
+            probabilities = exp_scores / denominator
+
+        else:
+            if (
+                (scores < 0.0).any()
+                or (scores > 1.0).any()
+                or abs(float(scores.sum()) - 1.0)
+                > PROBABILITY_SUM_TOLERANCE
+            ):
+                raise ValueError(
+                    f"ONNX output '{self.output_name}' is not a valid "
+                    "probability distribution. Refusing to reinterpret "
+                    "it as logits; verify the exported model contract."
+                )
+
+            total = float(scores.sum())
+
+            if total <= 0.0:
+                raise ValueError(
+                    "ONNX anatomy probability sum must be positive."
+                )
+
+            probabilities = scores / total
 
         probability_sum = float(probabilities.sum())
+
         if (
             not np.isfinite(probabilities).all()
             or (probabilities < 0.0).any()
@@ -302,66 +436,133 @@ class XRayAnatomyClassifier:
             or abs(probability_sum - 1.0) > 1e-4
         ):
             raise ValueError(
-                f"ONNX anatomy probabilities are invalid (sum={probability_sum:.6f}); refusing to route."
+                "ONNX anatomy probabilities are invalid; refusing to route."
             )
 
+        return probabilities
+
+    def predict_image(self, pil_image: Any) -> dict[str, Any]:
+        """Return the leading anatomy suggestion and alternatives."""
+        if not self.is_loaded:
+            self.load()
+
+        import numpy as np
+
+        tensor = self._preprocess(pil_image)
+
+        outputs = self.session.run(
+            [self.output_name],
+            {self.input_name: tensor},
+        )
+
+        if not outputs:
+            raise ValueError(
+                "ONNX anatomy model returned no outputs."
+            )
+
+        raw_scores = np.asarray(outputs[0], dtype=np.float32)
+
+        if raw_scores.ndim != 2 or raw_scores.shape != (
+            1,
+            len(self.classes),
+        ):
+            raise ValueError(
+                f"ONNX anatomy output has shape {raw_scores.shape}; "
+                f"expected (1, {len(self.classes)})."
+            )
+
+        probabilities = self._interpret_output_scores(raw_scores[0])
+
         ranked_indices = np.argsort(probabilities)[::-1]
+
         best_idx = int(ranked_indices[0])
         candidate = self.classes[best_idx]
         confidence = float(probabilities[best_idx])
-        second_idx = int(ranked_indices[1]) if len(ranked_indices) > 1 else best_idx
+
+        second_idx = int(ranked_indices[1])
         second_candidate = self.classes[second_idx]
         second_confidence = float(probabilities[second_idx])
-        top_two_margin = max(0.0, confidence - second_confidence)
-        # Keep the existing confidence gate unchanged. Margin is exposed as
-        # diagnostic evidence; the router owns its existing ambiguity policy.
+
+        top_two_margin = max(
+            0.0,
+            confidence - second_confidence,
+        )
+
         accepted = confidence >= self.min_confidence
+
         top_predictions = [
-            {"label": self.classes[int(i)], "probability": round(float(probabilities[int(i)]), 4)}
-            for i in ranked_indices[:5]
+            {
+                "label": self.classes[int(index)],
+                "probability": round(
+                    float(probabilities[int(index)]),
+                    4,
+                ),
+            }
+            for index in ranked_indices[:5]
         ]
+
+        if accepted:
+            message = (
+                f"The anatomy classifier's leading suggestion is "
+                f"{candidate.replace('_', ' ').title()} "
+                f"({confidence:.1%}). This is an unverified anatomy "
+                "suggestion, not a diagnosis. The application must "
+                "separately check whether a compatible abnormality "
+                "model exists."
+            )
+        else:
+            message = (
+                f"The anatomy classifier's best candidate is "
+                f"{candidate.replace('_', ' ').title()} "
+                f"({confidence:.1%}), below the provisional review "
+                f"threshold of {self.min_confidence:.1%}. Anatomy "
+                "remains unverified; no regional abnormality model "
+                "should be selected automatically."
+            )
+
         return {
-            # Existing router relies on status == "completed" and body_part_label.
-            # This means the provisional confidence gate passed, not clinical verification.
             "status": "completed" if accepted else "unverified",
             "body_part_label": candidate if accepted else None,
             "candidate_body_part": candidate,
             "body_part_confidence": round(confidence, 4),
             "second_candidate_body_part": second_candidate,
-            "second_candidate_confidence": round(second_confidence, 4),
+            "second_candidate_confidence": round(
+                second_confidence,
+                4,
+            ),
             "top_two_margin": round(top_two_margin, 4),
             "confidence_threshold": self.min_confidence,
             "confidence_threshold_validated": False,
             "preprocessing_verified_against_training": False,
+            "anatomy_independently_verified": False,
+            "candidate_is_specific_anatomy": _is_specific_anatomy_label(candidate),
+            "routing_requires_independent_verification": True,
             "model_name": self.model_name,
             "model_checkpoint": self.model_path.name,
             "model_license": "Apache-2.0; see upstream model card",
             "device": self.device,
             "classifier_labels": list(self.classes),
-            # Compatibility name retained; these are anatomy classifier labels, not
-            # a guarantee that every region has an abnormality model in the registry.
             "supported_body_parts": list(self.classes),
             "top_predictions": top_predictions,
-            "message": (
-                f"The anatomy classifier's leading suggestion is {candidate.replace('_', ' ').title()} "
-                f"({confidence:.1%}). This is image-type classification, not a diagnosis. "
-                "The application must separately check whether a compatible abnormality model exists."
-                if accepted else
-                f"The anatomy classifier's best candidate is {candidate.replace('_', ' ').title()} "
-                f"({confidence:.1%}), below the provisional review threshold of {self.min_confidence:.1%}. "
-                "Anatomy remains unverified; no regional abnormality model should be selected automatically."
-            ),
+            "message": message,
         }
 
     def predict_file(self, image_path: str | Path) -> dict[str, Any]:
-        """Open and classify an X-ray file path."""
+        """Open and classify an X-ray image file."""
         from PIL import Image, ImageOps
 
         path = Path(image_path)
+
         if not path.is_file():
-            raise FileNotFoundError(f"X-ray image file was not found: '{path}'.")
+            raise FileNotFoundError(
+                f"X-ray image file was not found: '{path}'."
+            )
+
         with Image.open(path) as image:
             image.load()
-            result = self.predict_image(ImageOps.exif_transpose(image))
+            result = self.predict_image(
+                ImageOps.exif_transpose(image)
+            )
+
         result["image_name"] = path.name
         return result

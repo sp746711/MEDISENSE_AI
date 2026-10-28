@@ -268,6 +268,19 @@ def _xray_finding_is_actionable(item: dict[str, Any]) -> bool:
     return state in {"PRESENT", "POSITIVE", "DETECTED"}
 
 
+def _xray_anatomy_is_independently_verified(record: dict[str, Any]) -> bool:
+    """Return True only when anatomy verification is explicitly complete.
+
+    A generic COMPLETED inference status or a high classifier confidence is not
+    sufficient. This prevents an unverified region from contributing model
+    predictions to the combined clinical evidence.
+    """
+    if not isinstance(record, dict):
+        return False
+    status = str(record.get("anatomy_verification_status") or "").strip().lower()
+    return status == "completed" and record.get("anatomy_independently_verified") is True
+
+
 def _state(record: dict[str, Any]) -> str:
     """Normalize symptom state without converting unanswered findings to negatives."""
     raw = str(record.get("state") or record.get("status") or "").strip().upper()
@@ -625,13 +638,19 @@ def combine_evidence(
             findings = _normalize_xray_findings(img.get("findings"))
             has_model_output = bool(pred) or bool(findings)
 
+            anatomy_verified = _xray_anatomy_is_independently_verified(img)
             p_entry = {
                 "id": img.get("id") or img.get("xray_result_id"),
                 "file_name": img_fname,
                 "region": img_reg,
-                "status": img_status.upper(),
-                "prediction": pred,
-                "findings": findings,
+                "status": img_status.upper() if anatomy_verified else ("ANATOMY_UNVERIFIED" if img_status == "completed" else img_status.upper()),
+                "inference_status": img_status.upper(),
+                "anatomy_verification_status": str(img.get("anatomy_verification_status") or "unverified"),
+                "anatomy_independently_verified": anatomy_verified,
+                "prediction": pred if anatomy_verified else None,
+                "raw_model_prediction": pred,
+                "findings": findings if anatomy_verified else [],
+                "raw_model_findings": findings,
                 "model_version": img.get("model_version") or "N/A",
                 "confidence": img.get("confidence_if_valid"),
                 "uncertainty": img.get("uncertainty"),
@@ -649,8 +668,9 @@ def combine_evidence(
             elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present) and not has_respiratory_symptom and img_reg == "chest":
                 is_anatomically_aligned = False
 
-            if img_status == "completed" and has_model_output:
-                # A legacy single prediction is retained for compatibility.
+            if img_status == "completed" and has_model_output and anatomy_verified:
+                # A legacy single prediction is retained for compatibility only
+                # after anatomy has been independently verified.
                 # Multi-label score records are NOT clinical findings unless the
                 # model/service explicitly marks them actionable.
                 actionable_findings = [f for f in findings if _xray_finding_is_actionable(f)]
@@ -712,6 +732,12 @@ def combine_evidence(
                     unassessed.append(
                         f"{img_label} was marked completed but contained no usable prediction or findings; interpretation cannot be verified."
                     )
+            elif img_status == "completed" and has_model_output and not anatomy_verified:
+                any_unavailable = True
+                unassessed.append(
+                    f"{img_label} has stored model output, but anatomy is not independently verified. "
+                    "The raw output is retained for review and is excluded from supporting, reassuring, diagnostic, and triage evidence."
+                )
             elif img_status == "unavailable":
                 any_unavailable = True
                 unassessed.append(f"{img_label} received; automated interpretation unavailable for this region. No disease finding fabricated.")
@@ -1012,6 +1038,8 @@ def combine_evidence(
             if image_file in mismatched_image_files:
                 continue
             if str(img.get("status") or "").strip().lower() != "completed":
+                continue
+            if img.get("anatomy_independently_verified") is not True or str(img.get("anatomy_verification_status") or "").strip().lower() != "completed":
                 continue
             pred = img.get("prediction")
             if isinstance(pred, str) and pred.strip():
@@ -1560,6 +1588,15 @@ def combine_evidence(
             "region": xray_region,
             "prediction": xray_finding_str,
             "images": processed_images,
+            "anatomy_verification": {
+                "all_images_verified": bool(processed_images) and all(
+                    image.get("anatomy_independently_verified") is True
+                    and str(image.get("anatomy_verification_status") or "").strip().lower() == "completed"
+                    for image in processed_images
+                ),
+                "verified_image_count": sum(1 for image in processed_images if image.get("anatomy_independently_verified") is True and str(image.get("anatomy_verification_status") or "").strip().lower() == "completed"),
+                "unverified_image_count": sum(1 for image in processed_images if not (image.get("anatomy_independently_verified") is True and str(image.get("anatomy_verification_status") or "").strip().lower() == "completed")),
+            },
             "reports": processed_xray_reports,
             "cross_modal_concordance": cross_modal_concordance,
             "region_verification": region_verification_records,

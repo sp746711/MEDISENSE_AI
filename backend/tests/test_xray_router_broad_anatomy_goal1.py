@@ -2,6 +2,10 @@
 
 These tests stub project configuration/logging so they can validate routing
 logic without loading real X-ray weights or making clinical predictions.
+
+A successful classifier result is not the same as independent anatomy
+verification. Broad or unsupported regions must remain unverified and must
+not select a region-specific image interpretation model.
 """
 from __future__ import annotations
 
@@ -83,25 +87,38 @@ def _result(label: str, confidence: float = 0.8):
     ],
 )
 def test_broad_anatomy_labels_never_route_to_narrow_model(router, label, expected):
+    """Broad labels are recognized candidates, not verified study regions."""
     router._BODY_PART_CLASSIFIER = FakeClassifier(_result(label))
+
     result = router.route_xray("unused-test-image.png")
+
     assert result["region"] == expected
     assert result["reason_code"] == "broad_anatomy_label"
     assert result["is_recognized"] is True
     assert result["is_available"] is False
-    assert result["anatomy_verification_status"] == "completed"
+    assert result["classification_status"] == "completed"
+    assert result["anatomy_verification_status"] == "confirmation_required"
+    assert result["anatomy_independently_verified"] is False
     assert result["registry_entry"] is None
     assert "No regional disease model was run" in result["message"]
 
 
 def test_specific_but_unconfigured_knee_is_recognized_not_bad_label(router):
+    """Recognizing knee anatomy must not imply verification or model availability."""
     router._BODY_PART_CLASSIFIER = FakeClassifier(_result("KNEE", 0.91))
+
     result = router.route_xray("unused-test-image.png")
+
     assert result["region"] == "knee"
     assert result["is_recognized"] is True
+    assert result["is_available"] is False
     assert result["reason_code"] == "unsupported_region"
-    assert result["anatomy_verification_status"] == "completed"
+    assert result["classification_status"] == "completed"
+    assert result["anatomy_verification_status"] == "confirmation_required"
+    assert result["anatomy_independently_verified"] is False
+    assert result["registry_entry"] is None
     assert result["body_part_confidence"] == 0.91
+    assert "no compatible region-specific" in result["message"]
 
 
 @pytest.mark.parametrize(
@@ -121,14 +138,19 @@ def test_classifier_catalog_labels_are_recognized(router, label, expected):
 
 
 def test_low_confidence_remains_unverified_and_does_not_route(router):
-    router._BODY_PART_CLASSIFIER = FakeClassifier({
-        "status": "unverified",
-        "body_part_label": None,
-        "candidate_body_part": "HAND",
-        "body_part_confidence": 0.4437,
-        "message": "Below provisional review threshold",
-    })
+    router._BODY_PART_CLASSIFIER = FakeClassifier(
+        {
+            "status": "unverified",
+            "body_part_label": None,
+            "candidate_body_part": "HAND",
+            "body_part_confidence": 0.4437,
+            "message": "Below provisional review threshold",
+        }
+    )
+
     result = router.route_xray("unused-test-image.png")
+
     assert result["reason_code"] == "anatomy_unverified"
     assert result["anatomy_verification_status"] == "unverified"
     assert result["is_available"] is False
+    assert result["registry_entry"] is None

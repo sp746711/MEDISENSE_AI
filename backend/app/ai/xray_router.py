@@ -1068,6 +1068,9 @@ _ANATOMY_CLASS_BROAD_LABELS: dict[str, str] = {
     "arm": "upper extremity",
     "leg": "lower extremity",
     "head": "head region",
+    # The classifier's generic SPINE class does not distinguish cervical,
+    # thoracic, or lumbar studies and must not select a narrower spine model.
+    "spine": "spine",
 }
 
 
@@ -1105,7 +1108,9 @@ def _broad_anatomy_route_result(
         "is_available": False,
         "is_recognized": True,
         "region_source": "image_classifier",
-        "anatomy_verification_status": "completed",
+        "classification_status": "completed",
+        "anatomy_verification_status": "confirmation_required",
+        "anatomy_independently_verified": False,
         "body_part_confidence": confidence,
         "anatomy_detection": anatomy_result,
         "reason_code": "broad_anatomy_label",
@@ -1207,7 +1212,9 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "is_available": False,
                 "is_recognized": False,
                 "region_source": "image_classifier",
+                "classification_status": "completed",
                 "anatomy_verification_status": "unverified",
+                "anatomy_independently_verified": False,
                 "body_part_confidence": confidence,
                 "anatomy_detection": anatomy_result,
                 "reason_code": "anatomy_unverified",
@@ -1296,7 +1303,9 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "is_available": False,
                 "is_recognized": False,
                 "region_source": "image_classifier",
+                "classification_status": "completed",
                 "anatomy_verification_status": "unverified",
+                "anatomy_independently_verified": False,
                 "body_part_confidence": confidence_value,
                 "anatomy_detection": anatomy_result,
                 "reason_code": reason_code,
@@ -1318,7 +1327,9 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "is_available": False,
                 "is_recognized": False,
                 "region_source": "image_classifier",
+                "classification_status": "completed",
                 "anatomy_verification_status": "failed",
+                "anatomy_independently_verified": False,
                 "body_part_confidence": confidence,
                 "anatomy_detection": anatomy_result,
                 "reason_code": "unsupported_classifier_label",
@@ -1331,16 +1342,97 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
 
         # A broad label is a valid anatomy-classifier output, but it is not enough
         # to select a narrower region-specific model (e.g. ARM is not equivalent
-        # to humerus, HEAD is not equivalent to skull, and LEG is not equivalent to femur).
+        # to humerus, HEAD is not equivalent to skull, LEG is not equivalent to femur,
+        # and generic SPINE does not distinguish cervical/thoracic/lumbar studies).
         if is_broad_label:
             return _broad_anatomy_route_result(detected_region, anatomy_result, confidence)
 
-        # Reuse the existing registry availability checks and model metadata.
-        # The recursive call passes the image-detected region, not user input.
+        # A high classifier score is not independent verification. This model has
+        # produced high-confidence wrong-region predictions in Goal 1 smoke tests.
+        # Require an explicit, separate verification signal before selecting a
+        # region-specific interpretation model. The anatomy classifier's own output
+        # cannot satisfy this gate; a UI/API confirmation workflow must set this flag
+        # only after the user confirms the suggested body region or another trusted
+        # independent verification step has occurred.
+        candidate_is_specific = anatomy_result.get("candidate_is_specific_anatomy")
+        if candidate_is_specific is False:
+            return _broad_anatomy_route_result(detected_region, anatomy_result, confidence)
+
+        # If the anatomy is recognized but no region-specific model is configured,
+        # report that limitation directly. Do not mislabel a known region (e.g. knee)
+        # as a bad classifier label or imply that user confirmation would make a
+        # nonexistent model available.
+        configured_entry = XRAY_MODEL_REGISTRY.get(detected_region)
+        if configured_entry is None or not configured_entry.is_supported:
+            # A registry entry may exist for a known anatomical label even when no
+            # compatible regional model is supported. Report that limitation before
+            # asking for confirmation: confirmation cannot make a missing model available.
+            display = detected_region.replace("_", " ").title()
+            return {
+                "region": detected_region,
+                "canonical_region": detected_region,
+                "candidate_region": detected_region,
+                "detected_region": detected_region,
+                "supported": False,
+                "is_supported": False,
+                "is_available": False,
+                "is_recognized": True,
+                "region_source": "image_classifier",
+                "classification_status": "completed",
+                # The candidate was classified, but not independently verified.
+                "anatomy_verification_status": "confirmation_required",
+                "anatomy_independently_verified": False,
+                "body_part_confidence": confidence,
+                "anatomy_detection": anatomy_result,
+                "reason_code": "unsupported_region",
+                "registry_entry": None,
+                "message": (
+                    f"The image classifier recognized {display}, but no compatible "
+                    "region-specific image interpretation model is configured. "
+                    "The anatomy candidate is not independently verified, and no "
+                    "disease finding was inferred. A radiology report can be "
+                    "added separately."
+                ),
+            }
+
+        independently_verified = anatomy_result.get("anatomy_independently_verified") is True
+        if not independently_verified:
+            display = detected_region.replace("_", " ").title()
+            return {
+                # Preserve the specific candidate region for UI/tests, but do not
+                # enable region-specific inference before independent confirmation.
+                "region": detected_region,
+                "canonical_region": detected_region,
+                "candidate_region": detected_region,
+                "detected_region": detected_region,
+                "supported": False,
+                "is_supported": False,
+                "is_available": False,
+                "is_recognized": True,
+                "region_source": "image_classifier",
+                "classification_status": "completed",
+                "anatomy_verification_status": "confirmation_required",
+                "anatomy_independently_verified": False,
+                "body_part_confidence": confidence,
+                "anatomy_detection": anatomy_result,
+                "reason_code": "anatomy_confirmation_required",
+                "registry_entry": None,
+                "message": (
+                    f"The image classifier suggests {display}, but the body region has not been "
+                    "independently confirmed. A high classifier score alone cannot verify anatomy. "
+                    "Please confirm the correct X-ray region before any region-specific image "
+                    "interpretation model is selected. No regional disease model was run."
+                ),
+            }
+
+        # Reuse the existing registry availability checks only after the independent
+        # verification signal is present. The recursive call passes the verified region.
         routed_result = route_xray(image_path, declared_region=detected_region)
         routed_result["region_source"] = "image_classifier"
         routed_result["detected_region"] = detected_region
+        routed_result["classification_status"] = "completed"
         routed_result["anatomy_verification_status"] = "completed"
+        routed_result["anatomy_independently_verified"] = True
         routed_result["body_part_confidence"] = confidence
         routed_result["anatomy_detection"] = anatomy_result
         try:

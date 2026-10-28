@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 PATHWAYS = ("EMERGENCY", "CONSULTATION", "MILD")
-RULES_VERSION = "triage-rules-v2.6"
+RULES_VERSION = "triage-rules-v2.7"
 
 ALL_RULES = [
     "rule_e1_chest_pain_present",
@@ -77,21 +77,35 @@ def _records(value: Any) -> list[dict[str, Any]]:
     return [item for item in value if isinstance(item, dict)]
 
 
-def _xray_finding_records(xray_meta: dict[str, Any]) -> list[dict[str, Any]]:
-    """Collect only explicitly actionable findings, never raw model score lists.
+def _anatomy_is_independently_verified(record: dict[str, Any]) -> bool:
+    """Require an explicit upstream anatomy-verification gate.
 
-    DenseNet121 may return scores for every label. A label plus score alone is
-    not evidence that the model selected a positive finding. Such records are
-    ignored unless upstream explicitly marks them actionable or explicitly
-    marks the finding as detected/positive. Scores remain model scores, not
-    calibrated probabilities or diagnoses.
+    A model's predicted body region is not independent verification. Missing
+    metadata is treated as unverified for safety.
+    """
+    return (
+        _text(record.get("anatomy_verification_status")).upper() == "COMPLETED"
+        and record.get("anatomy_independently_verified") is True
+    )
+
+
+def _xray_finding_records(xray_meta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Collect actionable findings only from anatomy-verified X-ray outputs.
+
+    DenseNet-style label scores alone are not positive findings. Top-level
+    findings require top-level anatomy verification; image-level findings
+    require that image's own verification gate. Unverified findings are not
+    allowed to influence consultation or triage.
     """
     candidates: list[dict[str, Any]] = []
-    candidates.extend(_records(xray_meta.get("findings")))
+    if _anatomy_is_independently_verified(xray_meta):
+        candidates.extend(_records(xray_meta.get("findings")))
+
     for image in _records(xray_meta.get("images")):
         image_status = _text(image.get("status")).upper()
-        # Never use findings from a failed, unsupported, or unfinished image.
         if image_status and image_status not in {"COMPLETED", "PARTIAL", "AVAILABLE"}:
+            continue
+        if not _anatomy_is_independently_verified(image):
             continue
         candidates.extend(_records(image.get("findings")))
 
@@ -117,8 +131,7 @@ def _xray_finding_records(xray_meta: dict[str, Any]) -> list[dict[str, Any]]:
         score = item.get("score", item.get("model_score", item.get("confidence")))
         score_number = _number(score)
 
-        # Raw score-only DenseNet labels must not become positive evidence.
-        # Accept only explicit actionability or an explicit positive detection.
+        # Raw score-only labels are not positive evidence.
         explicitly_positive = (
             item.get("is_actionable_finding") is True
             or item.get("detected") is True
@@ -138,6 +151,11 @@ def _xray_finding_records(xray_meta: dict[str, Any]) -> list[dict[str, Any]]:
             normalized["model_score"] = score_number
         accepted.append(normalized)
     return accepted
+
+
+def _xray_prediction_is_verified(xray_meta: dict[str, Any]) -> bool:
+    """Only trust an aggregate prediction with explicit anatomy verification."""
+    return _anatomy_is_independently_verified(xray_meta)
 
 
 def _format_xray_finding(item: dict[str, Any]) -> str:
@@ -223,7 +241,13 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
     xray_meta = xray_meta if isinstance(xray_meta, dict) else {}
     xray_prediction = _text(xray_meta.get("prediction"))
     xray_findings = _xray_finding_records(xray_meta)
-    usable_xray_prediction = not _is_unavailable_prediction(xray_prediction)
+    # An aggregate prediction is usable only when the aggregate itself carries
+    # explicit independent anatomy verification. Per-image findings are
+    # separately filtered by their own verification metadata above.
+    usable_xray_prediction = (
+        _xray_prediction_is_verified(xray_meta)
+        and not _is_unavailable_prediction(xray_prediction)
+    )
     usable_xray_findings = bool(xray_findings)
     usable_xray_evidence = usable_xray_prediction or usable_xray_findings
 

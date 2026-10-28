@@ -128,6 +128,15 @@ def _build_anatomy_metadata(
 
     return {
         "status": str(anatomy_status or "unverified").upper(),
+        "classification_status": str(
+            routing.get("classification_status")
+            or routing.get("classifier_status")
+            or (detection.get("status") if isinstance(detection, dict) else None)
+            or "unknown"
+        ).lower(),
+        "anatomy_independently_verified": routing.get(
+            "anatomy_independently_verified"
+        ) is True,
         "source": str(region_source or "unknown"),
         "detected_region": None if resolved_region == "unknown" else resolved_region,
         "candidate_region": candidate_region,
@@ -452,26 +461,58 @@ async def upload_xray(
             routing.get("is_supported", routing.get("supported", False))
         )
         route_available = bool(routing.get("is_available", False))
+        # This endpoint is automatic-routing only. A classifier's confidence or
+        # a recognized region is not independent anatomy verification. Never
+        # invoke a regional disease model unless the router explicitly confirms
+        # that anatomy has passed its verification gate.
+        anatomy_independently_verified = (
+            routing.get("anatomy_independently_verified") is True
+        )
+        anatomy_verified_for_inference = (
+            anatomy_status == "completed" and anatomy_independently_verified
+        )
 
-        if not route_supported or not route_available:
-            # Registry says this region/checkpoint is not usable. Do not run
-            # inference anyway; persist an explicit unavailable result and its
-            # reason so the feedback page can explain the real limitation.
+        if not anatomy_verified_for_inference or not route_supported or not route_available:
+            if not anatomy_verified_for_inference:
+                if anatomy_status == "confirmation_required":
+                    safe_reason_code = "anatomy_confirmation_required"
+                    safe_message = (
+                        "The image classifier suggested a body region, but the anatomy "
+                        "has not been independently verified. No regional disease model was run."
+                    )
+                elif anatomy_status == "unavailable":
+                    safe_reason_code = "anatomy_classifier_unavailable"
+                    safe_message = (
+                        "The anatomy classifier is unavailable. No regional disease model was run."
+                    )
+                else:
+                    safe_reason_code = "anatomy_unverified"
+                    safe_message = (
+                        "The image type could not be verified. No regional disease model was run."
+                    )
+            else:
+                safe_reason_code = routing.get("reason_code") or (
+                    "unsupported_region" if not route_supported else "checkpoint_unavailable"
+                )
+                safe_message = routing.get("message") or (
+                    "Automated X-ray interpretation is unavailable for this region."
+                )
+
+            # Persist an explicit unavailable outcome instead of allowing a
+            # recognized-but-unverified anatomy to reach model inference.
             analysis = {
                 "status": "unavailable",
-                "reason_code": routing.get("reason_code")
-                or ("unsupported_region" if not route_supported else "checkpoint_unavailable"),
+                "reason_code": safe_reason_code,
                 "region": resolved_region,
                 "model_version": None,
                 "prediction": None,
                 "confidence_if_valid": None,
                 "uncertainty": routing.get("diagnostic_message")
                 or routing.get("message")
-                or "The selected X-ray model is not available.",
+                or safe_message,
                 "explainability_artifact": None,
-                "message": routing.get("message")
-                or "Automated X-ray interpretation is unavailable for this region.",
-                "diagnostic_message": routing.get("diagnostic_message"),
+                "message": safe_message,
+                "diagnostic_message": routing.get("diagnostic_message") or safe_message,
             }
         else:
             model_service = get_xray_model_service()
@@ -603,6 +644,17 @@ async def upload_xray(
 
         image_anatomy_verification = {
             "status": anatomy_status.upper(),
+            "classification_status": str(
+                routing.get("classification_status")
+                or routing.get("classifier_status")
+                or (
+                    anatomy_detection.get("status")
+                    if isinstance(anatomy_detection, dict)
+                    else None
+                )
+                or "unknown"
+            ).lower(),
+            "anatomy_independently_verified": anatomy_independently_verified,
             "source": region_source,
             "detected_region": None if resolved_region == "unknown" else resolved_region,
             "candidate_region": (
@@ -689,6 +741,17 @@ async def upload_xray(
             "detected_region": None if resolved_region == "unknown" else resolved_region,
             "region_source": region_source,
             "anatomy_verification_status": anatomy_status,
+            "classification_status": str(
+                routing.get("classification_status")
+                or routing.get("classifier_status")
+                or (
+                    anatomy_detection.get("status")
+                    if isinstance(anatomy_detection, dict)
+                    else None
+                )
+                or "unknown"
+            ).lower(),
+            "anatomy_independently_verified": anatomy_independently_verified,
             "body_part_confidence": body_part_confidence,
             "report_region_verification": report_region_verification,
         }

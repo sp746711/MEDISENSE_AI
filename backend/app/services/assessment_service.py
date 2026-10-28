@@ -54,6 +54,34 @@ def _has_xray_result(item: Any) -> bool:
     return has_prediction or has_actionable_findings
 
 
+def _anatomy_verification_fields(metadata: Any) -> tuple[str, bool]:
+    """Return verification status and explicit independent-verification flag.
+
+    A classifier result or a legacy ``COMPLETED`` image status is not, by
+    itself, proof that anatomy was independently verified. Only an explicit
+    boolean True in the saved anatomy metadata authorizes image findings to
+    enter combined clinical evidence.
+    """
+    if not isinstance(metadata, dict):
+        return "unverified", False
+
+    status_value = metadata.get("anatomy_verification_status") or metadata.get("verification_status")
+    independently_verified = metadata.get("anatomy_independently_verified") is True
+
+    # Support metadata wrappers used by older route responses without treating
+    # a classifier's own status="completed" as independent verification.
+    nested = metadata.get("anatomy_detection")
+    if isinstance(nested, dict):
+        if not status_value:
+            status_value = nested.get("anatomy_verification_status") or nested.get("verification_status")
+        independently_verified = independently_verified or nested.get("anatomy_independently_verified") is True
+
+    status = str(status_value or ("completed" if independently_verified else "unverified")).strip().lower()
+    if status != "completed" or not independently_verified:
+        return status if status else "unverified", False
+    return "completed", True
+
+
 def _is_xray_region_mismatch(item: Any) -> bool:
     """Normalize region-mismatch signals from current and legacy X-ray result payloads."""
     if not isinstance(item, dict):
@@ -1082,6 +1110,12 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "prediction": xr.prediction,
             "findings": getattr(xr, "findings", None) or [],
             "anatomy_metadata": getattr(xr, "anatomy_metadata", None),
+            "anatomy_verification_status": _anatomy_verification_fields(
+                getattr(xr, "anatomy_metadata", None)
+            )[0],
+            "anatomy_independently_verified": _anatomy_verification_fields(
+                getattr(xr, "anatomy_metadata", None)
+            )[1],
             "confidence_if_valid": xr.confidence_if_valid,
             "uncertainty": xr.uncertainty,
             "model_version": xr.model_version,
@@ -1095,14 +1129,41 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         }
         for xr in xray_rows
     ]
-    primary_xray_dict = xray_results_list[-1] if xray_results_list else None
+    # Keep the stored/original X-ray result available for audit, but create a
+    # separate evidence-safe view. A legacy COMPLETED status, prediction string,
+    # or classifier confidence cannot bypass independent anatomy verification.
+    xray_results_for_evidence: list[dict[str, Any]] = []
+    for stored_result in xray_results_list:
+        evidence_result = dict(stored_result)
+        verified_status, independently_verified = _anatomy_verification_fields(
+            stored_result.get("anatomy_metadata")
+        )
+        evidence_result["anatomy_verification_status"] = verified_status
+        evidence_result["anatomy_independently_verified"] = independently_verified
+        if not independently_verified:
+            evidence_result["raw_prediction_for_review"] = evidence_result.get("prediction")
+            evidence_result["raw_findings_for_review"] = evidence_result.get("findings") or []
+            evidence_result["prediction"] = None
+            evidence_result["findings"] = []
+            evidence_result["status"] = "ANATOMY_CONFIRMATION_REQUIRED"
+            evidence_result["evidence_excluded"] = True
+            evidence_result["message"] = (
+                str(evidence_result.get("message") or "X-ray anatomy has not been independently verified.")
+                + " Image-model output is retained for review but excluded from combined clinical evidence "
+                "until anatomy is independently verified."
+            )
+        else:
+            evidence_result["evidence_excluded"] = False
+        xray_results_for_evidence.append(evidence_result)
+
+    primary_xray_dict = xray_results_for_evidence[-1] if xray_results_for_evidence else None
 
     # 4. Combine evidence afresh
     evidence = combine_evidence(
         symptoms=symptoms_list,
         report_findings=report_findings_list,
         xray_result=primary_xray_dict,
-        xray_results=xray_results_list,
+        xray_results=xray_results_for_evidence,
         xray_reports=xray_reports_list,
         medical_reports=medical_reports_list,
         # Availability is tracked independently: a radiology PDF is not a
@@ -1190,6 +1251,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         "triage": triage_result,
         "specialty_mapping": specialty_result,
         "evidence": evidence,
+        "xray_results_for_review": xray_results_list,
         "feedback": feedback,
         "condition_predictions": condition_predictions,
         "summary": {

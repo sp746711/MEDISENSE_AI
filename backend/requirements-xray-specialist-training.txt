@@ -1,0 +1,5 @@
+
+-r requirements.txt
+
+# Required to export the trained DenseNet121 anatomy classifier to ONNX.
+onnx>=1.16.0

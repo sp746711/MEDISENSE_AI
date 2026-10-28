@@ -47,6 +47,50 @@ class XrayReportAssociationRequest(BaseModel):
     status: Literal["confirmed", "rejected"]
 
 
+class XrayAnatomyConfirmationRequest(BaseModel):
+    """Specific body region selected/confirmed by the user after image upload.
+
+    This confirms the anatomical routing choice only. It does not verify a
+    clinical finding or replace radiologist review.
+    """
+
+    region: str
+
+
+_SPECIFIC_ANATOMY_CONFIRMATION_LABELS = {
+    "ABDOMEN", "ANKLE", "CERVICAL_SPINE", "CHEST", "DORSAL_SPINE", "ELBOW",
+    "FEMUR", "FINGER", "FOOT", "FOREARM", "HAND", "HEEL", "HIP", "KNEE",
+    "KUB", "LUMBAR_SPINE", "NASOPHARYNX", "NECK", "PELVIS", "PNS", "SHOULDER",
+    "SI_JOINT", "SKULL", "TEMPORAL_BONE", "TIBIA", "WRIST",
+}
+_BROAD_ANATOMY_CONFIRMATION_LABELS = {
+    "EXTREMITY", "UPPER_EXTREMITY", "LOWER_EXTREMITY", "ARM", "LEG", "HEAD", "SPINE",
+}
+
+
+def _canonical_user_confirmed_region(raw_region: str) -> str:
+    """Validate a user-confirmed specific anatomy label against the 33-class catalogue."""
+    token = str(raw_region or "").strip().upper().replace("-", "_")
+    token = "_".join(token.split())
+    if token in _BROAD_ANATOMY_CONFIRMATION_LABELS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Choose a specific anatomical region; broad regions such as HEAD or SPINE cannot route a regional model.",
+        )
+    if token not in _SPECIFIC_ANATOMY_CONFIRMATION_LABELS:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Choose a specific region from the supported anatomy list.",
+        )
+    canonical, recognized = normalize_region_name(token)
+    if not recognized or not canonical or canonical == "unknown":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The selected anatomical region could not be normalized safely.",
+        )
+    return canonical
+
+
 def _safe_json_value(value: Any, *, depth: int = 0) -> Any:
     """Convert classifier metadata to bounded, JSON-safe primitive values."""
     if depth > 8:
@@ -137,13 +181,32 @@ def _build_anatomy_metadata(
         "anatomy_independently_verified": routing.get(
             "anatomy_independently_verified"
         ) is True,
+        "anatomy_classifier_accepted": routing.get("anatomy_classifier_accepted") is True,
+        "broad_region_classifier_accepted": routing.get("broad_region_classifier_accepted") is True,
+        "is_broad_region": routing.get("is_broad_region") is True,
+        "specific_region_confirmation_required": routing.get("specific_region_confirmation_required") is True,
+        "anatomy_verification_method": _safe_json_value(routing.get("anatomy_verification_method")),
         "source": str(region_source or "unknown"),
-        "detected_region": None if resolved_region == "unknown" else resolved_region,
+        "detected_region": (
+            None if resolved_region == "unknown" or routing.get("is_broad_region") is True
+            else resolved_region
+        ),
         "candidate_region": candidate_region,
         "body_part_confidence": body_part_confidence,
         "confidence_threshold_validated": bool(
             detection.get("confidence_threshold_validated", False)
         ),
+        "preprocessing_id": _safe_json_value(detection.get("preprocessing_id")),
+        "preprocessing_mode": _safe_json_value(detection.get("preprocessing_mode")),
+        "preprocessing_verified_against_training": bool(
+            detection.get("preprocessing_verified_against_training", False)
+        ),
+        "model_artifact_sha256": _safe_json_value(detection.get("model_sha256")),
+        "labels_sha256": _safe_json_value(detection.get("labels_sha256")),
+        "model_size_bytes": _safe_json_value(detection.get("model_size_bytes")),
+        "model_input_shape": _safe_json_value(detection.get("model_input_shape")),
+        "model_output_shape": _safe_json_value(detection.get("model_output_shape")),
+        "output_score_semantics": _safe_json_value(detection.get("output_score_semantics")),
         "classifier_version": _safe_json_value(classifier_version),
         "top_candidates": _safe_json_value(top_candidates),
         # Keep the source classifier payload so later diagnostics can inspect the
@@ -372,6 +435,13 @@ async def upload_xray(
         else:
             resolved_region = resolved_region.strip().lower()
 
+        # A broad classifier label is a candidate, not a specific image region.
+        # Keep it in anatomy metadata/candidate_region, but persist the canonical
+        # result region as unknown until the user chooses a specific site. This
+        # also prevents a broad label from creating a false report/image mismatch.
+        if routing.get("is_broad_region") is True:
+            resolved_region = "unknown"
+
         region_source = routing.get("region_source") or "unknown"
         anatomy_status = str(routing.get("anatomy_verification_status") or "unverified").lower()
         anatomy_detection = routing.get("anatomy_detection")
@@ -461,24 +531,31 @@ async def upload_xray(
             routing.get("is_supported", routing.get("supported", False))
         )
         route_available = bool(routing.get("is_available", False))
-        # This endpoint is automatic-routing only. A classifier's confidence or
-        # a recognized region is not independent anatomy verification. Never
-        # invoke a regional disease model unless the router explicitly confirms
-        # that anatomy has passed its verification gate.
+        # `anatomy_classifier_accepted` means the classifier passed its confidence
+        # and ambiguity gates. A broad label may pass that gate, but the status stays
+        # confirmation_required and therefore cannot authorize regional inference.
         anatomy_independently_verified = (
             routing.get("anatomy_independently_verified") is True
         )
+        anatomy_classifier_accepted = routing.get("anatomy_classifier_accepted") is True
         anatomy_verified_for_inference = (
-            anatomy_status == "completed" and anatomy_independently_verified
+            anatomy_status == "completed"
+            and (anatomy_independently_verified or anatomy_classifier_accepted)
         )
 
         if not anatomy_verified_for_inference or not route_supported or not route_available:
             if not anatomy_verified_for_inference:
-                if anatomy_status == "confirmation_required":
+                if routing.get("broad_region_classifier_accepted") is True:
+                    safe_reason_code = "broad_anatomy_label"
+                    safe_message = routing.get("message") or (
+                        "The classifier accepted a broad body region, but did not identify a specific site. "
+                        "Choose a specific body region before regional interpretation. No regional model was run."
+                    )
+                elif anatomy_status == "confirmation_required":
                     safe_reason_code = "anatomy_confirmation_required"
                     safe_message = (
-                        "The image classifier suggested a body region, but the anatomy "
-                        "has not been independently verified. No regional disease model was run."
+                        "The image classifier suggested a body region, but a specific body region "
+                        "still needs confirmation. No regional disease model was run."
                     )
                 elif anatomy_status == "unavailable":
                     safe_reason_code = "anatomy_classifier_unavailable"
@@ -642,8 +719,24 @@ async def upload_xray(
                 "with a JSON findings column and apply the database migration."
             )
 
+        anatomy_confirmation_required = bool(
+            routing.get("specific_region_confirmation_required") is True
+            or (
+                not anatomy_classifier_accepted
+                and not anatomy_independently_verified
+                and anatomy_status in {
+                    "confirmation_required", "unverified", "unavailable", "failed"
+                }
+            )
+        )
+
         image_anatomy_verification = {
             "status": anatomy_status.upper(),
+            "confirmation_required": anatomy_confirmation_required,
+            "next_action": (
+                "confirm_or_select_body_region"
+                if anatomy_confirmation_required else None
+            ),
             "classification_status": str(
                 routing.get("classification_status")
                 or routing.get("classifier_status")
@@ -655,8 +748,16 @@ async def upload_xray(
                 or "unknown"
             ).lower(),
             "anatomy_independently_verified": anatomy_independently_verified,
+            "anatomy_classifier_accepted": anatomy_classifier_accepted,
+            "broad_region_classifier_accepted": routing.get("broad_region_classifier_accepted") is True,
+            "is_broad_region": routing.get("is_broad_region") is True,
+            "specific_region_confirmation_required": anatomy_confirmation_required,
+            "verification_method": routing.get("anatomy_verification_method"),
             "source": region_source,
-            "detected_region": None if resolved_region == "unknown" else resolved_region,
+            "detected_region": (
+                None if resolved_region == "unknown" or routing.get("is_broad_region") is True
+                else resolved_region
+            ),
             "candidate_region": (
                 routing.get("candidate_region")
                 or routing.get("classifier_candidate")
@@ -738,8 +839,15 @@ async def upload_xray(
             "image_type_detection": anatomy_detection,
             "anatomy_metadata_persisted": hasattr(XrayResult, "anatomy_metadata"),
             "anatomy_metadata": anatomy_metadata,
-            "detected_region": None if resolved_region == "unknown" else resolved_region,
+            "detected_region": (
+                None if resolved_region == "unknown" or routing.get("is_broad_region") is True
+                else resolved_region
+            ),
+            "candidate_region": routing.get("candidate_region") or routing.get("classifier_candidate"),
             "region_source": region_source,
+            "is_broad_region": routing.get("is_broad_region") is True,
+            "broad_region_classifier_accepted": routing.get("broad_region_classifier_accepted") is True,
+            "specific_region_confirmation_required": anatomy_confirmation_required,
             "anatomy_verification_status": anatomy_status,
             "classification_status": str(
                 routing.get("classification_status")
@@ -752,6 +860,13 @@ async def upload_xray(
                 or "unknown"
             ).lower(),
             "anatomy_independently_verified": anatomy_independently_verified,
+            "anatomy_classifier_accepted": anatomy_classifier_accepted,
+            "anatomy_verification_method": routing.get("anatomy_verification_method"),
+            "anatomy_confirmation_required": anatomy_confirmation_required,
+            "next_action": (
+                "confirm_or_select_body_region"
+                if anatomy_confirmation_required else None
+            ),
             "body_part_confidence": body_part_confidence,
             "report_region_verification": report_region_verification,
         }
@@ -786,6 +901,262 @@ async def upload_xray(
         ) from exc
     finally:
         await file.close()
+
+
+@router.put("/{assessment_id}/xray/{xray_result_id}/anatomy-verification")
+def confirm_xray_anatomy(
+    assessment_id: UUID,
+    xray_result_id: UUID,
+    payload: XrayAnatomyConfirmationRequest,
+    current_user: CurrentUser,
+    db: DbSession,
+) -> dict:
+    """Confirm/correct a candidate region after upload and retry matching inference.
+
+    The file is never renamed, moved, deleted, or re-uploaded. Explicit user
+    choice resolves the current confirmation-required dead end, while the API
+    keeps anatomy confirmation separate from disease-model availability/output.
+    """
+    _owned(db, assessment_id, current_user.user_id)
+    result = (
+        db.query(XrayResult)
+        .filter(
+            XrayResult.assessment_id == assessment_id,
+            XrayResult.xray_result_id == xray_result_id,
+        )
+        .first()
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="X-ray image not found")
+
+    selected_region = _canonical_user_confirmed_region(payload.region)
+    stored_name = result.stored_name
+    if not isinstance(stored_name, str) or not stored_name or Path(stored_name).name != stored_name:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The saved X-ray filename is unavailable or invalid; the original image was not modified.",
+        )
+
+    xray_dir = (get_settings().upload_path / "xrays").resolve()
+    stored_path = (xray_dir / stored_name).resolve()
+    if stored_path.parent != xray_dir or not stored_path.is_file() or stored_path.stat().st_size <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The saved X-ray image could not be found. Upload the image again before retrying.",
+        )
+
+    # The user-confirmed region is checked against the same registry used by
+    # automatic routing. Unsupported/unavailable regions are still persisted as
+    # confirmed anatomy, but never receive fabricated pathology output.
+    routing = route_xray(str(stored_path), declared_region=selected_region)
+    if routing.get("is_recognized") is False:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=routing.get("message") or "The selected region is not recognized.",
+        )
+
+    if routing.get("is_supported") and routing.get("is_available"):
+        try:
+            analysis = get_xray_model_service().analyze(
+                str(stored_path), region=selected_region
+            )
+        except Exception as exc:
+            logger.exception(
+                "X-ray inference retry failed after anatomy confirmation: assessment_id=%s result_id=%s",
+                assessment_id,
+                xray_result_id,
+            )
+            analysis = {
+                "status": "unavailable",
+                "reason_code": "inference_failed",
+                "region": selected_region,
+                "message": "The selected region was confirmed, but automated interpretation failed. No finding was saved.",
+                "diagnostic_message": f"{type(exc).__name__}: {exc}",
+                "uncertainty": "Inference failed after the user confirmed the anatomical region.",
+            }
+    else:
+        analysis = {
+            "status": "unavailable",
+            "reason_code": routing.get("reason_code") or "unsupported_region",
+            "region": selected_region,
+            "model_version": None,
+            "prediction": None,
+            "findings": [],
+            "confidence_if_valid": None,
+            "uncertainty": routing.get("diagnostic_message") or routing.get("message"),
+            "message": routing.get("message") or "The region was confirmed, but no compatible interpretation model is available.",
+            "diagnostic_message": routing.get("diagnostic_message"),
+        }
+
+    if not isinstance(analysis, dict):
+        analysis = {
+            "status": "unavailable",
+            "reason_code": "invalid_model_response",
+            "region": selected_region,
+            "message": "The X-ray model returned an invalid response. No finding was saved.",
+        }
+
+    findings = _validated_findings(analysis.get("findings"))
+    raw_prediction = analysis.get("prediction")
+    prediction = raw_prediction.strip() if isinstance(raw_prediction, str) and raw_prediction.strip() else None
+    model_region = analysis.get("region")
+    model_region_matches = True
+    if isinstance(model_region, str) and model_region.strip():
+        normalized_model_region, model_region_recognized = normalize_region_name(model_region)
+        model_region_matches = model_region_recognized and normalized_model_region == selected_region
+
+    successful_inference = (
+        str(analysis.get("status") or "").lower() == "completed"
+        and (prediction is not None or bool(findings))
+        and model_region_matches
+    )
+    if not model_region_matches:
+        analysis["reason_code"] = "model_region_mismatch"
+        analysis["message"] = "The model response did not match the user-confirmed region. No prediction was saved."
+
+    analysis_status = "completed" if successful_inference else "unavailable"
+    if not successful_inference:
+        prediction = None
+        findings = []
+
+    raw_confidence = analysis.get("confidence_if_valid") if successful_inference else None
+    try:
+        confidence = float(raw_confidence) if raw_confidence is not None else None
+    except (TypeError, ValueError, OverflowError):
+        confidence = None
+    if confidence is not None and (not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0):
+        confidence = None
+
+    if findings and not (hasattr(XrayResult, "findings") or hasattr(XrayResult, "findings_json")):
+        findings = []
+        prediction = None
+        confidence = None
+        analysis_status = "unavailable"
+        analysis["reason_code"] = "findings_persistence_unavailable"
+        analysis["message"] = "The model returned multi-label scores, but this database schema cannot persist them. No findings were saved."
+
+    metadata = result.anatomy_metadata if isinstance(getattr(result, "anatomy_metadata", None), dict) else {}
+    classifier_output = metadata.get("classifier_output") if isinstance(metadata.get("classifier_output"), dict) else {}
+    original_candidate = (
+        metadata.get("candidate_region")
+        or classifier_output.get("candidate_body_part")
+        or classifier_output.get("candidate_region")
+    )
+    original_candidate_region = None
+    if isinstance(original_candidate, str) and original_candidate.strip():
+        candidate_canonical, candidate_recognized = normalize_region_name(original_candidate)
+        original_candidate_region = candidate_canonical if candidate_recognized else original_candidate.strip().lower()
+    region_was_corrected = original_candidate_region is not None and original_candidate_region != selected_region
+    selected_region_matches_candidate = (
+        original_candidate_region is not None
+        and original_candidate_region == selected_region
+    )
+    score_for_selected_region = (
+        metadata.get("body_part_confidence")
+        if selected_region_matches_candidate else None
+    )
+
+    message_parts = [
+        f"You confirmed the X-ray body region as {selected_region.replace('_', ' ').title()}. "
+        "This confirms the routing region only; it does not confirm any medical finding."
+    ]
+    result_message = analysis.get("message") or routing.get("message")
+    if result_message:
+        message_parts.append(str(result_message))
+    if not successful_inference:
+        message_parts.append("The image was saved, but automated abnormality interpretation is unavailable; no pathology finding was inferred.")
+    persisted_message = " ".join(dict.fromkeys(message_parts))
+
+    metadata.update({
+        "status": "CONFIRMED",
+        "classification_status": "completed",
+        "detected_region": selected_region,
+        "user_confirmed_region": selected_region,
+        "user_confirmation_status": "confirmed",
+        "verification_source": "explicit_user_region_confirmation",
+        "source": "user_confirmed_region",
+        "anatomy_user_confirmed": True,
+        # A user confirmation is not represented as independent clinical verification.
+        "anatomy_independently_verified": False,
+        "region_was_corrected": bool(region_was_corrected),
+        "original_classifier_candidate": original_candidate_region,
+        "interpretation_status": analysis_status,
+        "interpretation_reason_code": analysis.get("reason_code") or routing.get("reason_code"),
+        "interpretation_model_version": analysis.get("model_version") if successful_inference else None,
+        "message": persisted_message,
+    })
+
+    result.region = selected_region
+    result.model_version = analysis.get("model_version") if successful_inference else None
+    result.prediction = prediction
+    if hasattr(result, "findings"):
+        result.findings = findings
+    elif hasattr(result, "findings_json"):
+        result.findings_json = findings
+    result.confidence_if_valid = confidence
+    result.uncertainty = analysis.get("uncertainty") or (routing.get("message") if not successful_inference else None)
+    result.explainability_artifact = analysis.get("explainability_artifact") if successful_inference else None
+    result.status = analysis_status
+    result.message = persisted_message
+    if hasattr(result, "anatomy_metadata"):
+        result.anatomy_metadata = metadata
+
+    try:
+        db.add(result)
+        db.commit()
+        db.refresh(result)
+    except SQLAlchemyError as exc:
+        logger.exception(
+            "X-ray anatomy confirmation persistence failed: assessment_id=%s result_id=%s",
+            assessment_id,
+            xray_result_id,
+        )
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="The region choice could not be saved. The original image file remains unchanged.",
+        ) from exc
+
+    return {
+        "status": result.status,
+        "xray_result_id": str(result.xray_result_id),
+        "file_name": result.file_name,
+        "message": result.message,
+        "region": result.region,
+        "detected_region": result.region,
+        "candidate_region": original_candidate_region,
+        "model_version": result.model_version,
+        "prediction": result.prediction,
+        "findings": getattr(result, "findings", getattr(result, "findings_json", [])) or [],
+        "confidence_if_valid": result.confidence_if_valid,
+        "uncertainty": result.uncertainty,
+        "source": "trained_model" if successful_inference else "unavailable",
+        "reason_code": analysis.get("reason_code") or routing.get("reason_code"),
+        "diagnostic_message": analysis.get("diagnostic_message") or routing.get("diagnostic_message"),
+        "detected_region": selected_region,
+        "region_source": "user_confirmed_region",
+        "anatomy_verification_status": "confirmed",
+        "classification_status": "completed",
+        "anatomy_independently_verified": False,
+        "anatomy_confirmation_required": False,
+        "next_action": "review_interpretation_status" if not successful_inference else None,
+        "body_part_confidence": score_for_selected_region,
+        "image_anatomy_verification": {
+            "status": "CONFIRMED",
+            "classification_status": "completed",
+            "anatomy_user_confirmed": True,
+            "anatomy_independently_verified": False,
+            "source": "user_confirmed_region",
+            "detected_region": selected_region,
+            "candidate_region": original_candidate_region,
+            "body_part_confidence": score_for_selected_region,
+            "region_was_corrected": bool(region_was_corrected),
+            "message": "The anatomical region was confirmed by the user. This does not confirm pathology findings.",
+        },
+        "image_type_detection": classifier_output,
+        "anatomy_metadata_persisted": hasattr(result, "anatomy_metadata"),
+        "anatomy_metadata": metadata,
+    }
 
 
 @router.delete("/{assessment_id}/xray/{xray_result_id}")

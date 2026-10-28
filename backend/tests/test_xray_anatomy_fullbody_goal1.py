@@ -141,6 +141,60 @@ def test_low_confidence_result_is_unverified_and_has_no_routable_label(
     assert result["candidate_body_part"] in LABELS
 
 
+
+def test_default_preprocessing_matches_documented_model_transform(
+    tmp_path, monkeypatch
+):
+    """Default is shorter-edge resize + center crop, matching the model card."""
+    classifier, session = _make_classifier(tmp_path)
+    _install_fake_runtime(monkeypatch, session)
+    classifier.load()
+
+    gradient = np.tile(
+        np.linspace(0, 255, 448, dtype=np.uint8), (224, 1)
+    )
+    image = Image.fromarray(gradient, mode="L").convert("RGB")
+    tensor = classifier._preprocess(image)
+
+    assert classifier.preprocessing_mode == "center_crop"
+    assert tensor.shape == (1, 3, 224, 224)
+    assert tensor[0, 0, 100, 0] > -2.0
+    assert tensor[0, 0, 100, -1] < 2.0
+
+
+def test_direct_resize_is_available_only_for_comparison(tmp_path, monkeypatch):
+    """Full-frame resize remains selectable for controlled A/B testing."""
+    classifier, session = _make_classifier(tmp_path)
+    classifier.preprocessing_mode = "direct_resize"
+    _install_fake_runtime(monkeypatch, session)
+    classifier.load()
+
+    gradient = np.tile(
+        np.linspace(0, 255, 448, dtype=np.uint8), (224, 1)
+    )
+    image = Image.fromarray(gradient, mode="L").convert("RGB")
+    tensor = classifier._preprocess(image)
+
+    assert classifier.preprocessing_mode == "direct_resize"
+    assert tensor.shape == (1, 3, 224, 224)
+    assert tensor[0, 0, 100, 0] < -2.0
+    assert tensor[0, 0, 100, -1] > 2.0
+
+
+def test_invalid_preprocessing_mode_is_rejected(tmp_path):
+    """Do not silently run an unknown model transform."""
+    model_path = tmp_path / "model.onnx"
+    model_path.write_bytes(b"fake ONNX for mocked test")
+    labels_path = tmp_path / "classes.txt"
+    labels_path.write_text("\n".join(LABELS) + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Unsupported XRAY_ANATOMY_PREPROCESSING"):
+        XRayAnatomyClassifier(
+            checkpoint_path=model_path,
+            labels_path=labels_path,
+            preprocessing_mode="something_unknown",
+        )
+
 def test_wrong_output_shape_fails_closed(tmp_path, monkeypatch):
     """A model with the wrong number of output classes must be rejected."""
     classifier, session = _make_classifier(tmp_path)

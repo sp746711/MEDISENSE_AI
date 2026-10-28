@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
+import math
 import os
 import re
 import threading
@@ -1095,31 +1096,68 @@ def _broad_anatomy_route_result(
     region: str,
     anatomy_result: dict[str, Any],
     confidence: Any,
+    *,
+    classifier_gate_passed: bool = False,
+    is_broad_label: bool = True,
 ) -> dict[str, Any]:
-    """Return a successful anatomy result but refuse unsupported regional inference."""
+    """Represent broad-label acceptance without routing to a specific region.
+
+    This helper is called after the confidence and top-two ambiguity gates have
+    been evaluated. A broad label can therefore be accepted as a broad-region
+    classifier result, but it cannot establish a specific anatomy such as Wrist,
+    Hand, Elbow, Skull, or Lumbar Spine and cannot select a regional model.
+    """
     display = region.replace("_", " ").title()
+    broad_accepted = bool(classifier_gate_passed and is_broad_label)
+    try:
+        confidence_label = f"{float(confidence):.1%}" if confidence is not None else "not available"
+    except (TypeError, ValueError, OverflowError):
+        confidence_label = "not available"
+
+    if broad_accepted:
+        message = (
+            f"The automatic classifier accepted the broad region {display} "
+            f"(score: {confidence_label}). It did not identify a specific body region. "
+            "Select the correct specific region before regional interpretation; no regional model was run. "
+            "The score is not a calibrated clinical probability."
+        )
+        verification_method = "classifier_confidence_and_margin_broad_region"
+    else:
+        message = (
+            f"The classifier candidate {display} does not establish a specific X-ray region. "
+            "Choose the correct specific body region before regional interpretation; no regional model was run."
+        )
+        verification_method = None
+
     return {
+        # Keep the broad candidate available for display/debugging, but never
+        # describe it as a detected specific anatomical region.
         "region": region,
         "canonical_region": region,
         "candidate_region": region,
-        "detected_region": region,
+        "detected_region": None,
         "supported": False,
         "is_supported": False,
         "is_available": False,
         "is_recognized": True,
+        "is_broad_region": bool(is_broad_label),
         "region_source": "image_classifier",
         "classification_status": "completed",
-        "anatomy_verification_status": "confirmation_required",
+        # Specific-site confirmation remains required even if the broad-label
+        # classifier gate passed. This status must not authorize regional inference.
+        "anatomy_verification_status": (
+            "broad_region_accepted" if broad_accepted else "confirmation_required"
+        ),
         "anatomy_independently_verified": False,
+        "anatomy_classifier_accepted": broad_accepted,
+        "broad_region_classifier_accepted": broad_accepted,
+        "specific_region_confirmation_required": True,
+        "anatomy_verification_method": verification_method,
         "body_part_confidence": confidence,
         "anatomy_detection": anatomy_result,
-        "reason_code": "broad_anatomy_label",
+        "reason_code": "broad_anatomy_label" if is_broad_label else "anatomy_specificity_unverified",
         "registry_entry": None,
-        "message": (
-            f"The anatomy classifier identified a broad region ({display}), not a specific X-ray region "
-            "that can be safely linked to a configured interpretation model. No regional disease model was run. "
-            "Use a clearer, region-specific X-ray or have the image reviewed by a qualified radiology professional."
-        ),
+        "message": message,
     }
 
 
@@ -1127,6 +1165,141 @@ def _broad_anatomy_route_result(
 # a user-supplied region. This keeps import/startup of unrelated API modules cheap.
 _BODY_PART_CLASSIFIER = None
 _BODY_PART_CLASSIFIER_LOCK = threading.Lock()
+_UPPER_EXTREMITY_CLASSIFIER = None
+_UPPER_EXTREMITY_CLASSIFIER_LOCK = threading.Lock()
+
+
+def _get_upper_extremity_classifier():
+    """Return the optional 7-class upper-extremity anatomy classifier."""
+    global _UPPER_EXTREMITY_CLASSIFIER
+    if _UPPER_EXTREMITY_CLASSIFIER is None:
+        with _UPPER_EXTREMITY_CLASSIFIER_LOCK:
+            if _UPPER_EXTREMITY_CLASSIFIER is None:
+                from app.ai.upper_extremity_anatomy_classifier import UpperExtremityAnatomyClassifier
+                _UPPER_EXTREMITY_CLASSIFIER = UpperExtremityAnatomyClassifier()
+    return _UPPER_EXTREMITY_CLASSIFIER
+
+
+def _refine_broad_upper_extremity_candidate(
+    image_path: str,
+    anatomy_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Try a dedicated 7-class sub-classifier only for broad upper-limb outputs.
+
+    The primary 33-class model is weak at separating a wrist from the broad
+    UPPER_EXTREMITY category. A separately trained 7-class classifier can refine
+    that result. If its checkpoint is absent, fails, or does not pass the same
+    provisional score/margin gates, the original broad prediction is preserved.
+    No label is inferred from a filename or forcibly promoted.
+    """
+    raw_candidate = anatomy_result.get("candidate_body_part") or anatomy_result.get("body_part_label")
+    candidate = str(raw_candidate or "").strip().upper().replace(" ", "_")
+    if candidate not in {"UPPER_EXTREMITY", "ARM"}:
+        return anatomy_result
+
+    primary_snapshot = {
+        "candidate_body_part": anatomy_result.get("candidate_body_part") or anatomy_result.get("body_part_label"),
+        "confidence": anatomy_result.get("body_part_confidence"),
+        "second_candidate_body_part": anatomy_result.get("second_candidate_body_part"),
+        "second_candidate_confidence": anatomy_result.get("second_candidate_confidence"),
+        "top_two_margin": anatomy_result.get("top_two_margin"),
+        "top_predictions": anatomy_result.get("top_predictions", []),
+        "model_name": anatomy_result.get("model_name"),
+    }
+    try:
+        classifier = _get_upper_extremity_classifier()
+        # Reuse the primary classifier's conservative, inference-only overlay
+        # cleaner when coloured annotations are present. The stored original file
+        # is never modified. Training images are routine radiographs, so testing a
+        # cleaned copy can reduce annotation-domain mismatch without forcing labels.
+        try:
+            from PIL import Image
+            primary_classifier = _get_body_part_classifier()
+            with Image.open(image_path) as opened:
+                opened.load()
+                cleaned_image, cleanup_meta = primary_classifier._remove_colored_annotations(opened)
+            if isinstance(cleanup_meta, dict) and cleanup_meta.get("applied"):
+                refined = classifier.predict_image(cleaned_image)
+                refined["annotation_cleanup"] = cleanup_meta
+                refined["preprocessing_id"] = str(refined.get("preprocessing_id") or "rgb_resize224_imagenet_norm_v1") + "+colored_overlay_cleanup"
+            else:
+                refined = classifier.predict_file(image_path)
+                refined["annotation_cleanup"] = cleanup_meta if isinstance(cleanup_meta, dict) else {"applied": False}
+        except Exception as cleanup_exc:
+            # Cleanup is optional: do not block specialist inference if OpenCV or
+            # the cleaning helper is unavailable. Fall back to the untouched image.
+            logger.info("Upper-extremity annotation cleanup unavailable; using original image: %s", cleanup_exc)
+            refined = classifier.predict_file(image_path)
+            refined["annotation_cleanup"] = {"applied": False, "reason": "cleanup_unavailable"}
+    except FileNotFoundError as exc:
+        anatomy_result["upper_extremity_refinement"] = {
+            "status": "unavailable",
+            "reason_code": "upper_extremity_specialist_checkpoint_missing",
+            "message": str(exc),
+            "primary_candidate": primary_snapshot["candidate_body_part"],
+            "top_predictions": [],
+        }
+        logger.info("Upper-extremity sub-classifier not installed; retaining broad candidate")
+        return anatomy_result
+    except Exception as exc:
+        anatomy_result["upper_extremity_refinement"] = {
+            "status": "failed",
+            "reason_code": "upper_extremity_specialist_inference_failed",
+            "message": f"{type(exc).__name__}: {exc}",
+            "primary_candidate": primary_snapshot["candidate_body_part"],
+            "top_predictions": [],
+        }
+        logger.exception("Upper-extremity sub-classification failed; retaining broad candidate")
+        return anatomy_result
+
+    accepted = bool(refined.get("accepted"))
+    specialist_result = {
+        "status": "accepted" if accepted else "unverified",
+        "reason_code": None if accepted else "upper_extremity_specialist_below_gate",
+        "primary_candidate": primary_snapshot["candidate_body_part"],
+        "primary_confidence": primary_snapshot["confidence"],
+        "candidate_body_part": refined.get("candidate_body_part"),
+        "confidence": refined.get("confidence"),
+        "second_candidate_body_part": refined.get("second_candidate_body_part"),
+        "second_confidence": refined.get("second_confidence"),
+        "top_two_margin": refined.get("top_two_margin"),
+        "top_predictions": refined.get("top_predictions", []),
+        "confidence_threshold": refined.get("confidence_threshold"),
+        "min_confidence_margin": refined.get("min_confidence_margin"),
+        "confidence_threshold_validated": False,
+        "model_name": refined.get("model_name"),
+        "model_sha256": refined.get("model_sha256"),
+        "preprocessing_id": refined.get("preprocessing_id"),
+        "message": refined.get("message"),
+    }
+    if not accepted:
+        anatomy_result["upper_extremity_refinement"] = specialist_result
+        return anatomy_result
+
+    # Preserve original full-body inference for debugging/traceability, then use
+    # the specific-region classifier's own output contract for downstream routing.
+    anatomy_result["primary_classifier_result"] = primary_snapshot
+    anatomy_result["upper_extremity_refinement"] = specialist_result
+    anatomy_result["body_part_label"] = refined["candidate_body_part"]
+    anatomy_result["candidate_body_part"] = refined["candidate_body_part"]
+    anatomy_result["body_part_confidence"] = float(refined["confidence"])
+    anatomy_result["second_candidate_body_part"] = refined.get("second_candidate_body_part")
+    anatomy_result["second_candidate_confidence"] = refined.get("second_confidence")
+    anatomy_result["top_two_margin"] = refined.get("top_two_margin")
+    anatomy_result["confidence_threshold"] = refined.get("confidence_threshold", 0.60)
+    anatomy_result["min_confidence_margin"] = refined.get("min_confidence_margin", 0.10)
+    anatomy_result["top_predictions"] = refined.get("top_predictions", [])
+    anatomy_result["candidate_is_specific_anatomy"] = True
+    anatomy_result["refined_by_model_name"] = refined.get("model_name")
+    anatomy_result["refined_by_model_sha256"] = refined.get("model_sha256")
+    anatomy_result["refined_preprocessing_id"] = refined.get("preprocessing_id")
+    anatomy_result["status"] = "completed"
+    anatomy_result["message"] = (
+        f"The primary classifier returned {primary_snapshot['candidate_body_part']} and a dedicated "
+        f"upper-extremity classifier refined the candidate to {refined['candidate_body_part']} "
+        f"({float(refined['confidence']):.1%} specialist score). The specialist score is not a clinical probability."
+    )
+    return anatomy_result
 
 
 def _get_body_part_classifier():
@@ -1150,9 +1323,10 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
 
     The automatic path uses the separate body-part classifier first. It only
     reaches the existing regional model registry when the classifier's configured
-    confidence gate is passed. Explicit `declared_region` remains temporarily
-    supported for legacy API callers; the X-Ray upload endpoint will be updated in
-    the next Goal 1 step to omit that parameter entirely.
+    confidence and ambiguity gates are passed. The ordinary upload endpoint calls
+    this function without a declared region. `declared_region` is reserved for an
+    explicit post-upload user confirmation/correction path; it is never inferred
+    from the filename and does not itself verify clinical findings.
     """
     if not isinstance(declared_region, str) or not declared_region.strip():
         try:
@@ -1199,22 +1373,39 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 ),
             }
 
+        # If the 33-class model only identifies the broad upper limb, ask an
+        # optional dedicated seven-class classifier to distinguish wrist/hand/
+        # elbow/forearm/finger/humerus/shoulder. It never guesses when the specialist
+        # checkpoint is absent or its candidate fails the provisional gates.
+        anatomy_result = _refine_broad_upper_extremity_candidate(image_path, anatomy_result)
+
+        # Some older classifier outputs mark an otherwise high-scoring candidate
+        # as unverified solely because an independent-confirmation flag is false.
+        # Do not use that flag as a second confidence gate. Re-evaluate the actual
+        # score, margin, and label below. Failed/unavailable classifier executions
+        # still fail closed.
+        classifier_status = str(anatomy_result.get("status") or "").strip().lower()
         detected_label = anatomy_result.get("body_part_label")
-        if anatomy_result.get("status") != "completed" or not isinstance(detected_label, str) or not detected_label.strip():
-            candidate = anatomy_result.get("candidate_body_part")
+        candidate_from_classifier = anatomy_result.get("candidate_body_part")
+        if not isinstance(detected_label, str) or not detected_label.strip():
+            detected_label = candidate_from_classifier
+        if classifier_status in {"failed", "unavailable", "error"} or not isinstance(detected_label, str) or not detected_label.strip():
+            candidate = candidate_from_classifier or detected_label
             confidence = anatomy_result.get("body_part_confidence")
             return {
                 "region": "unknown",
                 "canonical_region": "unknown",
-                "candidate_region": str(candidate).lower() if candidate else None,
+                "candidate_region": str(candidate).lower().replace("_", " ") if candidate else None,
                 "supported": False,
                 "is_supported": False,
                 "is_available": False,
                 "is_recognized": False,
                 "region_source": "image_classifier",
-                "classification_status": "completed",
+                "classification_status": classifier_status or "unknown",
                 "anatomy_verification_status": "unverified",
                 "anatomy_independently_verified": False,
+                "anatomy_classifier_accepted": False,
+                "anatomy_verification_method": None,
                 "body_part_confidence": confidence,
                 "anatomy_detection": anatomy_result,
                 "reason_code": "anatomy_unverified",
@@ -1234,6 +1425,8 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
         # the threshold; it prevents ambiguous anatomy from reaching disease inference.
         try:
             confidence_value = float(confidence)
+            if not math.isfinite(confidence_value) or not 0.0 <= confidence_value <= 1.0:
+                confidence_value = None
         except (TypeError, ValueError, OverflowError):
             confidence_value = None
 
@@ -1306,6 +1499,8 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "classification_status": "completed",
                 "anatomy_verification_status": "unverified",
                 "anatomy_independently_verified": False,
+                "anatomy_classifier_accepted": False,
+                "anatomy_verification_method": None,
                 "body_part_confidence": confidence_value,
                 "anatomy_detection": anatomy_result,
                 "reason_code": reason_code,
@@ -1345,18 +1540,20 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
         # to humerus, HEAD is not equivalent to skull, LEG is not equivalent to femur,
         # and generic SPINE does not distinguish cervical/thoracic/lumbar studies).
         if is_broad_label:
-            return _broad_anatomy_route_result(detected_region, anatomy_result, confidence)
+            return _broad_anatomy_route_result(
+                detected_region, anatomy_result, confidence,
+                classifier_gate_passed=True, is_broad_label=True,
+            )
 
-        # A high classifier score is not independent verification. This model has
-        # produced high-confidence wrong-region predictions in Goal 1 smoke tests.
-        # Require an explicit, separate verification signal before selecting a
-        # region-specific interpretation model. The anatomy classifier's own output
-        # cannot satisfy this gate; a UI/API confirmation workflow must set this flag
-        # only after the user confirms the suggested body region or another trusted
-        # independent verification step has occurred.
+        # A specific class can pass the automatic classifier gate. This is not
+        # independent clinical verification, and the score must not be described as
+        # a clinical probability. Low-confidence and ambiguous labels returned above.
         candidate_is_specific = anatomy_result.get("candidate_is_specific_anatomy")
         if candidate_is_specific is False:
-            return _broad_anatomy_route_result(detected_region, anatomy_result, confidence)
+            return _broad_anatomy_route_result(
+                detected_region, anatomy_result, confidence,
+                classifier_gate_passed=False, is_broad_label=False,
+            )
 
         # If the anatomy is recognized but no region-specific model is configured,
         # report that limitation directly. Do not mislabel a known region (e.g. knee)
@@ -1379,60 +1576,38 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "is_recognized": True,
                 "region_source": "image_classifier",
                 "classification_status": "completed",
-                # The candidate was classified, but not independently verified.
-                "anatomy_verification_status": "confirmation_required",
+                # This is classifier-threshold acceptance, not independent clinical
+                # confirmation. Keep it separate from downstream model availability.
+                "anatomy_verification_status": "completed",
                 "anatomy_independently_verified": False,
+                "anatomy_classifier_accepted": True,
+                "anatomy_verification_method": "classifier_threshold",
+                "interpretation_status": "unavailable",
                 "body_part_confidence": confidence,
                 "anatomy_detection": anatomy_result,
                 "reason_code": "unsupported_region",
                 "registry_entry": None,
                 "message": (
-                    f"The image classifier recognized {display}, but no compatible "
-                    "region-specific image interpretation model is configured. "
-                    "The anatomy candidate is not independently verified, and no "
-                    "disease finding was inferred. A radiology report can be "
-                    "added separately."
+                    f"Anatomy classification accepted: {display} ({float(confidence):.1%} classifier score). "
+                    "Automated abnormality interpretation is unavailable because no compatible regional model is configured. "
+                    "The classifier score is not clinical confirmation or a diagnosis."
                 ),
             }
 
-        independently_verified = anatomy_result.get("anatomy_independently_verified") is True
-        if not independently_verified:
-            display = detected_region.replace("_", " ").title()
-            return {
-                # Preserve the specific candidate region for UI/tests, but do not
-                # enable region-specific inference before independent confirmation.
-                "region": detected_region,
-                "canonical_region": detected_region,
-                "candidate_region": detected_region,
-                "detected_region": detected_region,
-                "supported": False,
-                "is_supported": False,
-                "is_available": False,
-                "is_recognized": True,
-                "region_source": "image_classifier",
-                "classification_status": "completed",
-                "anatomy_verification_status": "confirmation_required",
-                "anatomy_independently_verified": False,
-                "body_part_confidence": confidence,
-                "anatomy_detection": anatomy_result,
-                "reason_code": "anatomy_confirmation_required",
-                "registry_entry": None,
-                "message": (
-                    f"The image classifier suggests {display}, but the body region has not been "
-                    "independently confirmed. A high classifier score alone cannot verify anatomy. "
-                    "Please confirm the correct X-ray region before any region-specific image "
-                    "interpretation model is selected. No regional disease model was run."
-                ),
-            }
-
-        # Reuse the existing registry availability checks only after the independent
-        # verification signal is present. The recursive call passes the verified region.
+        # Specific label + validated-in-code confidence/margin gate is sufficient
+        # for automatic classifier acceptance. `anatomy_independently_verified`
+        # remains False to avoid implying an independent or clinical review.
+        # The classifier gate has accepted a specific region. Route only through
+        # the registry for that exact region; never substitute a different region.
         routed_result = route_xray(image_path, declared_region=detected_region)
         routed_result["region_source"] = "image_classifier"
         routed_result["detected_region"] = detected_region
         routed_result["classification_status"] = "completed"
         routed_result["anatomy_verification_status"] = "completed"
-        routed_result["anatomy_independently_verified"] = True
+        routed_result["anatomy_independently_verified"] = False
+        routed_result["anatomy_classifier_accepted"] = True
+        routed_result["anatomy_verification_method"] = "classifier_threshold"
+        routed_result["interpretation_status"] = str(routed_result.get("status") or "unavailable").lower()
         routed_result["body_part_confidence"] = confidence
         routed_result["anatomy_detection"] = anatomy_result
         try:

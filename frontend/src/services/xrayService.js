@@ -1,8 +1,9 @@
+
 import { apiRequest } from './api';
 
 /**
- * Upload an X-ray image.
- * The backend automatically detects the body part.
+ * Upload one X-ray image.
+ * The backend detects the anatomical region from image pixels.
  */
 export async function uploadXray(assessmentId, file) {
   if (!assessmentId) {
@@ -16,43 +17,82 @@ export async function uploadXray(assessmentId, file) {
   const form = new FormData();
   form.append('file', file);
 
-  return apiRequest(`/assessments/${assessmentId}/xray`, {
-    method: 'POST',
-    body: form,
-    formData: true,
-  });
+  return apiRequest(
+    `/assessments/${encodeURIComponent(assessmentId)}/xray`,
+    {
+      method: 'POST',
+      body: form,
+      formData: true,
+    }
+  );
 }
 
 /**
- * Retrieve X-ray results for an assessment.
+ * Retrieve persisted X-ray results for an assessment.
  */
 export async function getXrayResults(assessmentId) {
   if (!assessmentId) {
     throw new Error('An assessment ID is required.');
   }
 
-  return apiRequest(`/assessments/${assessmentId}/xray`);
+  return apiRequest(
+    `/assessments/${encodeURIComponent(assessmentId)}/xray`
+  );
 }
 
 /**
- * Retrieve the X-ray model catalogue.
+ * Retrieve supported X-ray regions and model availability.
  */
 export async function getXrayCatalogue() {
   return apiRequest('/assessments/xray/catalogue');
 }
 
 /**
- * Delete an uploaded X-ray image and its backend record.
+ * Delete an uploaded X-ray image and its result.
  */
 export async function deleteXray(assessmentId, xrayResultId) {
   if (!assessmentId || !xrayResultId) {
-    throw new Error('Assessment ID and X-ray result ID are required.');
+    throw new Error(
+      'Assessment ID and X-ray result ID are required.'
+    );
   }
 
   return apiRequest(
-    `/assessments/${assessmentId}/xray/${xrayResultId}`,
+    `/assessments/${encodeURIComponent(assessmentId)}/xray/${encodeURIComponent(xrayResultId)}`,
     {
       method: 'DELETE',
+    }
+  );
+}
+
+/**
+ * Confirm or correct an X-ray's anatomical region.
+ * This selects a routing region; it is not a medical diagnosis.
+ */
+export async function confirmXrayAnatomy(
+  assessmentId,
+  xrayResultId,
+  region
+) {
+  if (!assessmentId || !xrayResultId) {
+    throw new Error(
+      'Assessment ID and X-ray result ID are required.'
+    );
+  }
+
+  if (typeof region !== 'string' || !region.trim()) {
+    throw new Error(
+      'Choose a specific body region before confirming.'
+    );
+  }
+
+  return apiRequest(
+    `/assessments/${encodeURIComponent(assessmentId)}/xray/${encodeURIComponent(xrayResultId)}/anatomy-verification`,
+    {
+      method: 'PUT',
+      body: {
+        region: region.trim(),
+      },
     }
   );
 }

@@ -9,6 +9,7 @@ export default function FilePreviewModal({
   candidateRegion = null,
   bodyPartConfidence = null,
   anatomyVerificationStatus = 'unverified',
+  broadRegionAccepted = false,
 }) {
   const [zoom, setZoom] = useState(1);
 
@@ -183,7 +184,12 @@ export default function FilePreviewModal({
               <div style={{ fontWeight: 700, marginBottom: '0.4rem', color: '#075985' }}>
                 Automatic body-region detection
               </div>
-              {detectedRegion ? (
+              {broadRegionAccepted ? (
+                <p style={{ margin: '0.25rem 0', color: '#166534' }}>
+                  <strong>Classifier accepted broad region:</strong>{' '}
+                  {String(candidateRegion || detectedRegion || 'Unknown').replace(/_/g, ' ')}
+                </p>
+              ) : detectedRegion ? (
                 <p style={{ margin: '0.25rem 0' }}>
                   <strong>Detected region:</strong>{' '}
                   {String(detectedRegion).replace(/_/g, ' ')}
@@ -202,9 +208,11 @@ export default function FilePreviewModal({
                 </p>
               ) : null}
               <p style={{ margin: '0.5rem 0 0', fontSize: '0.82rem', color: '#64748b' }}>
-                This is an automated image classification, not a confirmed medical finding. Verify the body region before relying on subsequent analysis.
-                {String(anatomyVerificationStatus).toLowerCase() !== 'completed' && !detectedRegion
-                  ? ' The region has not been verified.'
+                {broadRegionAccepted
+                  ? 'The score passed the current classifier gate for a broad region only. A specific site such as wrist, hand, or elbow is not identified, and no region-specific abnormality model was run.'
+                  : 'This is an automated image classification, not a confirmed medical finding. Verify the body region before relying on subsequent analysis.'}
+                {!broadRegionAccepted && String(anatomyVerificationStatus).toLowerCase() !== 'completed' && !detectedRegion
+                  ? ' The specific region has not been verified.'
                   : ''}
               </p>
             </section>

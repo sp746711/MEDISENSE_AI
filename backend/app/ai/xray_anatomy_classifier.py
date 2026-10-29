@@ -23,29 +23,36 @@ IMAGE_SIZE = 224
 CLASS_COUNT = 33
 PROBABILITY_SUM_TOLERANCE = 0.03
 
-# Use the preprocessing documented for the 33-class ConvNeXt-Tiny ONNX model:
-# resize the shorter image edge to 224, center-crop to 224x224, then apply
-# ImageNet RGB normalization. Direct full-frame resize distorts the aspect ratio
-# and is available only for controlled comparison, not as the default.
-# The exact local checkpoint hash/training export is still not independently
-# verified, so metadata continues to report preprocessing parity as unverified.
+# Goal 1 default follows the documented model transform: resize the shorter edge,
+# then center-crop to IMAGE_SIZE. This is supported by the repository's model-transform
+# test, but the original training/export pipeline and label mapping still need audit.
+# Do not treat this choice as proof of clinical accuracy; verify against the original
+# training/export code and evaluate on independently labelled radiographs.
 DEFAULT_PREPROCESSING_MODE = "center_crop"
 SUPPORTED_PREPROCESSING_MODES = {"direct_resize", "center_crop"}
-# Annotation-bearing examples are outside this model's documented training domain.
-# When small, saturated-color overlays (arrows/points/lines) are detected, test a
-# cleaned copy in addition to the original image. Never modify the saved upload.
-DEFAULT_CLEAN_COLORED_OVERLAYS = True
+# Annotation cleanup has not been validated against this model's training pipeline.
+# Keep it disabled by default until a labelled A/B evaluation demonstrates benefit.
+# It can still be enabled explicitly for controlled evaluation via environment variable.
+DEFAULT_CLEAN_COLORED_OVERLAYS = False
 MAX_COLORED_OVERLAY_FRACTION = 0.06
 MIN_COLORED_OVERLAY_FRACTION = 0.0001
 CLEANED_SPECIFIC_MIN_MARGIN = 0.10
+# Provisional ambiguity guard, not a validated clinical threshold. This prevents
+# near-ties from being marked completed; it does not fix high-confidence wrong labels.
+DEFAULT_MIN_TOP_TWO_MARGIN = 0.10
 
 # These labels describe broad regions or study groupings rather than a specific
 # anatomical site. They must not be silently converted into a specific site.
 BROAD_ANATOMY_LABELS = {
+    # These labels do not identify a sufficiently specific study site for
+    # selecting a regional abnormality model without user confirmation.
     "EXTREMITY",
     "LOWER_EXTREMITY",
     "UPPER_EXTREMITY",
     "SPINE",
+    "ARM",
+    "LEG",
+    "HEAD",
 }
 
 
@@ -148,6 +155,13 @@ class XRayAnatomyClassifier:
             raise ValueError("min_confidence must be between 0 and 1.")
 
         self.min_confidence = float(threshold)
+        margin_text = os.getenv(
+            "XRAY_ANATOMY_MIN_TOP_TWO_MARGIN",
+            str(DEFAULT_MIN_TOP_TWO_MARGIN),
+        )
+        self.min_top_two_margin = float(margin_text)
+        if not 0.0 <= self.min_top_two_margin <= 1.0:
+            raise ValueError("XRAY_ANATOMY_MIN_TOP_TWO_MARGIN must be between 0 and 1.")
 
         configured_preprocessing = (
             preprocessing_mode
@@ -629,7 +643,7 @@ class XRayAnatomyClassifier:
         return probabilities
 
     def predict_image(self, pil_image: Any) -> dict[str, Any]:
-        """Suggest anatomy, testing a cleaned copy when colored overlays are found."""
+        """Suggest anatomy; annotation cleanup is opt-in until independently evaluated."""
         if not self.is_loaded:
             self.load()
 
@@ -680,29 +694,47 @@ class XRayAnatomyClassifier:
                 selected_probabilities = cleaned_probabilities
                 selected_rank = cleanup_result_rank
                 selected_cleaned_view = True
-                selected_preprocessing = f"{self.preprocessing_mode}+colored_overlay_cleanup"
+                selected_preprocessing = f"{self.preprocessing_mode}+colored_overlay_cleanup"      
 
         candidate = selected_rank["candidate"]
         confidence = selected_rank["confidence"]
         second_candidate = selected_rank["second_candidate"]
         second_confidence = selected_rank["second_confidence"]
         top_two_margin = selected_rank["margin"]
-        accepted = confidence >= self.min_confidence
+        confidence_passes = confidence >= self.min_confidence
+        margin_passes = top_two_margin >= self.min_top_two_margin
+        candidate_is_specific = _is_specific_anatomy_label(candidate)
+        accepted = (
+            confidence_passes
+            and margin_passes
+            and candidate_is_specific
+        )
 
-        if accepted:
+        if not candidate_is_specific:
+            message = (
+                f"The anatomy classifier's best candidate is the broad region "
+                f"{candidate.replace('_', ' ').title()} ({confidence:.1%}). "
+                "This is not specific enough to select a regional abnormality model. "
+                "Ask the user to confirm the exact X-ray body part; do not infer a "
+                "specific site from this broad label."
+            )
+        elif accepted:
             message = (
                 f"The anatomy classifier's leading suggestion is "
                 f"{candidate.replace('_', ' ').title()} ({confidence:.1%}). "
-                "It passed the provisional confidence threshold only; the score is not "
-                "a calibrated probability or independent confirmation. The application "
-                "must separately check whether a compatible abnormality model exists."
+                "It passed the provisional confidence and top-two margin thresholds, "
+                "but this is not independent anatomy verification. The application "
+                "must separately require anatomy confirmation and check whether a "
+                "compatible abnormality model exists."
             )
         else:
             message = (
                 f"The anatomy classifier's best candidate is "
-                f"{candidate.replace('_', ' ').title()} ({confidence:.1%}), below the "
-                f"provisional review threshold of {self.min_confidence:.1%}. Anatomy "
-                "remains unverified; no regional abnormality model should be selected automatically."
+                f"{candidate.replace('_', ' ').title()} ({confidence:.1%}). "
+                f"Verification requires score >= {self.min_confidence:.1%} and top-two "
+                f"margin >= {self.min_top_two_margin:.1%}; observed margin is "
+                f"{top_two_margin:.1%}. Anatomy remains unverified; no regional "
+                "abnormality model should be selected automatically."
             )
 
         return {
@@ -715,6 +747,8 @@ class XRayAnatomyClassifier:
             "top_two_margin": round(top_two_margin, 4),
             "confidence_threshold": self.min_confidence,
             "confidence_threshold_validated": False,
+            "top_two_margin_threshold": self.min_top_two_margin,
+            "top_two_margin_threshold_validated": False,
             "preprocessing_mode": selected_preprocessing,
             "preprocessing_verified_against_training": False,
             "colored_annotation_cleanup": cleanup_meta,
@@ -732,7 +766,7 @@ class XRayAnatomyClassifier:
             "model_sha256": self.model_sha256,
             "labels_sha256": self.labels_sha256,
             "anatomy_independently_verified": False,
-            "candidate_is_specific_anatomy": _is_specific_anatomy_label(candidate),
+            "candidate_is_specific_anatomy": candidate_is_specific,
             "routing_requires_independent_verification": True,
             "model_name": self.model_name,
             "model_checkpoint": self.model_path.name,

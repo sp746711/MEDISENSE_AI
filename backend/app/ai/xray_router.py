@@ -1118,7 +1118,7 @@ def _broad_anatomy_route_result(
         message = (
             f"The automatic classifier accepted the broad region {display} "
             f"(score: {confidence_label}). It did not identify a specific body region. "
-            "Select the correct specific region before regional interpretation; no regional model was run. "
+            "Select the correct specific region before regional interpretation. No regional disease model was run. "
             "The score is not a calibrated clinical probability."
         )
         verification_method = "classifier_confidence_and_margin_broad_region"
@@ -1145,9 +1145,7 @@ def _broad_anatomy_route_result(
         "classification_status": "completed",
         # Specific-site confirmation remains required even if the broad-label
         # classifier gate passed. This status must not authorize regional inference.
-        "anatomy_verification_status": (
-            "broad_region_accepted" if broad_accepted else "confirmation_required"
-        ),
+        "anatomy_verification_status": "confirmation_required",
         "anatomy_independently_verified": False,
         "anatomy_classifier_accepted": broad_accepted,
         "broad_region_classifier_accepted": broad_accepted,
@@ -1208,29 +1206,15 @@ def _refine_broad_upper_extremity_candidate(
     }
     try:
         classifier = _get_upper_extremity_classifier()
-        # Reuse the primary classifier's conservative, inference-only overlay
-        # cleaner when coloured annotations are present. The stored original file
-        # is never modified. Training images are routine radiographs, so testing a
-        # cleaned copy can reduce annotation-domain mismatch without forcing labels.
-        try:
-            from PIL import Image
-            primary_classifier = _get_body_part_classifier()
-            with Image.open(image_path) as opened:
-                opened.load()
-                cleaned_image, cleanup_meta = primary_classifier._remove_colored_annotations(opened)
-            if isinstance(cleanup_meta, dict) and cleanup_meta.get("applied"):
-                refined = classifier.predict_image(cleaned_image)
-                refined["annotation_cleanup"] = cleanup_meta
-                refined["preprocessing_id"] = str(refined.get("preprocessing_id") or "rgb_resize224_imagenet_norm_v1") + "+colored_overlay_cleanup"
-            else:
-                refined = classifier.predict_file(image_path)
-                refined["annotation_cleanup"] = cleanup_meta if isinstance(cleanup_meta, dict) else {"applied": False}
-        except Exception as cleanup_exc:
-            # Cleanup is optional: do not block specialist inference if OpenCV or
-            # the cleaning helper is unavailable. Fall back to the untouched image.
-            logger.info("Upper-extremity annotation cleanup unavailable; using original image: %s", cleanup_exc)
-            refined = classifier.predict_file(image_path)
-            refined["annotation_cleanup"] = {"applied": False, "reason": "cleanup_unavailable"}
+        # Use the untouched uploaded image for the specialist classifier.
+        # Annotation cleanup is not validated against this model's training pipeline
+        # and must not be applied here behind the primary classifier's opt-in setting.
+        # The original file is never modified.
+        refined = classifier.predict_file(image_path)
+        refined["annotation_cleanup"] = {
+            "applied": False,
+            "reason": "disabled_unvalidated_preprocessing",
+        }
     except FileNotFoundError as exc:
         anatomy_result["upper_extremity_refinement"] = {
             "status": "unavailable",
@@ -1460,23 +1444,51 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 if 0.0 <= score <= 1.0:
                     candidate_scores.append(score)
 
-        min_margin_value = anatomy_result.get("min_confidence_margin", 0.10)
+        # The classifier's configured margin is the source of truth. Support the
+        # older key for backward compatibility, but prefer the new key introduced
+        # by the updated anatomy classifier.
+        min_margin_value = anatomy_result.get(
+            "top_two_margin_threshold",
+            anatomy_result.get("min_confidence_margin", 0.10),
+        )
         try:
             min_margin_value = float(min_margin_value)
         except (TypeError, ValueError, OverflowError):
             min_margin_value = 0.10
-        if not (0.0 <= min_margin_value <= 1.0):
+        if not math.isfinite(min_margin_value) or not (0.0 <= min_margin_value <= 1.0):
             min_margin_value = 0.10
 
         candidate_scores.sort(reverse=True)
+        reported_margin = anatomy_result.get("top_two_margin")
+        try:
+            reported_margin_value = float(reported_margin)
+            if not math.isfinite(reported_margin_value) or not (0.0 <= reported_margin_value <= 1.0):
+                reported_margin_value = None
+        except (TypeError, ValueError, OverflowError):
+            reported_margin_value = None
+
+        # Prefer the explicit classifier-reported margin. If absent, calculate it
+        # from candidate scores. Missing margin data must not be fabricated.
+        if reported_margin_value is not None:
+            effective_margin = reported_margin_value
+        elif len(candidate_scores) >= 2:
+            effective_margin = candidate_scores[0] - candidate_scores[1]
+        else:
+            effective_margin = None
+
         low_confidence = confidence_value is None or confidence_value < threshold_value
         ambiguous_top_two = (
-            len(candidate_scores) >= 2
-            and (candidate_scores[0] - candidate_scores[1]) < min_margin_value
+            effective_margin is not None
+            and effective_margin < min_margin_value
         )
         if low_confidence or ambiguous_top_two:
             candidate = anatomy_result.get("candidate_body_part") or detected_label
-            reason_code = "anatomy_confidence_below_threshold" if low_confidence else "ambiguous_anatomy_prediction"
+            if ambiguous_top_two and not low_confidence:
+                reason_code = "ambiguous_anatomy_prediction"
+            elif low_confidence and classifier_status == "completed":
+                reason_code = "anatomy_confidence_below_threshold"
+            else:
+                reason_code = "anatomy_unverified"
             if ambiguous_top_two and not low_confidence:
                 message = (
                     "The two leading body-region predictions are too close to select a region reliably. "
@@ -1576,12 +1588,12 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "is_recognized": True,
                 "region_source": "image_classifier",
                 "classification_status": "completed",
-                # This is classifier-threshold acceptance, not independent clinical
-                # confirmation. Keep it separate from downstream model availability.
-                "anatomy_verification_status": "completed",
+                # A classifier score is not independent anatomy verification.
+                # Confirmation is required even when this region is recognized.
+                "anatomy_verification_status": "confirmation_required",
                 "anatomy_independently_verified": False,
-                "anatomy_classifier_accepted": True,
-                "anatomy_verification_method": "classifier_threshold",
+                "anatomy_classifier_accepted": False,
+                "anatomy_verification_method": None,
                 "interpretation_status": "unavailable",
                 "body_part_confidence": confidence,
                 "anatomy_detection": anatomy_result,
@@ -1589,16 +1601,45 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "registry_entry": None,
                 "message": (
                     f"Anatomy classification accepted: {display} ({float(confidence):.1%} classifier score). "
-                    "Automated abnormality interpretation is unavailable because no compatible regional model is configured. "
+                    "Automated abnormality interpretation is unavailable because no compatible region-specific model is configured. "
                     "The classifier score is not clinical confirmation or a diagnosis."
                 ),
             }
 
-        # Specific label + validated-in-code confidence/margin gate is sufficient
-        # for automatic classifier acceptance. `anatomy_independently_verified`
-        # remains False to avoid implying an independent or clinical review.
-        # The classifier gate has accepted a specific region. Route only through
-        # the registry for that exact region; never substitute a different region.
+        # A model prediction is only a candidate. Require explicit user confirmation
+        # of the specific anatomy before any regional abnormality model is run.
+        # This prevents a confident but incorrect body-part prediction from routing
+        # the image into an incompatible model.
+        display = detected_region.replace("_", " ").title()
+        return {
+            "region": detected_region,
+            "canonical_region": detected_region,
+            "candidate_region": detected_region,
+            "detected_region": detected_region,
+            "supported": False,
+            "is_supported": False,
+            "is_available": False,
+            "is_recognized": True,
+            "region_source": "image_classifier",
+            "classification_status": "completed",
+            "anatomy_verification_status": "confirmation_required",
+            "anatomy_independently_verified": False,
+            "anatomy_classifier_accepted": False,
+            "anatomy_verification_method": None,
+            "specific_region_confirmation_required": True,
+            "interpretation_status": "not_run_pending_anatomy_confirmation",
+            "body_part_confidence": confidence,
+            "anatomy_detection": anatomy_result,
+            "reason_code": "anatomy_confirmation_required",
+            "registry_entry": None,
+            "message": (
+                f"The image classifier suggests {display} "
+                f"(score: {float(confidence):.1%}), but this is not independent verification. "
+                "Confirm the specific X-ray region before regional interpretation. "
+                "No regional abnormality model was run."
+            ),
+        }
+        # Intentionally unreachable until an explicit confirmation flow is wired in.
         routed_result = route_xray(image_path, declared_region=detected_region)
         routed_result["region_source"] = "image_classifier"
         routed_result["detected_region"] = detected_region

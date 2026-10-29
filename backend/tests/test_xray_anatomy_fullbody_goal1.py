@@ -301,3 +301,40 @@ def test_low_confidence_diagram_like_input_remains_unverified(
     assert result["body_part_label"] is None
     assert result["candidate_body_part"] in LABELS
     assert result["confidence_threshold"] == pytest.approx(0.6)
+
+
+def test_colored_overlay_cleanup_is_disabled_by_default(tmp_path):
+    """Unvalidated annotation inpainting must be opt-in, not the production default."""
+    model_path = tmp_path / "model.onnx"
+    model_path.write_bytes(b"fake ONNX")
+    labels_path = tmp_path / "classes.txt"
+    labels_path.write_text("\\n".join(LABELS) + "\\n", encoding="utf-8")
+
+    classifier = XRayAnatomyClassifier(
+        checkpoint_path=model_path,
+        labels_path=labels_path,
+    )
+
+    assert classifier.clean_colored_overlays is False
+
+
+def test_close_top_two_scores_remain_unverified(tmp_path, monkeypatch):
+    """A close top-two prediction must not be automatically marked completed."""
+    probabilities = np.full((1, 33), 0.001, dtype=np.float32)
+    probabilities[0, LABELS.index("WRIST")] = 0.36
+    probabilities[0, LABELS.index("HAND")] = 0.34
+    probabilities[0, LABELS.index("KNEE")] = 0.30
+    probabilities /= probabilities.sum()
+
+    classifier, session = _make_classifier(
+        tmp_path,
+        probabilities=probabilities,
+        threshold=0.30,
+    )
+    _install_fake_runtime(monkeypatch, session)
+
+    result = classifier.predict_image(Image.new("RGB", (224, 224), color="gray"))
+
+    assert result["status"] == "unverified"
+    assert result["body_part_label"] is None
+    assert result["top_two_margin"] < result["top_two_margin_threshold"]

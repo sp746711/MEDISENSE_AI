@@ -1,0 +1,1845 @@
+{
+  "center_crop": {
+    "mode": "center_crop",
+    "total": 27,
+    "top1_correct": 16,
+    "top1_acc": 0.5925925925925926,
+    "accepted_total": 13,
+    "accepted_correct": 11,
+    "accepted_acc": 0.8461538461538461,
+    "high_conf_wrong": 2,
+    "macro_prec": 0.5642857142857143,
+    "macro_rec": 0.5571428571428572,
+    "macro_f1": 0.5304988662131519,
+    "per_class": {
+      "ABDOMEN": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "ANKLE": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      },
+      "CERVICAL_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "CHEST": {
+        "support": 5,
+        "correct": 4,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889
+      },
+      "ELBOW": {
+        "support": 3,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "FOOT": {
+        "support": 2,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "FOREARM": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "HAND": {
+        "support": 2,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "HIP": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "KNEE": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.4,
+        "recall": 1.0,
+        "f1": 0.5714285714285715
+      },
+      "LUMBAR_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "PELVIS": {
+        "support": 1,
+        "correct": 1,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666
+      },
+      "SKULL": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "WRIST": {
+        "support": 3,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 0.6666666666666666,
+        "f1": 0.8
+      }
+    },
+    "conf_matrix": {
+      "CHEST": {
+        "CHEST": 4,
+        "REJECTED_PLACEHOLDER": 1
+      },
+      "HAND": {
+        "HAND": 2
+      },
+      "WRIST": {
+        "WRIST": 2,
+        "KNEE": 1
+      },
+      "FOREARM": {
+        "FOREARM": 1
+      },
+      "ELBOW": {
+        "KNEE": 2,
+        "LOWER_EXTREMITY": 1
+      },
+      "ANKLE": {
+        "ANKLE": 1,
+        "LOWER_EXTREMITY": 2
+      },
+      "FOOT": {
+        "FOOT": 2
+      },
+      "CERVICAL_SPINE": {
+        "NECK": 1
+      },
+      "PELVIS": {
+        "PELVIS": 1
+      },
+      "HIP": {
+        "UPPER_EXTREMITY": 1
+      },
+      "ABDOMEN": {
+        "LUMBAR_SPINE": 1
+      },
+      "LUMBAR_SPINE": {
+        "PELVIS": 1
+      },
+      "SKULL": {
+        "SKULL": 1
+      },
+      "KNEE": {
+        "KNEE": 2
+      }
+    },
+    "records": [
+      {
+        "filename": "Artboard-1.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\d2b19d448e5d482db01f8b387eb2919a.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.87,
+        "margin": 0.8587,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "18_chest.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\ac61b6482f12421cbc5de22be8ac589f.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8605,
+        "margin": 0.85,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "chest_xray.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\157ecfe677a94d6e9833c159f6ed2a8e.png",
+        "gt": "CHEST",
+        "pred": "REJECTED_PLACEHOLDER",
+        "conf": 0.0,
+        "margin": 0.0,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": "Image rejected: this appears to be a blank/placeholder card rather than a radiograph. Upload the actual X-ray."
+      },
+      {
+        "filename": "19_hand.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f5766c844fca47709d5450bce3f68cab.png",
+        "gt": "HAND",
+        "pred": "HAND",
+        "conf": 0.7024,
+        "margin": 0.5396,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "male_hand.jpeg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\c22bb83329fb480bb9b7a1f02e01477a.jpg",
+        "gt": "HAND",
+        "pred": "HAND",
+        "conf": 0.7002,
+        "margin": 0.5712,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Normal Hand and Wrist X-ray.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1a651f4f4b1f473ab44ed7261f9334a4.png",
+        "gt": "WRIST",
+        "pred": "WRIST",
+        "conf": 0.5753,
+        "margin": 0.4066,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "20_wrist.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1403b6783a3947e5b7002c9c174887c3.png",
+        "gt": "WRIST",
+        "pred": "KNEE",
+        "conf": 0.8191,
+        "margin": 0.7978,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Left Wrist X-Ray_ PA and Lateral Views.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\17e8bde459e7417f8bdf0a79be22de45.png",
+        "gt": "WRIST",
+        "pred": "WRIST",
+        "conf": 0.3542,
+        "margin": 0.0435,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "13_forearm.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\049742074cde4db3bc6066bc12f80438.png",
+        "gt": "FOREARM",
+        "pred": "FOREARM",
+        "conf": 0.464,
+        "margin": 0.2628,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "12_elbow (1).png",
+        "path": "D:\\projects\\MEDISENSE_AI\\12_elbow (1).png",
+        "gt": "ELBOW",
+        "pred": "KNEE",
+        "conf": 0.5232,
+        "margin": 0.4405,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "elbow-without-labels-copy-1.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f4605f42c33b4c48965a68fdc8969638.jpg",
+        "gt": "ELBOW",
+        "pred": "LOWER_EXTREMITY",
+        "conf": 0.5403,
+        "margin": 0.3151,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "15_ankle.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b0a43092ef5645b09bd64fbf754fe571.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.5545,
+        "margin": 0.372,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Right Ankle X-Ray Views.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\728673426fcf422c82bf5a593ba086e6.png",
+        "gt": "ANKLE",
+        "pred": "LOWER_EXTREMITY",
+        "conf": 0.5059,
+        "margin": 0.3232,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "top-foot-without-labels-copy.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b9857a5d7d0e47d489c8b7327afbabe2.jpg",
+        "gt": "FOOT",
+        "pred": "FOOT",
+        "conf": 0.6203,
+        "margin": 0.4177,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "male_foot-(1).jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\fd15ea3de8b54835bc732a1e18348665.jpg",
+        "gt": "FOOT",
+        "pred": "FOOT",
+        "conf": 0.8262,
+        "margin": 0.7456,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "11_cervical_spine.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\ae945ad25b354e1c9b492368c45e3558.png",
+        "gt": "CERVICAL_SPINE",
+        "pred": "NECK",
+        "conf": 0.4685,
+        "margin": 0.1466,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "pelvis-without-labels-copy.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\222b2bca333647ed9d7ed2edaf445cea.jpg",
+        "gt": "PELVIS",
+        "pred": "PELVIS",
+        "conf": 0.5272,
+        "margin": 0.359,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "hip-joint-with-no-labels.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\90143c1ccf4243cc84c463f50b019cad.jpg",
+        "gt": "HIP",
+        "pred": "UPPER_EXTREMITY",
+        "conf": 0.2601,
+        "margin": 0.0229,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "17_abdomen_kub.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\e768a04631844eacbaca2eac8261649f.png",
+        "gt": "ABDOMEN",
+        "pred": "LUMBAR_SPINE",
+        "conf": 0.5282,
+        "margin": 0.3282,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "lumbar-spine-without-labels.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0e00db9e44a643588de3838f9f620414.jpg",
+        "gt": "LUMBAR_SPINE",
+        "pred": "PELVIS",
+        "conf": 0.8594,
+        "margin": 0.842,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "05_elbow.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b33cbd834e634d318ed8427f5fc79158.png",
+        "gt": "ELBOW",
+        "pred": "KNEE",
+        "conf": 0.4064,
+        "margin": 0.1577,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "09_ankle.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\54f31ae08f364399bd4d462285049246.png",
+        "gt": "ANKLE",
+        "pred": "LOWER_EXTREMITY",
+        "conf": 0.4327,
+        "margin": 0.1232,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0020e11e84c54adbabf3ba38174fb73a.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0020e11e84c54adbabf3ba38174fb73a.png",
+        "gt": "SKULL",
+        "pred": "SKULL",
+        "conf": 0.6965,
+        "margin": 0.5735,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0bb2278bff65442182788cf476c97cd8.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0bb2278bff65442182788cf476c97cd8.png",
+        "gt": "KNEE",
+        "pred": "KNEE",
+        "conf": 0.9007,
+        "margin": 0.8813,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0d280557f1c9460f8cfe2ae7a5abaf68.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0d280557f1c9460f8cfe2ae7a5abaf68.png",
+        "gt": "KNEE",
+        "pred": "KNEE",
+        "conf": 0.8627,
+        "margin": 0.8235,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "274fcfd8d96442c2a9356f9c2874ddb0.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\274fcfd8d96442c2a9356f9c2874ddb0.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8803,
+        "margin": 0.8677,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "4eb207e90e8842a39876eb8456805469.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\4eb207e90e8842a39876eb8456805469.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8509,
+        "margin": 0.8407,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      }
+    ]
+  },
+  "direct_resize": {
+    "mode": "direct_resize",
+    "total": 27,
+    "top1_correct": 17,
+    "top1_acc": 0.6296296296296297,
+    "accepted_total": 16,
+    "accepted_correct": 12,
+    "accepted_acc": 0.75,
+    "high_conf_wrong": 4,
+    "macro_prec": 0.5357142857142857,
+    "macro_rec": 0.5333333333333333,
+    "macro_f1": 0.48968253968253966,
+    "per_class": {
+      "ABDOMEN": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "ANKLE": {
+        "support": 3,
+        "correct": 3,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "CERVICAL_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "CHEST": {
+        "support": 5,
+        "correct": 4,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889
+      },
+      "ELBOW": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      },
+      "FOOT": {
+        "support": 2,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "FOREARM": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "HAND": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.6666666666666666,
+        "recall": 1.0,
+        "f1": 0.8
+      },
+      "HIP": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "KNEE": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666
+      },
+      "LUMBAR_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "PELVIS": {
+        "support": 1,
+        "correct": 1,
+        "precision": 0.3333333333333333,
+        "recall": 1.0,
+        "f1": 0.5
+      },
+      "SKULL": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "WRIST": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      }
+    },
+    "conf_matrix": {
+      "CHEST": {
+        "CHEST": 4,
+        "REJECTED_PLACEHOLDER": 1
+      },
+      "HAND": {
+        "HAND": 2
+      },
+      "WRIST": {
+        "WRIST": 1,
+        "KNEE": 1,
+        "HAND": 1
+      },
+      "FOREARM": {
+        "TIBIA": 1
+      },
+      "ELBOW": {
+        "KNEE": 1,
+        "UPPER_EXTREMITY": 1,
+        "ELBOW": 1
+      },
+      "ANKLE": {
+        "ANKLE": 3
+      },
+      "FOOT": {
+        "FOOT": 2
+      },
+      "CERVICAL_SPINE": {
+        "NECK": 1
+      },
+      "PELVIS": {
+        "PELVIS": 1
+      },
+      "HIP": {
+        "PELVIS": 1
+      },
+      "ABDOMEN": {
+        "LUMBAR_SPINE": 1
+      },
+      "LUMBAR_SPINE": {
+        "PELVIS": 1
+      },
+      "SKULL": {
+        "SKULL": 1
+      },
+      "KNEE": {
+        "KNEE": 2
+      }
+    },
+    "records": [
+      {
+        "filename": "Artboard-1.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\d2b19d448e5d482db01f8b387eb2919a.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8538,
+        "margin": 0.8432,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "18_chest.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\ac61b6482f12421cbc5de22be8ac589f.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8789,
+        "margin": 0.8699,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "chest_xray.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\157ecfe677a94d6e9833c159f6ed2a8e.png",
+        "gt": "CHEST",
+        "pred": "REJECTED_PLACEHOLDER",
+        "conf": 0.0,
+        "margin": 0.0,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": "Image rejected: this appears to be a blank/placeholder card rather than a radiograph. Upload the actual X-ray."
+      },
+      {
+        "filename": "19_hand.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f5766c844fca47709d5450bce3f68cab.png",
+        "gt": "HAND",
+        "pred": "HAND",
+        "conf": 0.8236,
+        "margin": 0.7603,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "male_hand.jpeg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\c22bb83329fb480bb9b7a1f02e01477a.jpg",
+        "gt": "HAND",
+        "pred": "HAND",
+        "conf": 0.7624,
+        "margin": 0.6711,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Normal Hand and Wrist X-ray.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1a651f4f4b1f473ab44ed7261f9334a4.png",
+        "gt": "WRIST",
+        "pred": "WRIST",
+        "conf": 0.5604,
+        "margin": 0.3888,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "20_wrist.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1403b6783a3947e5b7002c9c174887c3.png",
+        "gt": "WRIST",
+        "pred": "KNEE",
+        "conf": 0.8148,
+        "margin": 0.798,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Left Wrist X-Ray_ PA and Lateral Views.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\17e8bde459e7417f8bdf0a79be22de45.png",
+        "gt": "WRIST",
+        "pred": "HAND",
+        "conf": 0.5128,
+        "margin": 0.3118,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "13_forearm.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\049742074cde4db3bc6066bc12f80438.png",
+        "gt": "FOREARM",
+        "pred": "TIBIA",
+        "conf": 0.1721,
+        "margin": 0.0173,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "12_elbow (1).png",
+        "path": "D:\\projects\\MEDISENSE_AI\\12_elbow (1).png",
+        "gt": "ELBOW",
+        "pred": "KNEE",
+        "conf": 0.8133,
+        "margin": 0.7821,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "elbow-without-labels-copy-1.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f4605f42c33b4c48965a68fdc8969638.jpg",
+        "gt": "ELBOW",
+        "pred": "UPPER_EXTREMITY",
+        "conf": 0.3938,
+        "margin": 0.1939,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "15_ankle.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b0a43092ef5645b09bd64fbf754fe571.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.5413,
+        "margin": 0.3379,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Right Ankle X-Ray Views.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\728673426fcf422c82bf5a593ba086e6.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.5991,
+        "margin": 0.4907,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "top-foot-without-labels-copy.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b9857a5d7d0e47d489c8b7327afbabe2.jpg",
+        "gt": "FOOT",
+        "pred": "FOOT",
+        "conf": 0.5555,
+        "margin": 0.2923,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "male_foot-(1).jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\fd15ea3de8b54835bc732a1e18348665.jpg",
+        "gt": "FOOT",
+        "pred": "FOOT",
+        "conf": 0.8548,
+        "margin": 0.8076,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "11_cervical_spine.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\ae945ad25b354e1c9b492368c45e3558.png",
+        "gt": "CERVICAL_SPINE",
+        "pred": "NECK",
+        "conf": 0.6351,
+        "margin": 0.4749,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "pelvis-without-labels-copy.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\222b2bca333647ed9d7ed2edaf445cea.jpg",
+        "gt": "PELVIS",
+        "pred": "PELVIS",
+        "conf": 0.6069,
+        "margin": 0.5055,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "hip-joint-with-no-labels.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\90143c1ccf4243cc84c463f50b019cad.jpg",
+        "gt": "HIP",
+        "pred": "PELVIS",
+        "conf": 0.4034,
+        "margin": 0.2413,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "17_abdomen_kub.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\e768a04631844eacbaca2eac8261649f.png",
+        "gt": "ABDOMEN",
+        "pred": "LUMBAR_SPINE",
+        "conf": 0.5258,
+        "margin": 0.2365,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "lumbar-spine-without-labels.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0e00db9e44a643588de3838f9f620414.jpg",
+        "gt": "LUMBAR_SPINE",
+        "pred": "PELVIS",
+        "conf": 0.8747,
+        "margin": 0.8499,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "05_elbow.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b33cbd834e634d318ed8427f5fc79158.png",
+        "gt": "ELBOW",
+        "pred": "ELBOW",
+        "conf": 0.768,
+        "margin": 0.7294,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "09_ankle.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\54f31ae08f364399bd4d462285049246.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.5806,
+        "margin": 0.4439,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0020e11e84c54adbabf3ba38174fb73a.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0020e11e84c54adbabf3ba38174fb73a.png",
+        "gt": "SKULL",
+        "pred": "SKULL",
+        "conf": 0.6965,
+        "margin": 0.5735,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0bb2278bff65442182788cf476c97cd8.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0bb2278bff65442182788cf476c97cd8.png",
+        "gt": "KNEE",
+        "pred": "KNEE",
+        "conf": 0.8938,
+        "margin": 0.8831,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0d280557f1c9460f8cfe2ae7a5abaf68.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0d280557f1c9460f8cfe2ae7a5abaf68.png",
+        "gt": "KNEE",
+        "pred": "KNEE",
+        "conf": 0.741,
+        "margin": 0.6347,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "274fcfd8d96442c2a9356f9c2874ddb0.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\274fcfd8d96442c2a9356f9c2874ddb0.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8578,
+        "margin": 0.8422,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "4eb207e90e8842a39876eb8456805469.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\4eb207e90e8842a39876eb8456805469.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8791,
+        "margin": 0.8696,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      }
+    ]
+  },
+  "letterbox": {
+    "mode": "letterbox",
+    "total": 27,
+    "top1_correct": 18,
+    "top1_acc": 0.6666666666666666,
+    "accepted_total": 17,
+    "accepted_correct": 13,
+    "accepted_acc": 0.7647058823529411,
+    "high_conf_wrong": 4,
+    "macro_prec": 0.6071428571428571,
+    "macro_rec": 0.6047619047619047,
+    "macro_f1": 0.5611111111111111,
+    "per_class": {
+      "ABDOMEN": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "ANKLE": {
+        "support": 3,
+        "correct": 3,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "CERVICAL_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "CHEST": {
+        "support": 5,
+        "correct": 4,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889
+      },
+      "ELBOW": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      },
+      "FOOT": {
+        "support": 2,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "FOREARM": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "HAND": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.6666666666666666,
+        "recall": 1.0,
+        "f1": 0.8
+      },
+      "HIP": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "KNEE": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666
+      },
+      "LUMBAR_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "PELVIS": {
+        "support": 1,
+        "correct": 1,
+        "precision": 0.3333333333333333,
+        "recall": 1.0,
+        "f1": 0.5
+      },
+      "SKULL": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "WRIST": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      }
+    },
+    "conf_matrix": {
+      "CHEST": {
+        "CHEST": 4,
+        "REJECTED_PLACEHOLDER": 1
+      },
+      "HAND": {
+        "HAND": 2
+      },
+      "WRIST": {
+        "WRIST": 1,
+        "KNEE": 1,
+        "HAND": 1
+      },
+      "FOREARM": {
+        "TIBIA": 1
+      },
+      "ELBOW": {
+        "KNEE": 1,
+        "UPPER_EXTREMITY": 1,
+        "ELBOW": 1
+      },
+      "ANKLE": {
+        "ANKLE": 3
+      },
+      "FOOT": {
+        "FOOT": 2
+      },
+      "CERVICAL_SPINE": {
+        "NECK": 1
+      },
+      "PELVIS": {
+        "PELVIS": 1
+      },
+      "HIP": {
+        "PELVIS": 1
+      },
+      "ABDOMEN": {
+        "ABDOMEN": 1
+      },
+      "LUMBAR_SPINE": {
+        "PELVIS": 1
+      },
+      "SKULL": {
+        "SKULL": 1
+      },
+      "KNEE": {
+        "KNEE": 2
+      }
+    },
+    "records": [
+      {
+        "filename": "Artboard-1.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\d2b19d448e5d482db01f8b387eb2919a.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8452,
+        "margin": 0.8316,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "18_chest.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\ac61b6482f12421cbc5de22be8ac589f.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8636,
+        "margin": 0.8511,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "chest_xray.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\157ecfe677a94d6e9833c159f6ed2a8e.png",
+        "gt": "CHEST",
+        "pred": "REJECTED_PLACEHOLDER",
+        "conf": 0.0,
+        "margin": 0.0,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": "Image rejected: this appears to be a blank/placeholder card rather than a radiograph. Upload the actual X-ray."
+      },
+      {
+        "filename": "19_hand.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f5766c844fca47709d5450bce3f68cab.png",
+        "gt": "HAND",
+        "pred": "HAND",
+        "conf": 0.832,
+        "margin": 0.7688,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "male_hand.jpeg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\c22bb83329fb480bb9b7a1f02e01477a.jpg",
+        "gt": "HAND",
+        "pred": "HAND",
+        "conf": 0.7863,
+        "margin": 0.7109,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Normal Hand and Wrist X-ray.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1a651f4f4b1f473ab44ed7261f9334a4.png",
+        "gt": "WRIST",
+        "pred": "WRIST",
+        "conf": 0.5989,
+        "margin": 0.4418,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "20_wrist.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1403b6783a3947e5b7002c9c174887c3.png",
+        "gt": "WRIST",
+        "pred": "KNEE",
+        "conf": 0.7483,
+        "margin": 0.7224,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Left Wrist X-Ray_ PA and Lateral Views.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\17e8bde459e7417f8bdf0a79be22de45.png",
+        "gt": "WRIST",
+        "pred": "HAND",
+        "conf": 0.6791,
+        "margin": 0.588,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "13_forearm.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\049742074cde4db3bc6066bc12f80438.png",
+        "gt": "FOREARM",
+        "pred": "TIBIA",
+        "conf": 0.2202,
+        "margin": 0.1019,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "12_elbow (1).png",
+        "path": "D:\\projects\\MEDISENSE_AI\\12_elbow (1).png",
+        "gt": "ELBOW",
+        "pred": "KNEE",
+        "conf": 0.7779,
+        "margin": 0.7129,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "elbow-without-labels-copy-1.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f4605f42c33b4c48965a68fdc8969638.jpg",
+        "gt": "ELBOW",
+        "pred": "UPPER_EXTREMITY",
+        "conf": 0.3523,
+        "margin": 0.0464,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "15_ankle.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b0a43092ef5645b09bd64fbf754fe571.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.6244,
+        "margin": 0.4776,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Right Ankle X-Ray Views.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\728673426fcf422c82bf5a593ba086e6.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.5213,
+        "margin": 0.3414,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "top-foot-without-labels-copy.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b9857a5d7d0e47d489c8b7327afbabe2.jpg",
+        "gt": "FOOT",
+        "pred": "FOOT",
+        "conf": 0.477,
+        "margin": 0.1257,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "male_foot-(1).jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\fd15ea3de8b54835bc732a1e18348665.jpg",
+        "gt": "FOOT",
+        "pred": "FOOT",
+        "conf": 0.8315,
+        "margin": 0.7944,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "11_cervical_spine.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\ae945ad25b354e1c9b492368c45e3558.png",
+        "gt": "CERVICAL_SPINE",
+        "pred": "NECK",
+        "conf": 0.4881,
+        "margin": 0.3182,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "pelvis-without-labels-copy.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\222b2bca333647ed9d7ed2edaf445cea.jpg",
+        "gt": "PELVIS",
+        "pred": "PELVIS",
+        "conf": 0.3286,
+        "margin": 0.1797,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "hip-joint-with-no-labels.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\90143c1ccf4243cc84c463f50b019cad.jpg",
+        "gt": "HIP",
+        "pred": "PELVIS",
+        "conf": 0.4994,
+        "margin": 0.3191,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "17_abdomen_kub.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\e768a04631844eacbaca2eac8261649f.png",
+        "gt": "ABDOMEN",
+        "pred": "ABDOMEN",
+        "conf": 0.7025,
+        "margin": 0.5537,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "lumbar-spine-without-labels.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0e00db9e44a643588de3838f9f620414.jpg",
+        "gt": "LUMBAR_SPINE",
+        "pred": "PELVIS",
+        "conf": 0.9197,
+        "margin": 0.9107,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "05_elbow.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b33cbd834e634d318ed8427f5fc79158.png",
+        "gt": "ELBOW",
+        "pred": "ELBOW",
+        "conf": 0.8218,
+        "margin": 0.7927,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "09_ankle.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\54f31ae08f364399bd4d462285049246.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.4835,
+        "margin": 0.2054,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0020e11e84c54adbabf3ba38174fb73a.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0020e11e84c54adbabf3ba38174fb73a.png",
+        "gt": "SKULL",
+        "pred": "SKULL",
+        "conf": 0.6965,
+        "margin": 0.5735,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0bb2278bff65442182788cf476c97cd8.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0bb2278bff65442182788cf476c97cd8.png",
+        "gt": "KNEE",
+        "pred": "KNEE",
+        "conf": 0.8714,
+        "margin": 0.8555,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0d280557f1c9460f8cfe2ae7a5abaf68.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0d280557f1c9460f8cfe2ae7a5abaf68.png",
+        "gt": "KNEE",
+        "pred": "KNEE",
+        "conf": 0.7656,
+        "margin": 0.6863,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "274fcfd8d96442c2a9356f9c2874ddb0.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\274fcfd8d96442c2a9356f9c2874ddb0.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8471,
+        "margin": 0.8267,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "4eb207e90e8842a39876eb8456805469.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\4eb207e90e8842a39876eb8456805469.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8773,
+        "margin": 0.86,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      }
+    ]
+  },
+  "dual_ensemble": {
+    "mode": "dual_ensemble",
+    "total": 27,
+    "top1_correct": 19,
+    "top1_acc": 0.7037037037037037,
+    "accepted_total": 13,
+    "accepted_correct": 10,
+    "accepted_acc": 0.7692307692307693,
+    "high_conf_wrong": 3,
+    "macro_prec": 0.6785714285714286,
+    "macro_rec": 0.6761904761904762,
+    "macro_f1": 0.6325396825396824,
+    "per_class": {
+      "ABDOMEN": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "ANKLE": {
+        "support": 3,
+        "correct": 3,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "CERVICAL_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "CHEST": {
+        "support": 5,
+        "correct": 4,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889
+      },
+      "ELBOW": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      },
+      "FOOT": {
+        "support": 2,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "FOREARM": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "HAND": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.6666666666666666,
+        "recall": 1.0,
+        "f1": 0.8
+      },
+      "HIP": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "KNEE": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666
+      },
+      "LUMBAR_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "PELVIS": {
+        "support": 1,
+        "correct": 1,
+        "precision": 0.3333333333333333,
+        "recall": 1.0,
+        "f1": 0.5
+      },
+      "SKULL": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "WRIST": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      }
+    },
+    "conf_matrix": {
+      "CHEST": {
+        "CHEST": 4,
+        "REJECTED_PLACEHOLDER": 1
+      },
+      "HAND": {
+        "HAND": 2
+      },
+      "WRIST": {
+        "WRIST": 1,
+        "KNEE": 1,
+        "HAND": 1
+      },
+      "FOREARM": {
+        "FOREARM": 1
+      },
+      "ELBOW": {
+        "KNEE": 1,
+        "LOWER_EXTREMITY": 1,
+        "ELBOW": 1
+      },
+      "ANKLE": {
+        "ANKLE": 3
+      },
+      "FOOT": {
+        "FOOT": 2
+      },
+      "CERVICAL_SPINE": {
+        "NECK": 1
+      },
+      "PELVIS": {
+        "PELVIS": 1
+      },
+      "HIP": {
+        "PELVIS": 1
+      },
+      "ABDOMEN": {
+        "ABDOMEN": 1
+      },
+      "LUMBAR_SPINE": {
+        "PELVIS": 1
+      },
+      "SKULL": {
+        "SKULL": 1
+      },
+      "KNEE": {
+        "KNEE": 2
+      }
+    },
+    "records": [
+      {
+        "filename": "Artboard-1.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\d2b19d448e5d482db01f8b387eb2919a.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8576,
+        "margin": 0.8452,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "18_chest.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\ac61b6482f12421cbc5de22be8ac589f.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.862,
+        "margin": 0.8518,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "chest_xray.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\157ecfe677a94d6e9833c159f6ed2a8e.png",
+        "gt": "CHEST",
+        "pred": "REJECTED_PLACEHOLDER",
+        "conf": 0.0,
+        "margin": 0.0,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": "Image rejected: this appears to be a blank/placeholder card rather than a radiograph. Upload the actual X-ray."
+      },
+      {
+        "filename": "19_hand.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f5766c844fca47709d5450bce3f68cab.png",
+        "gt": "HAND",
+        "pred": "HAND",
+        "conf": 0.7672,
+        "margin": 0.6542,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "male_hand.jpeg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\c22bb83329fb480bb9b7a1f02e01477a.jpg",
+        "gt": "HAND",
+        "pred": "HAND",
+        "conf": 0.7433,
+        "margin": 0.641,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Normal Hand and Wrist X-ray.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1a651f4f4b1f473ab44ed7261f9334a4.png",
+        "gt": "WRIST",
+        "pred": "WRIST",
+        "conf": 0.5871,
+        "margin": 0.4242,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "20_wrist.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1403b6783a3947e5b7002c9c174887c3.png",
+        "gt": "WRIST",
+        "pred": "KNEE",
+        "conf": 0.7837,
+        "margin": 0.7611,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Left Wrist X-Ray_ PA and Lateral Views.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\17e8bde459e7417f8bdf0a79be22de45.png",
+        "gt": "WRIST",
+        "pred": "HAND",
+        "conf": 0.4949,
+        "margin": 0.2722,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "13_forearm.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\049742074cde4db3bc6066bc12f80438.png",
+        "gt": "FOREARM",
+        "pred": "FOREARM",
+        "conf": 0.2911,
+        "margin": 0.1629,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "12_elbow (1).png",
+        "path": "D:\\projects\\MEDISENSE_AI\\12_elbow (1).png",
+        "gt": "ELBOW",
+        "pred": "KNEE",
+        "conf": 0.6506,
+        "margin": 0.5767,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "elbow-without-labels-copy-1.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f4605f42c33b4c48965a68fdc8969638.jpg",
+        "gt": "ELBOW",
+        "pred": "LOWER_EXTREMITY",
+        "conf": 0.3224,
+        "margin": 0.1051,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "15_ankle.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b0a43092ef5645b09bd64fbf754fe571.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.5894,
+        "margin": 0.4248,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "Right Ankle X-Ray Views.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\728673426fcf422c82bf5a593ba086e6.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.352,
+        "margin": 0.0715,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "top-foot-without-labels-copy.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b9857a5d7d0e47d489c8b7327afbabe2.jpg",
+        "gt": "FOOT",
+        "pred": "FOOT",
+        "conf": 0.5487,
+        "margin": 0.2717,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "male_foot-(1).jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\fd15ea3de8b54835bc732a1e18348665.jpg",
+        "gt": "FOOT",
+        "pred": "FOOT",
+        "conf": 0.8289,
+        "margin": 0.7771,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "11_cervical_spine.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\ae945ad25b354e1c9b492368c45e3558.png",
+        "gt": "CERVICAL_SPINE",
+        "pred": "NECK",
+        "conf": 0.4783,
+        "margin": 0.2324,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "pelvis-without-labels-copy.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\222b2bca333647ed9d7ed2edaf445cea.jpg",
+        "gt": "PELVIS",
+        "pred": "PELVIS",
+        "conf": 0.4279,
+        "margin": 0.2725,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "hip-joint-with-no-labels.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\90143c1ccf4243cc84c463f50b019cad.jpg",
+        "gt": "HIP",
+        "pred": "PELVIS",
+        "conf": 0.3322,
+        "margin": 0.112,
+        "correct": false,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "17_abdomen_kub.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\e768a04631844eacbaca2eac8261649f.png",
+        "gt": "ABDOMEN",
+        "pred": "ABDOMEN",
+        "conf": 0.4513,
+        "margin": 0.1127,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "lumbar-spine-without-labels.jpg",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0e00db9e44a643588de3838f9f620414.jpg",
+        "gt": "LUMBAR_SPINE",
+        "pred": "PELVIS",
+        "conf": 0.8896,
+        "margin": 0.8789,
+        "correct": false,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "05_elbow.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b33cbd834e634d318ed8427f5fc79158.png",
+        "gt": "ELBOW",
+        "pred": "ELBOW",
+        "conf": 0.5353,
+        "margin": 0.3228,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "09_ankle.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\54f31ae08f364399bd4d462285049246.png",
+        "gt": "ANKLE",
+        "pred": "ANKLE",
+        "conf": 0.3965,
+        "margin": 0.0411,
+        "correct": true,
+        "gate_passed": false,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0020e11e84c54adbabf3ba38174fb73a.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0020e11e84c54adbabf3ba38174fb73a.png",
+        "gt": "SKULL",
+        "pred": "SKULL",
+        "conf": 0.6965,
+        "margin": 0.5735,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0bb2278bff65442182788cf476c97cd8.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0bb2278bff65442182788cf476c97cd8.png",
+        "gt": "KNEE",
+        "pred": "KNEE",
+        "conf": 0.8861,
+        "margin": 0.8684,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "0d280557f1c9460f8cfe2ae7a5abaf68.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\0d280557f1c9460f8cfe2ae7a5abaf68.png",
+        "gt": "KNEE",
+        "pred": "KNEE",
+        "conf": 0.8142,
+        "margin": 0.7549,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "274fcfd8d96442c2a9356f9c2874ddb0.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\274fcfd8d96442c2a9356f9c2874ddb0.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8637,
+        "margin": 0.8472,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      },
+      {
+        "filename": "4eb207e90e8842a39876eb8456805469.png",
+        "path": "D:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\4eb207e90e8842a39876eb8456805469.png",
+        "gt": "CHEST",
+        "pred": "CHEST",
+        "conf": 0.8641,
+        "margin": 0.8511,
+        "correct": true,
+        "gate_passed": true,
+        "rejection_reason": null
+      }
+    ]
+  }
+}

@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import ErrorMessage from '../components/ErrorMessage';
 import FilePreviewModal from '../components/FilePreviewModal';
-import { uploadXray, deleteXray, confirmXrayAnatomy } from '../services/xrayService';
+import CardSearchableAnatomySelector from '../components/CardSearchableAnatomySelector';
+import { uploadXray, deleteXray, confirmXrayAnatomy, getXrayResults } from '../services/xrayService';
 import { uploadReport, deleteReport } from '../services/reportService';
 import { useAssessment } from '../hooks/useAssessment';
 import './NewAssessment.css';
@@ -252,25 +253,30 @@ function FloatingXrayObjects() {
   );
 }
 
-/* Goal 1: precise region choices available after automatic classification.
-   Broad classifier classes are intentionally excluded because they cannot safely
-   select a narrower region-specific model. */
+/* Goal 1: All 33 required anatomical classes available for user verification/confirmation.
+   When an unsupported or broad region is confirmed, the system safely records the verified
+   anatomy and discloses that automated abnormality interpretation is unsupported. */
 const XRAY_REGION_OPTIONS = [
   { value: 'ABDOMEN', label: 'Abdomen' },
   { value: 'ANKLE', label: 'Ankle' },
+  { value: 'ARM', label: 'Arm (Upper limb)' },
   { value: 'CERVICAL_SPINE', label: 'Cervical spine' },
   { value: 'CHEST', label: 'Chest' },
   { value: 'DORSAL_SPINE', label: 'Thoracic / dorsal spine' },
   { value: 'ELBOW', label: 'Elbow' },
+  { value: 'EXTREMITY', label: 'Extremity (Limb)' },
   { value: 'FEMUR', label: 'Femur' },
   { value: 'FINGER', label: 'Finger' },
   { value: 'FOOT', label: 'Foot' },
   { value: 'FOREARM', label: 'Forearm' },
   { value: 'HAND', label: 'Hand' },
+  { value: 'HEAD', label: 'Head' },
   { value: 'HEEL', label: 'Heel' },
   { value: 'HIP', label: 'Hip' },
   { value: 'KNEE', label: 'Knee' },
   { value: 'KUB', label: 'KUB / abdomen' },
+  { value: 'LEG', label: 'Leg (Lower limb)' },
+  { value: 'LOWER_EXTREMITY', label: 'Lower extremity' },
   { value: 'LUMBAR_SPINE', label: 'Lumbar spine' },
   { value: 'NASOPHARYNX', label: 'Nasopharynx' },
   { value: 'NECK', label: 'Neck' },
@@ -279,12 +285,18 @@ const XRAY_REGION_OPTIONS = [
   { value: 'SHOULDER', label: 'Shoulder' },
   { value: 'SI_JOINT', label: 'Sacroiliac joint' },
   { value: 'SKULL', label: 'Skull' },
+  { value: 'SPINE', label: 'Spine (Vertebral column)' },
   { value: 'TEMPORAL_BONE', label: 'Temporal bone' },
   { value: 'TIBIA', label: 'Tibia' },
+  { value: 'UPPER_EXTREMITY', label: 'Upper extremity' },
   { value: 'WRIST', label: 'Wrist' },
 ];
 
-function getSpecificRegionOption(value) {
+const BROAD_REGION_SET = new Set([
+  'EXTREMITY', 'UPPER_EXTREMITY', 'LOWER_EXTREMITY', 'ARM', 'LEG', 'HEAD', 'SPINE'
+]);
+
+function getSpecificRegionOption(value, allowBroad = true) {
   const token = String(value || '')
     .trim()
     .toUpperCase()
@@ -294,8 +306,14 @@ function getSpecificRegionOption(value) {
     'SINUSES': 'PNS',
     'PARANASAL_SINUSES': 'PNS',
     'CALCANEUS': 'HEEL',
+    'THORACIC_SPINE': 'DORSAL_SPINE',
+    'LOWER_LEG': 'TIBIA',
+    'HUMERUS': 'ARM',
   };
   const normalized = aliases[token] || token;
+  if (!allowBroad && BROAD_REGION_SET.has(normalized)) {
+    return '';
+  }
   return XRAY_REGION_OPTIONS.some((option) => option.value === normalized) ? normalized : '';
 }
 
@@ -307,31 +325,42 @@ function getImageStatusPresentation(item) {
     case 'READY':
       return { className: 'status-ready', label: 'Waiting to analyze' };
     case 'UPLOADING':
-      return { className: 'status-uploading', label: 'Uploading and analyzing image...' };
+      return { className: 'status-uploading', label: 'Analyzing image anatomy...' };
     case 'DELETING':
       return { className: 'status-uploading', label: 'Removing saved image...' };
     case 'COMPLETED':
-      return { className: 'status-completed', label: 'Image analysis completed' };
+      return { className: 'status-completed', label: 'Region confirmed · Abnormality analysis complete' };
     case 'ANATOMY_VERIFIED':
       return {
         className: 'status-completed',
         label: item.analysisStatus === 'completed'
-          ? 'Anatomy verified · analysis completed'
-          : 'Anatomy verified · interpretation unavailable',
+          ? 'Region confirmed · Abnormality analysis complete'
+          : 'Region confirmed · Abnormality model unsupported',
       };
     case 'BROAD_REGION_ACCEPTED':
       return {
-        className: 'status-completed',
-        label: 'Verified by automatic classifier · broad region only',
+        className: 'status-warning',
+        label: 'Broad region identified · Specific site selection required',
       };
-    case 'REGION_CONFIRMATION_REQUIRED':
-      return { className: 'status-warning', label: 'Image saved — confirm the body region' };
+    case 'REGION_CONFIRMATION_REQUIRED': {
+      const gatePassed = Boolean(
+        item.classifierGatePassed ||
+        item.anatomyClassifierAccepted ||
+        (typeof item.bodyPartConfidence === 'number' && item.bodyPartConfidence >= 0.60)
+      );
+      return {
+        className: 'status-warning',
+        label: gatePassed
+          ? 'AI candidate predicted (gate passed) · Awaiting user confirmation'
+          : 'Low-confidence prediction · Awaiting user selection',
+      };
+    }
     case 'ANALYSIS_UNAVAILABLE':
       return {
         className: item.anatomyUserConfirmed ? 'status-warning' : 'status-failed',
         label: item.anatomyUserConfirmed
-          ? 'Region confirmed — interpretation unavailable'
-          : (item.error || 'Image uploaded; automated analysis unavailable'),
+          ? 'Region confirmed · No compatible abnormality model'
+          : (item.error || 'Image uploaded · Automated interpretation unavailable'),
       };
     case 'FAILED':
     default:
@@ -453,6 +482,90 @@ export default function XrayUpload() {
       previewUrlRef.current = null;
     }
   }, []);
+
+  // Reload persisted X-ray results for this assessment on mount or navigation
+  useEffect(() => {
+    let isMounted = true;
+    if (!assessmentId) return;
+
+    async function loadSavedXrayResults() {
+      try {
+        const response = await getXrayResults(assessmentId);
+        const results = Array.isArray(response?.results) ? response.results : [];
+        if (!isMounted || results.length === 0) return;
+
+        setXrayImages((prev) => {
+          if (prev.length > 0) return prev;
+          return results.map((res) => {
+            const hasUsableModelOutput = Boolean(
+              res.prediction || (Array.isArray(res.findings) && res.findings.length > 0)
+            );
+            const isCompleted = res.status === 'completed' && hasUsableModelOutput;
+            const isBroad = Boolean(res.is_broad_region);
+            const broadAccepted = isBroad && Boolean(res.broad_region_classifier_accepted);
+            const anatomyVerified = Boolean(
+              res.anatomy_user_confirmed || res.anatomy_verification_status === 'confirmed'
+            );
+
+            const status = isCompleted
+              ? 'COMPLETED'
+              : anatomyVerified
+                ? 'ANATOMY_VERIFIED'
+                : broadAccepted
+                  ? 'BROAD_REGION_ACCEPTED'
+                  : res.anatomy_confirmation_required
+                    ? 'REGION_CONFIRMATION_REQUIRED'
+                    : 'ANALYSIS_UNAVAILABLE';
+
+            const rawRegion = res.detected_region || res.region || res.candidate_region || null;
+
+            return {
+              id: `saved-${res.xray_result_id}`,
+              name: res.file_name || 'Saved X-ray Image',
+              size: 0,
+              type: 'image/jpeg',
+              status,
+              uploadStatus: 'uploaded',
+              analysisStatus: res.status || 'unknown',
+              analysisMessage: res.message || '',
+              detectedRegion: res.detected_region ? String(res.detected_region).toUpperCase() : null,
+              candidateRegion: res.candidate_region ? String(res.candidate_region).toUpperCase() : null,
+              verificationRegion: getSpecificRegionOption(rawRegion, !isBroad),
+              topCandidates: Array.isArray(res.anatomy_metadata?.top_candidates) ? res.anatomy_metadata.top_candidates : [],
+              bodyPartConfidence: typeof res.body_part_confidence === 'number' ? res.body_part_confidence : null,
+              anatomyVerificationStatus: res.anatomy_verification_status || (res.anatomy_user_confirmed ? 'confirmed' : 'confirmation_required'),
+              anatomyUserConfirmed: Boolean(res.anatomy_user_confirmed),
+              anatomyClassifierAccepted: Boolean(res.anatomy_classifier_accepted || res.classifier_gate_passed),
+              classifierGatePassed: Boolean(res.classifier_gate_passed || res.anatomy_classifier_accepted),
+              regionalModelConfigured: Boolean(res.regional_model_configured),
+              regionalModelAvailable: Boolean(res.regional_model_available),
+              regionalModelName: res.regional_model_name || null,
+              regionalModelStatus: res.regional_model_status || null,
+              primaryPrediction: res.primary_prediction || res.image_type_detection?.primary_classifier_result || res.anatomy_metadata?.classifier_output?.primary_classifier_result || null,
+              specialistPrediction: res.specialist_prediction || res.image_type_detection?.upper_extremity_refinement || res.anatomy_metadata?.classifier_output?.upper_extremity_refinement || null,
+              twoModelComparison: res.two_model_comparison || res.anatomy_metadata?.two_model_comparison || null,
+              finalCandidate: res.final_candidate || res.anatomy_metadata?.final_candidate || res.detected_region || res.candidate_region || null,
+              selectionSource: res.selection_source || res.anatomy_metadata?.selection_source || 'PRIMARY MODEL',
+              confidenceSource: res.confidence_source || res.anatomy_metadata?.confidence_source || 'primary_model',
+              verifyingAnatomy: false,
+              prediction: res.prediction || null,
+              findings: Array.isArray(res.findings) ? res.findings : [],
+              modelVersion: res.model_version || null,
+              resultId: res.xray_result_id,
+              error: null,
+            };
+          });
+        });
+      } catch {
+        // Silently ignore if assessment has no X-rays yet
+      }
+    }
+
+    loadSavedXrayResults();
+    return () => {
+      isMounted = false;
+    };
+  }, [assessmentId]);
 
   const isProcessingFiles =
     deletingImageIds.size > 0 ||
@@ -640,20 +753,25 @@ export default function XrayUpload() {
       const classifierGateAccepted = response?.anatomy_classifier_accepted === true ||
         anatomyVerification?.anatomy_classifier_accepted === true;
       const isBroadRegion = broadRegions.has(regionKey) || response?.is_broad_region === true || anatomyVerification?.is_broad_region === true;
-      const broadRegionAccepted = isBroadRegion &&
-        classifierGateAccepted &&
-        reasonCode === 'broad_anatomy_label' &&
-        bodyPartConfidence !== null && bodyPartConfidence >= confidenceThreshold &&
-        detectionStatus === 'broad_region_accepted';
-      const anatomyVerified = (statusAllowsVerification || classifierGateAccepted) &&
+      const broadRegionAccepted = isBroadRegion && (
+        response?.broad_region_classifier_accepted === true ||
+        anatomyVerification?.broad_region_classifier_accepted === true ||
+        (
+          classifierGateAccepted &&
+          (reasonCode === 'broad_anatomy_label' || reasonCode === 'anatomy_specificity_unverified') &&
+          bodyPartConfidence !== null && bodyPartConfidence >= confidenceThreshold
+        )
+      );
+      const isUserConfirmed = Boolean(
+        response?.anatomy_user_confirmed ||
+        anatomyVerification?.anatomy_user_confirmed ||
+        response?.region_source === 'user_confirmed'
+      );
+      const anatomyVerified = isUserConfirmed &&
         !broadRegions.has(regionKey) &&
-        reasonCode !== 'broad_anatomy_label' &&
-        response?.anatomy_verified !== false &&
-        anatomyVerification?.anatomy_verified !== false &&
-        response?.is_broad_region !== true &&
-        anatomyVerification?.is_broad_region !== true;
-      const detectedRegion = anatomyVerified ? rawRegion : null;
-      const candidateRegion = anatomyVerified ? null : (
+        reasonCode !== 'broad_anatomy_label';
+      const detectedRegion = isUserConfirmed ? (rawRegion || response?.detected_region) : null;
+      const candidateRegion = isUserConfirmed ? null : (
         detection?.candidate_body_part ||
         response?.candidate_region ||
         rawRegion ||
@@ -666,11 +784,12 @@ export default function XrayUpload() {
       const isSaved = Boolean(response?.xray_result_id);
       const requiresRegionConfirmation = Boolean(
         isSaved &&
-        !anatomyVerified &&
+        !isUserConfirmed &&
         !hasUsableModelOutput &&
         (
           response?.anatomy_confirmation_required === true ||
-          response?.anatomy_confirmation_required == null
+          response?.anatomy_confirmation_required == null ||
+          response?.specific_region_confirmation_required === true
         )
       );
       const message = response?.message || response?.diagnostic_message || detection?.message || anatomyVerification?.message || '';
@@ -681,12 +800,12 @@ export default function XrayUpload() {
       updateImage(item.id, {
         status: isCompleted
           ? 'COMPLETED'
-          : anatomyVerified
-            ? 'ANATOMY_VERIFIED'
-            : broadRegionAccepted
-              ? 'BROAD_REGION_ACCEPTED'
-              : requiresRegionConfirmation
-                ? 'REGION_CONFIRMATION_REQUIRED'
+          : broadRegionAccepted
+            ? 'BROAD_REGION_ACCEPTED'
+            : requiresRegionConfirmation
+              ? 'REGION_CONFIRMATION_REQUIRED'
+              : anatomyVerified
+                ? 'ANATOMY_VERIFIED'
                 : 'ANALYSIS_UNAVAILABLE',
         uploadStatus: isSaved ? 'uploaded' : 'failed',
         analysisStatus: responseStatus || 'unknown',
@@ -697,7 +816,7 @@ export default function XrayUpload() {
         error: isCompleted || anatomyVerified || broadRegionAccepted || requiresRegionConfirmation ? null : message || 'The image was received, but automated interpretation is unavailable for this image.',
         detectedRegion: detectedRegion ? String(detectedRegion).toUpperCase() : null,
         candidateRegion: candidateRegion ? String(candidateRegion).toUpperCase() : null,
-        verificationRegion: getSpecificRegionOption(candidateRegion || rawRegion),
+        verificationRegion: getSpecificRegionOption(candidateRegion || rawRegion, !isBroadRegion),
         topCandidates,
         hasCleanupCandidates: cleanupCandidates.length > 0,
         hasUpperExtremityCandidates: upperExtremityCandidates.length > 0,
@@ -706,6 +825,18 @@ export default function XrayUpload() {
         bodyPartConfidence,
         anatomyVerificationStatus: detectionStatus || 'unverified',
         anatomyUserConfirmed: false,
+        classifierGatePassed: Boolean(response?.classifier_gate_passed ?? classifierGateAccepted),
+        anatomyClassifierAccepted: Boolean(response?.anatomy_classifier_accepted ?? classifierGateAccepted),
+        regionalModelConfigured: Boolean(response?.regional_model_configured),
+        regionalModelAvailable: Boolean(response?.regional_model_available),
+        regionalModelName: response?.regional_model_name || null,
+        regionalModelStatus: response?.regional_model_status || null,
+        primaryPrediction: response?.primary_prediction || detection?.primary_classifier_result || response?.anatomy_metadata?.classifier_output?.primary_classifier_result || null,
+        specialistPrediction: response?.specialist_prediction || upperExtremityRefinement || response?.anatomy_metadata?.classifier_output?.upper_extremity_refinement || null,
+        twoModelComparison: response?.two_model_comparison || response?.anatomy_metadata?.two_model_comparison || null,
+        finalCandidate: response?.final_candidate || response?.anatomy_metadata?.final_candidate || response?.detected_region || response?.candidate_region || null,
+        selectionSource: response?.selection_source || response?.anatomy_metadata?.selection_source || 'PRIMARY MODEL',
+        confidenceSource: response?.confidence_source || response?.anatomy_metadata?.confidence_source || 'primary_model',
         verifyingAnatomy: false,
         prediction: prediction || null,
         findings,
@@ -727,12 +858,13 @@ export default function XrayUpload() {
     }
   };
 
-  const handleConfirmAnatomy = async (item) => {
+  const handleConfirmAnatomy = async (item, directRegion = null) => {
     if (!assessmentId || !item.resultId) {
       setError('This image has no saved result ID. Remove it and upload the image again before confirming its region.');
       return;
     }
-    const selectedRegion = getSpecificRegionOption(item.verificationRegion);
+    const targetRegion = directRegion || item.verificationRegion || item.finalCandidate || item.detectedRegion || item.candidateRegion;
+    const selectedRegion = getSpecificRegionOption(targetRegion);
     if (!selectedRegion) {
       setError('Choose a specific body region before confirming the X-ray.');
       return;
@@ -771,9 +903,23 @@ export default function XrayUpload() {
         bodyPartConfidence,
         anatomyVerificationStatus: 'confirmed',
         anatomyUserConfirmed: true,
+        decisionState: response?.decision_state || (response?.anatomy_user_confirmed ? 'USER_CONFIRMED' : null),
+        primaryPrediction: response?.primary_prediction || item.primaryPrediction,
+        specialistPrediction: response?.specialist_prediction || item.specialistPrediction,
+        twoModelComparison: response?.two_model_comparison || item.twoModelComparison,
+        finalCandidate: response?.final_candidate || selectedRegion,
+        selectionSource: response?.selection_source || item.selectionSource,
+        confidenceSource: response?.confidence_source || item.confidenceSource,
+        classifierGatePassed: Boolean(response?.classifier_gate_passed ?? response?.anatomy_classifier_accepted),
+        anatomyClassifierAccepted: Boolean(response?.anatomy_classifier_accepted),
+        regionalModelConfigured: Boolean(response?.regional_model_configured),
+        regionalModelAvailable: Boolean(response?.regional_model_available),
+        regionalModelName: response?.regional_model_name || null,
+        regionalModelStatus: response?.regional_model_status || null,
         broadRegionAccepted: false,
         isBroadRegion: false,
         verifyingAnatomy: false,
+        isEditingRegion: false,
         prediction: prediction || null,
         findings,
         modelVersion: response?.model_version || null,
@@ -1396,138 +1542,382 @@ export default function XrayUpload() {
                     </div>
                   ) : null}
 
-                  {(img.detectedRegion || img.candidateRegion || img.prediction || img.findings?.length > 0 || (img.uploadStatus === 'uploaded' && img.resultId)) ? (
-                    <div style={{ margin: '0.75rem 0 0 2.8rem', padding: '0.75rem', borderRadius: '10px', border: '1px solid #dbeafe', background: '#f8fbff' }}>
-                      <div style={{ fontWeight: 700, color: '#075985', marginBottom: '0.4rem' }}>X-ray verification</div>
-                      <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
-                        <strong>Status:</strong>{' '}
-                        <span style={{ fontWeight: 700, color: (img.status === 'BROAD_REGION_ACCEPTED' || img.anatomyVerificationStatus === 'completed' || img.anatomyVerificationStatus === 'confirmed') ? '#166534' : '#92400e' }}>
-                          {img.status === 'BROAD_REGION_ACCEPTED'
-                            ? 'Verified by automatic classifier · broad region only'
-                            : (img.anatomyVerificationStatus === 'completed' || img.anatomyVerificationStatus === 'confirmed')
-                              ? (img.anatomyUserConfirmed ? 'Verified by user region selection' : 'Verified by automatic classifier')
-                              : 'Unverified'}
-                        </span>
-                      </p>
-                      {(img.detectedRegion || img.candidateRegion) ? (
-                        <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
-                          <strong>{img.status === 'BROAD_REGION_ACCEPTED' ? 'Accepted broad region:' : (img.anatomyVerificationStatus === 'completed' || img.anatomyVerificationStatus === 'confirmed') ? 'Detected region:' : 'Predicted region:'}</strong>{' '}
-                          {(img.detectedRegion || img.candidateRegion).replace(/_/g, ' ')}
-                        </p>
-                      ) : null}
-                      {typeof img.bodyPartConfidence === 'number' ? (
-                        <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}>
-                          <strong>Classifier score:</strong> {(img.bodyPartConfidence * 100).toFixed(1)}%
-                        </p>
-                      ) : null}
-                      {img.status === 'BROAD_REGION_ACCEPTED' ? (
-                        <div style={{ margin: '0.45rem 0 0.55rem 0', padding: '0.55rem 0.65rem', borderRadius: '8px', background: '#ffffff', border: '1px solid #dbeafe' }}>
-                          <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#334155', marginBottom: '0.25rem' }}>
-                            Other classifier candidates (not confirmed{img.hasCleanupCandidates ? '; includes cleaned-overlay pass' : ''}{img.hasUpperExtremityCandidates ? '; includes upper-limb specialist pass' : ''}):
+                  {(img.detectedRegion || img.candidateRegion || img.prediction || img.findings?.length > 0 || (img.uploadStatus === 'uploaded' && img.resultId)) ? (() => {
+                    const candidate = String(img.finalCandidate || img.detectedRegion || img.candidateRegion || img.primaryPrediction?.candidate_body_part || 'UNKNOWN').toUpperCase();
+                    const isConfirmed = Boolean(img.anatomyUserConfirmed);
+                    const confirmedRegion = isConfirmed ? String(img.verificationRegion || img.detectedRegion || candidate).toUpperCase() : null;
+
+                    const decisionState = img.decisionState || (isConfirmed ? 'USER_CONFIRMED' : (
+                      (img.classifierGatePassed && !img.isBroadRegion && (typeof img.bodyPartConfidence === 'number' && img.bodyPartConfidence >= 0.60))
+                        ? 'HIGH_CONFIDENCE_CANDIDATE'
+                        : 'NEEDS_CONFIRMATION'
+                    ));
+
+                    const isLowConfidence = !isConfirmed && (
+                      decisionState === 'NEEDS_CONFIRMATION' ||
+                      decisionState === 'UNABLE_TO_CLASSIFY' ||
+                      (typeof img.bodyPartConfidence === 'number' && img.bodyPartConfidence < 0.60)
+                    );
+
+                    let displayScore = null;
+                    let scoreSource = 'Primary Model';
+                    if (img.confidenceSource === 'specialist_refinement' && decisionState === 'HIGH_CONFIDENCE_CANDIDATE' && typeof img.specialistPrediction?.confidence === 'number') {
+                      displayScore = (img.specialistPrediction.confidence * 100).toFixed(1);
+                      scoreSource = 'Specialist Refinement';
+                    } else if (typeof img.primaryPrediction?.confidence === 'number') {
+                      displayScore = (img.primaryPrediction.confidence * 100).toFixed(1);
+                      scoreSource = 'Primary 33-Class';
+                    } else if (typeof img.bodyPartConfidence === 'number') {
+                      displayScore = (img.bodyPartConfidence * 100).toFixed(1);
+                      scoreSource = 'Primary 33-Class';
+                    }
+
+                    return (
+                      <div style={{ margin: '0.75rem 0 0 2.8rem', padding: '0.9rem', borderRadius: '12px', border: '1px solid #cbd5e1', background: '#f8fafc', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
+                        {/* NORMAL CLINICAL VIEW */}
+                        {isConfirmed ? (
+                          <div style={{ padding: '0.85rem', background: '#ffffff', borderRadius: '10px', border: '1px solid #bbf7d0', marginBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                              <div style={{ fontSize: '0.95rem', color: '#0f172a' }}>
+                                <strong>Confirmed region:</strong>{' '}
+                                <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#15803d', letterSpacing: '0.02em' }}>
+                                  {confirmedRegion.replace(/_/g, ' ')}
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '0.2rem 0.55rem', borderRadius: '6px', background: '#dcfce7', color: '#15803d', border: '1px solid #86efac' }}>
+                                Status: {decisionState === 'USER_CORRECTED' ? 'User corrected' : 'User confirmed'}
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '0.84rem', color: '#334155', margin: '0.35rem 0' }}>
+                              <strong>Compatible regional model:</strong>{' '}
+                              {(img.regionalModelAvailable || img.regionalModelConfigured) ? (
+                                <span style={{ color: '#0369a1', fontWeight: 600 }}>Available ({img.regionalModelName || 'Configured'})</span>
+                              ) : (
+                                <span style={{ color: '#64748b' }}>Anatomical region confirmed. No compatible regional analysis model is currently available.</span>
+                              )}
+                            </div>
+
+                            {img.prediction ? (
+                              <div style={{ marginTop: '0.45rem', padding: '0.45rem 0.65rem', background: '#f0fdf4', borderRadius: '6px', border: '1px solid #bbf7d0', fontSize: '0.84rem', color: '#166534' }}>
+                                <strong>Regional Abnormality Result:</strong> {img.prediction}
+                              </div>
+                            ) : null}
+
+                            {Array.isArray(img.findings) && img.findings.length > 0 ? (
+                              <div style={{ marginTop: '0.4rem' }}>
+                                <strong style={{ fontSize: '0.82rem', color: '#0f172a' }}>Model Findings:</strong>
+                                <ul style={{ margin: '0.2rem 0 0 1.1rem', padding: 0, fontSize: '0.8rem', color: '#334155' }}>
+                                  {img.findings.slice(0, 8).map((finding, index) => (
+                                    <li key={`${img.id}-finding-${index}`}>{prettyFinding(finding, index)}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            ) : null}
+
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.6rem', flexWrap: 'wrap' }}>
+                              {(img.regionalModelAvailable || img.regionalModelConfigured) && !img.prediction && (!img.findings || img.findings.length === 0) ? (
+                                <button
+                                  type="button"
+                                  className="btn-card-view"
+                                  style={{ padding: '0.35rem 0.85rem', fontSize: '0.82rem', fontWeight: 700, background: '#0284c7', color: '#fff', border: 'none', borderRadius: '6px' }}
+                                  onClick={() => handleConfirmAnatomy(img, confirmedRegion)}
+                                  disabled={img.verifyingAnatomy || submitting}
+                                >
+                                  {img.verifyingAnatomy ? 'Running Regional Model...' : 'Run Abnormality Analysis'}
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem', background: 'transparent', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer' }}
+                                onClick={() => updateImage(img.id, { isEditingRegion: !img.isEditingRegion })}
+                              >
+                                {img.isEditingRegion ? 'Close Region Selector' : 'Change Region'}
+                              </button>
+                            </div>
+
+                            {img.isEditingRegion ? (
+                              <div style={{ marginTop: '0.6rem', padding: '0.6rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                                <label htmlFor={`xray-search-input-${img.id}`} style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, marginBottom: '0.3rem', color: '#0f172a' }}>
+                                  Select a new anatomical region (33 body regions):
+                                </label>
+                                <CardSearchableAnatomySelector
+                                  imageId={img.id}
+                                  value={img.verificationRegion || ''}
+                                  onChange={(canonicalVal) => updateImage(img.id, { verificationRegion: canonicalVal })}
+                                  disabled={img.verifyingAnatomy || submitting}
+                                  aiPredictedRegion={candidate}
+                                  confirmedRegion={confirmedRegion}
+                                  isConfirmed={true}
+                                />
+                                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}>
+                                  <button
+                                    type="button"
+                                    className="btn-card-view"
+                                    style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem', fontWeight: 700 }}
+                                    onClick={() => handleConfirmAnatomy(img, img.verificationRegion)}
+                                    disabled={!img.verificationRegion || img.verifyingAnatomy || submitting}
+                                  >
+                                    {img.verifyingAnatomy ? 'Updating...' : 'Confirm New Region'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem', background: 'transparent', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer' }}
+                                    onClick={() => updateImage(img.id, { isEditingRegion: false })}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
-                          {img.topCandidates?.filter((candidate) => candidate.label !== String(img.candidateRegion || '').trim().toUpperCase()).length > 0 ? (
-                            <ul style={{ margin: '0.2rem 0 0.25rem 1.15rem', padding: 0, fontSize: '0.82rem', color: '#334155' }}>
-                              {img.topCandidates
-                                .filter((candidate) => candidate.label !== String(img.candidateRegion || '').trim().toUpperCase())
-                                .map((candidate, index) => (
-                                  <li key={`${candidate.label}-${candidate.source || 'original'}-${index}`}>
-                                    {candidate.label.replace(/_/g, ' ')}
-                                    {typeof candidate.score === 'number' ? ` (${(candidate.score * 100).toFixed(1)}%)` : ''}
-                                    {candidate.source === 'annotation_cleaned_copy' ? ' — cleaned-overlay pass' : ''}
-                                    {candidate.source === 'upper_extremity_specialist' ? ' — upper-limb specialist pass' : ''}
-                                  </li>
-                                ))}
-                            </ul>
-                          ) : (
-                            <p style={{ margin: '0.2rem 0', fontSize: '0.8rem', color: '#64748b' }}>
-                              The response did not provide another specific anatomy candidate. The classifier has not identified Wrist, Hand, or Elbow specifically.
-                            </p>
-                          )}
-                          {img.upperExtremityRefinementStatus === 'unavailable' ? (
-                            <p style={{ margin: '0.3rem 0 0 0', fontSize: '0.78rem', color: '#92400e' }}>
-                              A dedicated 7-class upper-limb anatomy model is not installed, so the 33-class model cannot refine this broad result to Wrist, Hand, Elbow, Forearm, Finger, Humerus, or Shoulder automatically. The image is not being relabelled by filename.
-                            </p>
-                          ) : img.upperExtremityRefinementStatus === 'unverified' ? (
-                            <p style={{ margin: '0.3rem 0 0 0', fontSize: '0.78rem', color: '#92400e' }}>
-                              The dedicated upper-limb model did not pass its provisional confidence/margin checks. Select the correct specific region below; the candidate is not automatically accepted.
-                            </p>
-                          ) : null}
-                          <p style={{ margin: '0.3rem 0 0 0', fontSize: '0.76rem', color: '#64748b' }}>
-                            These are model-ranked alternatives, not verified body regions. Select the actual specific region below if the correct label is not identified automatically.
-                          </p>
-                        </div>
-                      ) : img.status === 'BROAD_REGION_ACCEPTED' && img.upperExtremityRefinementStatus === 'unavailable' ? (
-                        <div style={{ margin: '0.45rem 0 0.55rem 0', padding: '0.55rem 0.65rem', borderRadius: '8px', background: '#fff7ed', border: '1px solid #fed7aa', fontSize: '0.82rem', color: '#9a3412' }}>
-                          Dedicated upper-extremity classifier not installed. The broad result cannot be refined to a Wrist-specific prediction until a trained seven-class model checkpoint is configured.
-                        </div>
-                      ) : null}
-                      <p style={{ margin: '0.25rem 0', fontSize: '0.78rem', color: '#64748b' }}>
-                        {img.status === 'BROAD_REGION_ACCEPTED'
-                          ? 'The classifier passed its score and ambiguity rules for a broad region only. It did not identify a specific site, and no region-specific abnormality model was run.'
-                          : 'Automatic verification means the specific-region classifier passed its current score and ambiguity rules. It is not independent clinical confirmation or a diagnosis.'}
-                      </p>
-                      {img.status === 'ANATOMY_VERIFIED' ? (
-                        <p style={{ margin: '0.25rem 0', fontSize: '0.82rem', color: '#92400e' }}>
-                          The anatomy stage passed. The separate abnormality-interpretation model did not return a usable result for this image.
-                        </p>
-                      ) : null}
-                      {img.anatomyUserConfirmed ? (
-                        <p style={{ margin: '0.25rem 0', fontSize: '0.82rem', color: '#475569' }}>
-                          You confirmed the routing region. This does not verify a fracture, abnormality, or diagnosis.
-                        </p>
-                      ) : null}
-                      {img.uploadStatus === 'uploaded' && img.resultId ? (
-                        <div style={{ marginTop: '0.7rem', paddingTop: '0.65rem', borderTop: '1px solid #dbeafe' }}>
-                          <label htmlFor={`xray-region-${img.id}`} style={{ display: 'block', fontSize: '0.82rem', fontWeight: 700, marginBottom: '0.35rem' }}>
-                            {img.anatomyUserConfirmed ? 'Change the confirmed body region if needed' : (img.anatomyVerificationStatus === 'completed' ? 'Correct the detected region if needed (optional)' : 'Confirm or correct the body region to continue')}
-                          </label>
-                          <select
-                            id={`xray-region-${img.id}`}
-                            value={img.verificationRegion || ''}
-                            onChange={(event) => updateImage(img.id, { verificationRegion: event.target.value })}
-                            disabled={img.verifyingAnatomy || submitting || img.status === 'DELETING' || deletingImageIds.has(img.id)}
-                            style={{ width: '100%', maxWidth: '24rem', padding: '0.55rem 0.65rem', border: '1px solid #cbd5e1', borderRadius: '8px', background: '#fff', color: '#0f172a' }}
-                          >
-                            <option value="">Choose the correct specific body region</option>
-                            {XRAY_REGION_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
-                          </select>
-                          <p style={{ margin: '0.4rem 0', fontSize: '0.78rem', color: '#64748b' }}>
-                            Use this only if the displayed region is incorrect or the image remains unverified. Automatic verification is a classifier gate, not clinical confirmation.
-                          </p>
-                          <button
-                            type="button"
-                            className="btn-card-view"
-                            onClick={() => handleConfirmAnatomy(img)}
-                            disabled={!img.verificationRegion || img.verifyingAnatomy || submitting || img.status === 'DELETING' || deletingImageIds.has(img.id)}
-                            style={{ marginTop: '0.15rem' }}
-                          >
-                            {img.verifyingAnatomy
-                              ? 'Saving region and checking model...'
-                              : img.anatomyUserConfirmed
-                                ? 'Update region & retry model'
-                                : (img.anatomyVerificationStatus === 'completed' ? 'Correct region & retry model' : 'Confirm region & check model')}
-                          </button>
-                        </div>
-                      ) : null}
-                      {img.prediction ? (
-                        <p style={{ margin: '0.2rem 0', fontSize: '0.85rem' }}><strong>Model output:</strong> {img.prediction}</p>
-                      ) : null}
-                      {Array.isArray(img.findings) && img.findings.length > 0 ? (
-                        <div style={{ marginTop: '0.4rem' }}>
-                          <strong style={{ fontSize: '0.85rem' }}>Available model findings:</strong>
-                          <ul style={{ margin: '0.3rem 0 0 1.1rem', padding: 0, fontSize: '0.84rem' }}>
-                            {img.findings.slice(0, 8).map((finding, index) => (
-                              <li key={`${img.id}-finding-${index}`}>{prettyFinding(finding, index)}</li>
-                            ))}
-                          </ul>
-                          {img.findings.length > 8 ? <p style={{ margin: '0.25rem 0', fontSize: '0.8rem', color: '#64748b' }}>Showing 8 of {img.findings.length} findings.</p> : null}
-                        </div>
-                      ) : null}
-                      {img.modelVersion ? <p style={{ margin: '0.3rem 0 0', fontSize: '0.78rem', color: '#64748b' }}>Model version: {img.modelVersion}</p> : null}
-                    </div>
-                  ) : null}
+                        ) : isLowConfidence ? (
+                          <div style={{ padding: '0.85rem', background: '#ffffff', borderRadius: '10px', border: '1px solid #fde68a', marginBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                              <div style={{ fontSize: '0.92rem', color: '#0f172a' }}>
+                                <strong>Predicted region:</strong>{' '}
+                                <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#92400e', letterSpacing: '0.02em' }}>
+                                  {candidate.replace(/_/g, ' ')}
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '0.2rem 0.55rem', borderRadius: '6px', background: '#fef3c7', color: '#b45309', border: '1px solid #fde68a' }}>
+                                Status: Needs confirmation
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '0.4rem' }}>
+                              <strong>AI confidence:</strong>{' '}
+                              <span style={{ fontWeight: 700, color: '#d97706' }}>
+                                {displayScore ? `${displayScore}%` : 'Low / Uncertain'}
+                              </span>{' '}
+                              <span style={{ fontSize: '0.74rem', color: '#64748b' }}>({scoreSource})</span>
+                            </div>
+
+                            <div style={{ padding: '0.45rem 0.65rem', background: '#fffbeb', borderRadius: '6px', border: '1px solid #fef3c7', fontSize: '0.82rem', color: '#92400e', marginBottom: '0.6rem' }}>
+                              We could not identify this image reliably.
+                            </div>
+
+                            {!img.isEditingRegion ? (
+                              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="btn-card-view"
+                                  style={{ padding: '0.4rem 0.9rem', fontSize: '0.82rem', fontWeight: 700, background: '#d97706', color: '#fff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                                  onClick={() => updateImage(img.id, { isEditingRegion: true })}
+                                >
+                                  Select Correct Region
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ marginTop: '0.5rem', padding: '0.6rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                                <label htmlFor={`xray-search-input-${img.id}`} style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, marginBottom: '0.3rem', color: '#0f172a' }}>
+                                  Select the correct anatomical region (33 body regions):
+                                </label>
+                                <CardSearchableAnatomySelector
+                                  imageId={img.id}
+                                  value={img.verificationRegion || ''}
+                                  onChange={(canonicalVal) => updateImage(img.id, { verificationRegion: canonicalVal })}
+                                  disabled={img.verifyingAnatomy || submitting}
+                                  aiPredictedRegion={candidate}
+                                  confirmedRegion=""
+                                  isConfirmed={false}
+                                />
+                                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}>
+                                  <button
+                                    type="button"
+                                    className="btn-card-view"
+                                    style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem', fontWeight: 700 }}
+                                    onClick={() => handleConfirmAnatomy(img, img.verificationRegion)}
+                                    disabled={!img.verificationRegion || img.verifyingAnatomy || submitting}
+                                  >
+                                    {img.verifyingAnatomy ? 'Saving...' : 'Confirm Selected Region'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem', background: 'transparent', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer' }}
+                                    onClick={() => updateImage(img.id, { isEditingRegion: false })}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <div style={{ padding: '0.85rem', background: '#ffffff', borderRadius: '10px', border: '1px solid #cbd5e1', marginBottom: '0.5rem' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                              <div style={{ fontSize: '0.92rem', color: '#0f172a' }}>
+                                <strong>Predicted region:</strong>{' '}
+                                <span style={{ fontSize: '1.05rem', fontWeight: 800, color: '#0f172a', letterSpacing: '0.02em' }}>
+                                  {candidate.replace(/_/g, ' ')}
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, padding: '0.2rem 0.55rem', borderRadius: '6px', background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe' }}>
+                                Status: Awaiting confirmation
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '0.6rem' }}>
+                              <strong>AI confidence:</strong>{' '}
+                              <span style={{ fontWeight: 700, color: '#0369a1' }}>
+                                {displayScore ? `${displayScore}%` : 'N/A'}
+                              </span>{' '}
+                              <span style={{ fontSize: '0.74rem', color: '#64748b' }}>({scoreSource})</span>
+                            </div>
+
+                            {!img.isEditingRegion ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="btn-card-view"
+                                  style={{ padding: '0.4rem 0.95rem', fontSize: '0.82rem', fontWeight: 700, background: '#0284c7', color: '#ffffff', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                                  onClick={() => handleConfirmAnatomy(img, candidate)}
+                                  disabled={img.verifyingAnatomy || submitting}
+                                >
+                                  {img.verifyingAnatomy ? 'Confirming...' : 'Confirm Region'}
+                                </button>
+                                <button
+                                  type="button"
+                                  style={{ padding: '0.4rem 0.85rem', fontSize: '0.82rem', fontWeight: 600, background: 'transparent', color: '#475569', border: '1px solid #cbd5e1', borderRadius: '6px', cursor: 'pointer' }}
+                                  onClick={() => updateImage(img.id, { isEditingRegion: true })}
+                                  disabled={img.verifyingAnatomy || submitting}
+                                >
+                                  Change Region
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ marginTop: '0.5rem', padding: '0.6rem', background: '#f8fafc', borderRadius: '8px', border: '1px solid #cbd5e1' }}>
+                                <label htmlFor={`xray-search-input-${img.id}`} style={{ display: 'block', fontSize: '0.78rem', fontWeight: 700, marginBottom: '0.3rem', color: '#0f172a' }}>
+                                  Select a different anatomical region (33 body regions):
+                                </label>
+                                <CardSearchableAnatomySelector
+                                  imageId={img.id}
+                                  value={img.verificationRegion || ''}
+                                  onChange={(canonicalVal) => updateImage(img.id, { verificationRegion: canonicalVal })}
+                                  disabled={img.verifyingAnatomy || submitting}
+                                  aiPredictedRegion={candidate}
+                                  confirmedRegion=""
+                                  isConfirmed={false}
+                                />
+                                <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.5rem' }}>
+                                  <button
+                                    type="button"
+                                    className="btn-card-view"
+                                    style={{ padding: '0.35rem 0.8rem', fontSize: '0.8rem', fontWeight: 700 }}
+                                    onClick={() => handleConfirmAnatomy(img, img.verificationRegion)}
+                                    disabled={!img.verificationRegion || img.verifyingAnatomy || submitting}
+                                  >
+                                    {img.verifyingAnatomy ? 'Saving...' : 'Confirm Selected Region'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    style={{ padding: '0.35rem 0.75rem', fontSize: '0.78rem', background: 'transparent', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: '6px', cursor: 'pointer' }}
+                                    onClick={() => updateImage(img.id, { isEditingRegion: false })}
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* COLLAPSED TECHNICAL DETAILS ACCORDION FOR AUDITING & DEVELOPERS */}
+                        <details className="tech-details-accordion" style={{ marginTop: '0.5rem', borderTop: '1px solid #e2e8f0', paddingTop: '0.4rem' }}>
+                          <summary style={{ cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, color: '#64748b', userSelect: 'none' }}>
+                            Technical Details
+                          </summary>
+                          <div style={{ marginTop: '0.5rem', padding: '0.6rem', background: '#ffffff', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.4rem' }}>
+                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: '#475569' }}>Two-Model Evaluation &amp; Pipeline Metadata</span>
+                              <span style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem', borderRadius: '4px', background: '#e0f2fe', color: '#0369a1', fontWeight: 600 }}>
+                                Preprocessing: {img.preprocessingId || img.preprocessingMode || 'letterbox'}
+                              </span>
+                            </div>
+
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '0.6rem', marginBottom: '0.5rem' }}>
+                              {/* PRIMARY MODEL DETAILS */}
+                              <div style={{ background: '#f8fafc', borderRadius: '6px', padding: '0.5rem', border: '1px solid #e2e8f0' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0284c7' }}>Primary 33-Class (ConvNeXt-Tiny)</span>
+                                </div>
+                                {img.primaryPrediction ? (
+                                  <div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 700, margin: '0.2rem 0' }}>
+                                      <span>{String(img.primaryPrediction.candidate_body_part || 'Unknown').replace(/_/g, ' ')}</span>
+                                      <span>{typeof img.primaryPrediction.confidence === 'number' ? `${(img.primaryPrediction.confidence * 100).toFixed(2)}%` : 'N/A'}</span>
+                                    </div>
+                                    <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                                      Gate: {(typeof img.primaryPrediction.confidence === 'number' && img.primaryPrediction.confidence >= 0.6 && !img.primaryPrediction.is_broad_region) ? 'Passed (≥60%)' : 'Review Required'}
+                                      {typeof img.primaryPrediction.top_two_margin === 'number' ? ` • Margin: +${(img.primaryPrediction.top_two_margin * 100).toFixed(1)}%` : ''}
+                                    </div>
+                                    {Array.isArray(img.primaryPrediction.top_predictions) && img.primaryPrediction.top_predictions.length > 0 ? (
+                                      <div style={{ marginTop: '0.3rem', paddingTop: '0.3rem', borderTop: '1px dashed #e2e8f0' }}>
+                                        <div style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600, marginBottom: '0.15rem' }}>Top Predictions:</div>
+                                        {img.primaryPrediction.top_predictions.slice(0, 3).map((item, idx) => (
+                                          <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#475569' }}>
+                                            <span>{item.label}</span>
+                                            <span>{typeof item.probability === 'number' ? `${(item.probability * 100).toFixed(1)}%` : ''}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: '0.72rem', color: '#64748b' }}>Primary model output unavailable.</div>
+                                )}
+                              </div>
+
+                              {/* SPECIALIST MODEL DETAILS */}
+                              <div style={{ background: '#f8fafc', borderRadius: '6px', padding: '0.5rem', border: '1px solid #e2e8f0' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#7c3aed' }}>Specialist Model (DenseNet-121)</span>
+                                  <span style={{ fontSize: '0.66rem', fontWeight: 700, padding: '0.05rem 0.35rem', borderRadius: '4px', background: '#f1f5f9', color: '#475569' }}>
+                                    {(img.specialistPrediction?.status || 'NOT INVOKED').toUpperCase()}
+                                  </span>
+                                </div>
+                                {img.specialistPrediction && (img.specialistPrediction.candidate_body_part || img.specialistPrediction.confidence) ? (
+                                  <div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8rem', fontWeight: 700, margin: '0.2rem 0' }}>
+                                      <span>{String(img.specialistPrediction.candidate_body_part || 'Not Applied').replace(/_/g, ' ')}</span>
+                                      <span>{typeof img.specialistPrediction.confidence === 'number' ? `${(img.specialistPrediction.confidence * 100).toFixed(2)}%` : 'N/A'}</span>
+                                    </div>
+                                    <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                                      {img.specialistPrediction.message || 'Specialist evaluated.'}
+                                    </div>
+                                    {Array.isArray(img.specialistPrediction.top_predictions) && img.specialistPrediction.top_predictions.length > 0 ? (
+                                      <div style={{ marginTop: '0.3rem', paddingTop: '0.3rem', borderTop: '1px dashed #e2e8f0' }}>
+                                        <div style={{ fontSize: '0.68rem', color: '#64748b', fontWeight: 600, marginBottom: '0.15rem' }}>Top Predictions:</div>
+                                        {img.specialistPrediction.top_predictions.slice(0, 3).map((item, idx) => (
+                                          <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#475569' }}>
+                                            <span>{item.label}</span>
+                                            <span>{typeof item.probability === 'number' ? `${(item.probability * 100).toFixed(1)}%` : ''}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : (
+                                  <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                                    {img.specialistPrediction?.message || 'Specialist not invoked (ineligible or non-upper-limb).'}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* DECISION SUMMARY & SAFETY BOUNDARY */}
+                            <div style={{ fontSize: '0.72rem', color: '#475569', background: '#f8fafc', padding: '0.4rem', borderRadius: '5px', border: '1px solid #e2e8f0' }}>
+                              <div><strong>Decision Case:</strong> {img.twoModelComparison?.decision_case || 'STANDARD'} • <strong>Source:</strong> {img.selectionSource || 'PRIMARY MODEL'}</div>
+                              {img.twoModelComparison?.summary ? <div style={{ marginTop: '0.2rem' }}>{img.twoModelComparison.summary}</div> : null}
+                              <div style={{ marginTop: '0.3rem', color: '#d97706' }}>
+                                ⚠ Anatomy classification is not disease detection. Regional model will NOT execute before explicit user confirmation.
+                              </div>
+                            </div>
+                          </div>
+                        </details>
+                      </div>
+                    );
+                  })() : null}
                 </div>
               );
             })}

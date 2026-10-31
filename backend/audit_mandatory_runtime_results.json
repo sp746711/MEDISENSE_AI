@@ -1,0 +1,4002 @@
+{
+  "05_elbow.png": {
+    "filename": "05_elbow.png",
+    "path": "d:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b33cbd834e634d318ed8427f5fc79158.png",
+    "sha256": "1bc145ffd588ccfe941c2b3e1229b07b689047d2f841a3f9cfe3b8177df0cca9",
+    "ground_truth": "ELBOW",
+    "center_crop": {
+      "candidate": "KNEE",
+      "confidence": 0.4064408540725708,
+      "second_candidate": "ELBOW",
+      "second_confidence": 0.2487541288137436,
+      "margin": 0.1576867252588272,
+      "top_predictions": [
+        {
+          "label": "KNEE",
+          "probability": 0.4064
+        },
+        {
+          "label": "ELBOW",
+          "probability": 0.2488
+        },
+        {
+          "label": "FOREARM",
+          "probability": 0.0496
+        },
+        {
+          "label": "SHOULDER",
+          "probability": 0.0376
+        },
+        {
+          "label": "ARM",
+          "probability": 0.0336
+        }
+      ]
+    },
+    "letterbox": {
+      "candidate": "ELBOW",
+      "confidence": 0.8218210935592651,
+      "second_candidate": "FOREARM",
+      "second_confidence": 0.029114238917827606,
+      "margin": 0.7927068546414375,
+      "top_predictions": [
+        {
+          "label": "ELBOW",
+          "probability": 0.8218
+        },
+        {
+          "label": "FOREARM",
+          "probability": 0.0291
+        },
+        {
+          "label": "SHOULDER",
+          "probability": 0.0256
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0185
+        },
+        {
+          "label": "ARM",
+          "probability": 0.0099
+        }
+      ]
+    },
+    "dual_ensemble": {
+      "candidate": "ELBOW",
+      "confidence": 0.535287618637085,
+      "second_candidate": "KNEE",
+      "second_confidence": 0.21248246729373932,
+      "margin": 0.32280515134334564,
+      "top_predictions": [
+        {
+          "label": "ELBOW",
+          "probability": 0.5353
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.2125
+        },
+        {
+          "label": "FOREARM",
+          "probability": 0.0393
+        },
+        {
+          "label": "SHOULDER",
+          "probability": 0.0316
+        },
+        {
+          "label": "ARM",
+          "probability": 0.0218
+        }
+      ]
+    },
+    "api_response": {
+      "status": "unavailable",
+      "xray_result_id": "447273a9-7580-46e3-a65f-e03d21391c96",
+      "file_name": "05_elbow.png",
+      "message": "The image type could not be verified. No regional disease model was run. The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray.",
+      "region": "unknown",
+      "model_version": null,
+      "prediction": null,
+      "findings": [],
+      "confidence_if_valid": null,
+      "uncertainty": "The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray.",
+      "source": "unavailable",
+      "reason_code": "anatomy_unverified",
+      "diagnostic_message": "The image type could not be verified. No regional disease model was run.",
+      "image_anatomy_verification": {
+        "status": "UNVERIFIED",
+        "confirmation_required": true,
+        "next_action": "confirm_or_select_body_region",
+        "classification_status": "completed",
+        "anatomy_independently_verified": false,
+        "anatomy_classifier_accepted": false,
+        "classifier_gate_passed": false,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": true,
+        "regional_model_configured": false,
+        "regional_model_available": false,
+        "regional_model_name": null,
+        "regional_model_status": null,
+        "verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "knee",
+        "body_part_confidence": 0.4064,
+        "confidence_threshold_validated": false,
+        "message": "The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray."
+      },
+      "image_type_detection": {
+        "success": true,
+        "class_count": 33,
+        "predicted_anatomy": "KNEE",
+        "confidence": 0.4064,
+        "prediction_status": "needs_confirmation",
+        "requires_user_confirmation": true,
+        "preprocessing_verified": false,
+        "warnings": [
+          "Prediction confidence (40.6%) is below the review threshold (60.0%).",
+          "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+        ],
+        "status": "unverified",
+        "body_part_label": null,
+        "candidate_body_part": "KNEE",
+        "body_part_confidence": 0.4064,
+        "second_candidate_body_part": "ELBOW",
+        "second_candidate_confidence": 0.2488,
+        "top_two_margin": 0.1577,
+        "confidence_threshold": 0.6,
+        "confidence_threshold_validated": false,
+        "top_two_margin_threshold": 0.1,
+        "top_two_margin_threshold_validated": false,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "colored_annotation_cleanup": {
+          "applied": false,
+          "method": "none",
+          "masked_pixel_fraction": 0.0,
+          "reason": "disabled"
+        },
+        "colored_cleanup_candidate": null,
+        "inference_view_selected": "original_upload_copy",
+        "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "anatomy_independently_verified": false,
+        "candidate_is_specific_anatomy": true,
+        "routing_requires_independent_verification": true,
+        "model_name": "convnext_tiny_onnx_33class",
+        "model_checkpoint": "model.onnx",
+        "model_license": "Apache-2.0; see upstream model card",
+        "device": "cpu",
+        "classifier_labels": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "supported_body_parts": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "top_predictions": [
+          {
+            "label": "KNEE",
+            "probability": 0.4064
+          },
+          {
+            "label": "ELBOW",
+            "probability": 0.2488
+          },
+          {
+            "label": "FOREARM",
+            "probability": 0.0496
+          },
+          {
+            "label": "SHOULDER",
+            "probability": 0.0376
+          },
+          {
+            "label": "ARM",
+            "probability": 0.0336
+          }
+        ],
+        "message": "The anatomy classifier's best candidate is Knee (40.6%). Verification requires score >= 60.0% and top-two margin >= 10.0%; observed margin is 15.8%. Anatomy remains unverified; no regional abnormality model should be selected automatically.",
+        "image_name": "61c92fa210c74091a9c46b20dae6e7f6.png",
+        "primary_classifier_result": {
+          "candidate_body_part": "KNEE",
+          "confidence": 0.4064,
+          "second_candidate_body_part": "ELBOW",
+          "second_candidate_confidence": 0.2488,
+          "top_two_margin": 0.1577,
+          "top_predictions": [
+            {
+              "label": "KNEE",
+              "probability": 0.4064
+            },
+            {
+              "label": "ELBOW",
+              "probability": 0.2488
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.0496
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0376
+            },
+            {
+              "label": "ARM",
+              "probability": 0.0336
+            }
+          ],
+          "model_name": "convnext_tiny_onnx_33class"
+        },
+        "upper_extremity_refinement": {
+          "status": "rejected_anatomical_mismatch",
+          "reason_code": "incompatible_anatomical_region",
+          "primary_candidate": "KNEE",
+          "primary_confidence": 0.4064,
+          "candidate_body_part": "ELBOW",
+          "confidence": 0.9592801461393756,
+          "second_candidate_body_part": "HUMERUS",
+          "second_confidence": 0.02782656276416157,
+          "top_two_margin": 0.931453583375214,
+          "top_predictions": [
+            {
+              "label": "ELBOW",
+              "probability": 0.9593
+            },
+            {
+              "label": "HUMERUS",
+              "probability": 0.0278
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.0127
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0001
+            },
+            {
+              "label": "WRIST",
+              "probability": 0.0
+            },
+            {
+              "label": "FINGER",
+              "probability": 0.0
+            },
+            {
+              "label": "HAND",
+              "probability": 0.0
+            }
+          ],
+          "confidence_threshold": 0.6,
+          "min_confidence_margin": 0.1,
+          "confidence_threshold_validated": false,
+          "model_name": "swin_tiny_mura_upper_extremity_7class",
+          "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+          "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+          "message": "The dedicated upper-extremity specialist predicted ELBOW (95.9%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (KNEE). The original primary candidate (KNEE) is preserved and requires explicit user confirmation."
+        }
+      },
+      "anatomy_metadata_persisted": true,
+      "anatomy_metadata": {
+        "status": "UNVERIFIED",
+        "classification_status": "completed",
+        "anatomy_classifier_accepted": false,
+        "classifier_gate_passed": false,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": false,
+        "regional_model_configured": false,
+        "regional_model_available": false,
+        "regional_model_name": null,
+        "regional_model_status": null,
+        "anatomy_user_confirmed": false,
+        "anatomy_verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "knee",
+        "body_part_confidence": 0.4064,
+        "confidence_threshold_validated": false,
+        "preprocessing_id": null,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "model_artifact_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "model_size_bytes": null,
+        "model_input_shape": null,
+        "model_output_shape": null,
+        "output_score_semantics": null,
+        "classifier_version": "convnext_tiny_onnx_33class",
+        "top_candidates": [
+          {
+            "label": "KNEE",
+            "probability": 0.4064
+          },
+          {
+            "label": "ELBOW",
+            "probability": 0.2488
+          },
+          {
+            "label": "FOREARM",
+            "probability": 0.0496
+          },
+          {
+            "label": "SHOULDER",
+            "probability": 0.0376
+          },
+          {
+            "label": "ARM",
+            "probability": 0.0336
+          }
+        ],
+        "classifier_output": {
+          "success": true,
+          "class_count": 33,
+          "predicted_anatomy": "KNEE",
+          "confidence": 0.4064,
+          "prediction_status": "needs_confirmation",
+          "requires_user_confirmation": true,
+          "preprocessing_verified": false,
+          "warnings": [
+            "Prediction confidence (40.6%) is below the review threshold (60.0%).",
+            "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+          ],
+          "status": "unverified",
+          "body_part_label": null,
+          "candidate_body_part": "KNEE",
+          "body_part_confidence": 0.4064,
+          "second_candidate_body_part": "ELBOW",
+          "second_candidate_confidence": 0.2488,
+          "top_two_margin": 0.1577,
+          "confidence_threshold": 0.6,
+          "confidence_threshold_validated": false,
+          "top_two_margin_threshold": 0.1,
+          "top_two_margin_threshold_validated": false,
+          "preprocessing_mode": "center_crop",
+          "preprocessing_verified_against_training": false,
+          "colored_annotation_cleanup": {
+            "applied": false,
+            "method": "none",
+            "masked_pixel_fraction": 0.0,
+            "reason": "disabled"
+          },
+          "colored_cleanup_candidate": null,
+          "inference_view_selected": "original_upload_copy",
+          "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+          "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+          "anatomy_independently_verified": false,
+          "candidate_is_specific_anatomy": true,
+          "routing_requires_independent_verification": true,
+          "model_name": "convnext_tiny_onnx_33class",
+          "model_checkpoint": "model.onnx",
+          "model_license": "Apache-2.0; see upstream model card",
+          "device": "cpu",
+          "classifier_labels": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "supported_body_parts": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "top_predictions": [
+            {
+              "label": "KNEE",
+              "probability": 0.4064
+            },
+            {
+              "label": "ELBOW",
+              "probability": 0.2488
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.0496
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0376
+            },
+            {
+              "label": "ARM",
+              "probability": 0.0336
+            }
+          ],
+          "message": "The anatomy classifier's best candidate is Knee (40.6%). Verification requires score >= 60.0% and top-two margin >= 10.0%; observed margin is 15.8%. Anatomy remains unverified; no regional abnormality model should be selected automatically.",
+          "image_name": "61c92fa210c74091a9c46b20dae6e7f6.png",
+          "primary_classifier_result": {
+            "candidate_body_part": "KNEE",
+            "confidence": 0.4064,
+            "second_candidate_body_part": "ELBOW",
+            "second_candidate_confidence": 0.2488,
+            "top_two_margin": 0.1577,
+            "top_predictions": [
+              {
+                "label": "KNEE",
+                "probability": 0.4064
+              },
+              {
+                "label": "ELBOW",
+                "probability": 0.2488
+              },
+              {
+                "label": "FOREARM",
+                "probability": 0.0496
+              },
+              {
+                "label": "SHOULDER",
+                "probability": 0.0376
+              },
+              {
+                "label": "ARM",
+                "probability": 0.0336
+              }
+            ],
+            "model_name": "convnext_tiny_onnx_33class"
+          },
+          "upper_extremity_refinement": {
+            "status": "rejected_anatomical_mismatch",
+            "reason_code": "incompatible_anatomical_region",
+            "primary_candidate": "KNEE",
+            "primary_confidence": 0.4064,
+            "candidate_body_part": "ELBOW",
+            "confidence": 0.9592801461393756,
+            "second_candidate_body_part": "HUMERUS",
+            "second_confidence": 0.02782656276416157,
+            "top_two_margin": 0.931453583375214,
+            "top_predictions": [
+              {
+                "label": "ELBOW",
+                "probability": 0.9593
+              },
+              {
+                "label": "HUMERUS",
+                "probability": 0.0278
+              },
+              {
+                "label": "FOREARM",
+                "probability": 0.0127
+              },
+              {
+                "label": "SHOULDER",
+                "probability": 0.0001
+              },
+              {
+                "label": "WRIST",
+                "probability": 0.0
+              },
+              {
+                "label": "FINGER",
+                "probability": 0.0
+              },
+              {
+                "label": "HAND",
+                "probability": 0.0
+              }
+            ],
+            "confidence_threshold": 0.6,
+            "min_confidence_margin": 0.1,
+            "confidence_threshold_validated": false,
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+            "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+            "message": "The dedicated upper-extremity specialist predicted ELBOW (95.9%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (KNEE). The original primary candidate (KNEE) is preserved and requires explicit user confirmation."
+          }
+        },
+        "image_sha256": "1bc145ffd588ccfe941c2b3e1229b07b689047d2f841a3f9cfe3b8177df0cca9"
+      },
+      "detected_region": null,
+      "candidate_region": "knee",
+      "region_source": "image_classifier",
+      "is_broad_region": false,
+      "broad_region_classifier_accepted": false,
+      "specific_region_confirmation_required": true,
+      "anatomy_verification_status": "unverified",
+      "classification_status": "completed",
+      "anatomy_independently_verified": false,
+      "anatomy_classifier_accepted": false,
+      "classifier_gate_passed": false,
+      "regional_model_configured": false,
+      "regional_model_available": false,
+      "regional_model_name": null,
+      "regional_model_status": null,
+      "anatomy_verification_method": null,
+      "anatomy_confirmation_required": true,
+      "next_action": "confirm_or_select_body_region",
+      "body_part_confidence": 0.4064,
+      "report_region_verification": {
+        "status": "UNVERIFIED",
+        "detected_image_region": null,
+        "report_regions": [],
+        "unrecognized_report_region_count": 0,
+        "association_scope": "AMBIGUOUS_OR_INCOMPLETE",
+        "association_explicitly_confirmed": false,
+        "region_compatible": false,
+        "can_combine": false,
+        "message": "The image/report relationship could not be uniquely verified. Keep report findings separate from image-model predictions until the correct pair is confirmed."
+      },
+      "primary_prediction": {
+        "candidate_body_part": "KNEE",
+        "confidence": 0.4064
+      },
+      "specialist_prediction": {
+        "candidate_body_part": "ELBOW",
+        "confidence": 0.9592801461393756,
+        "status": "rejected_anatomical_mismatch",
+        "reason_code": "incompatible_anatomical_region",
+        "message": "The dedicated upper-extremity specialist predicted ELBOW (95.9%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (KNEE). The original primary candidate (KNEE) is preserved and requires explicit user confirmation."
+      }
+    }
+  },
+  "12_elbow (1).png": {
+    "filename": "12_elbow (1).png",
+    "path": "d:\\projects\\MEDISENSE_AI\\12_elbow (1).png",
+    "sha256": "7dfdaa21e9af6eb552d34d502991bb7e8bfdab528563f601907e7b3b24c86600",
+    "ground_truth": "ELBOW",
+    "center_crop": {
+      "candidate": "KNEE",
+      "confidence": 0.5232263803482056,
+      "second_candidate": "LOWER_EXTREMITY",
+      "second_confidence": 0.08269535005092621,
+      "margin": 0.44053103029727936,
+      "top_predictions": [
+        {
+          "label": "KNEE",
+          "probability": 0.5232
+        },
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.0827
+        },
+        {
+          "label": "HEAD",
+          "probability": 0.052
+        },
+        {
+          "label": "ABDOMEN",
+          "probability": 0.0286
+        },
+        {
+          "label": "LEG",
+          "probability": 0.0273
+        }
+      ]
+    },
+    "letterbox": {
+      "candidate": "KNEE",
+      "confidence": 0.7779105305671692,
+      "second_candidate": "LOWER_EXTREMITY",
+      "second_confidence": 0.06498565524816513,
+      "margin": 0.7129248753190041,
+      "top_predictions": [
+        {
+          "label": "KNEE",
+          "probability": 0.7779
+        },
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.065
+        },
+        {
+          "label": "FOOT",
+          "probability": 0.0156
+        },
+        {
+          "label": "ANKLE",
+          "probability": 0.0142
+        },
+        {
+          "label": "ABDOMEN",
+          "probability": 0.0089
+        }
+      ]
+    },
+    "dual_ensemble": {
+      "candidate": "KNEE",
+      "confidence": 0.6505684852600098,
+      "second_candidate": "LOWER_EXTREMITY",
+      "second_confidence": 0.07384049892425537,
+      "margin": 0.5767279863357544,
+      "top_predictions": [
+        {
+          "label": "KNEE",
+          "probability": 0.6506
+        },
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.0738
+        },
+        {
+          "label": "HEAD",
+          "probability": 0.0289
+        },
+        {
+          "label": "FOOT",
+          "probability": 0.0203
+        },
+        {
+          "label": "ANKLE",
+          "probability": 0.0193
+        }
+      ]
+    },
+    "api_response": {
+      "status": "unavailable",
+      "xray_result_id": "5c3d8da6-669b-4616-9269-a27a7a11309c",
+      "file_name": "12_elbow (1).png",
+      "message": "The image type could not be verified. No regional disease model was run. The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray.",
+      "region": "unknown",
+      "model_version": null,
+      "prediction": null,
+      "findings": [],
+      "confidence_if_valid": null,
+      "uncertainty": "The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray.",
+      "source": "unavailable",
+      "reason_code": "anatomy_unverified",
+      "diagnostic_message": "The image type could not be verified. No regional disease model was run.",
+      "image_anatomy_verification": {
+        "status": "UNVERIFIED",
+        "confirmation_required": true,
+        "next_action": "confirm_or_select_body_region",
+        "classification_status": "completed",
+        "anatomy_independently_verified": false,
+        "anatomy_classifier_accepted": false,
+        "classifier_gate_passed": false,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": true,
+        "regional_model_configured": false,
+        "regional_model_available": false,
+        "regional_model_name": null,
+        "regional_model_status": null,
+        "verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "knee",
+        "body_part_confidence": 0.5232,
+        "confidence_threshold_validated": false,
+        "message": "The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray."
+      },
+      "image_type_detection": {
+        "success": true,
+        "class_count": 33,
+        "predicted_anatomy": "KNEE",
+        "confidence": 0.5232,
+        "prediction_status": "needs_confirmation",
+        "requires_user_confirmation": true,
+        "preprocessing_verified": false,
+        "warnings": [
+          "Prediction confidence (52.3%) is below the review threshold (60.0%).",
+          "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+        ],
+        "status": "unverified",
+        "body_part_label": null,
+        "candidate_body_part": "KNEE",
+        "body_part_confidence": 0.5232,
+        "second_candidate_body_part": "LOWER_EXTREMITY",
+        "second_candidate_confidence": 0.0827,
+        "top_two_margin": 0.4405,
+        "confidence_threshold": 0.6,
+        "confidence_threshold_validated": false,
+        "top_two_margin_threshold": 0.1,
+        "top_two_margin_threshold_validated": false,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "colored_annotation_cleanup": {
+          "applied": false,
+          "method": "none",
+          "masked_pixel_fraction": 0.0,
+          "reason": "disabled"
+        },
+        "colored_cleanup_candidate": null,
+        "inference_view_selected": "original_upload_copy",
+        "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "anatomy_independently_verified": false,
+        "candidate_is_specific_anatomy": true,
+        "routing_requires_independent_verification": true,
+        "model_name": "convnext_tiny_onnx_33class",
+        "model_checkpoint": "model.onnx",
+        "model_license": "Apache-2.0; see upstream model card",
+        "device": "cpu",
+        "classifier_labels": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "supported_body_parts": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "top_predictions": [
+          {
+            "label": "KNEE",
+            "probability": 0.5232
+          },
+          {
+            "label": "LOWER_EXTREMITY",
+            "probability": 0.0827
+          },
+          {
+            "label": "HEAD",
+            "probability": 0.052
+          },
+          {
+            "label": "ABDOMEN",
+            "probability": 0.0286
+          },
+          {
+            "label": "LEG",
+            "probability": 0.0273
+          }
+        ],
+        "message": "The anatomy classifier's best candidate is Knee (52.3%). Verification requires score >= 60.0% and top-two margin >= 10.0%; observed margin is 44.1%. Anatomy remains unverified; no regional abnormality model should be selected automatically.",
+        "image_name": "67892922e9eb4dac93adbba0265b49c4.png",
+        "primary_classifier_result": {
+          "candidate_body_part": "KNEE",
+          "confidence": 0.5232,
+          "second_candidate_body_part": "LOWER_EXTREMITY",
+          "second_candidate_confidence": 0.0827,
+          "top_two_margin": 0.4405,
+          "top_predictions": [
+            {
+              "label": "KNEE",
+              "probability": 0.5232
+            },
+            {
+              "label": "LOWER_EXTREMITY",
+              "probability": 0.0827
+            },
+            {
+              "label": "HEAD",
+              "probability": 0.052
+            },
+            {
+              "label": "ABDOMEN",
+              "probability": 0.0286
+            },
+            {
+              "label": "LEG",
+              "probability": 0.0273
+            }
+          ],
+          "model_name": "convnext_tiny_onnx_33class"
+        },
+        "upper_extremity_refinement": {
+          "status": "rejected_anatomical_mismatch",
+          "reason_code": "incompatible_anatomical_region",
+          "primary_candidate": "KNEE",
+          "primary_confidence": 0.5232,
+          "candidate_body_part": "ELBOW",
+          "confidence": 0.8944054657057859,
+          "second_candidate_body_part": "HUMERUS",
+          "second_confidence": 0.07640794742494635,
+          "top_two_margin": 0.8179975182808396,
+          "top_predictions": [
+            {
+              "label": "ELBOW",
+              "probability": 0.8944
+            },
+            {
+              "label": "HUMERUS",
+              "probability": 0.0764
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.027
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0017
+            },
+            {
+              "label": "WRIST",
+              "probability": 0.0002
+            },
+            {
+              "label": "FINGER",
+              "probability": 0.0002
+            },
+            {
+              "label": "HAND",
+              "probability": 0.0001
+            }
+          ],
+          "confidence_threshold": 0.6,
+          "min_confidence_margin": 0.1,
+          "confidence_threshold_validated": false,
+          "model_name": "swin_tiny_mura_upper_extremity_7class",
+          "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+          "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+          "message": "The dedicated upper-extremity specialist predicted ELBOW (89.4%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (KNEE). The original primary candidate (KNEE) is preserved and requires explicit user confirmation."
+        }
+      },
+      "anatomy_metadata_persisted": true,
+      "anatomy_metadata": {
+        "status": "UNVERIFIED",
+        "classification_status": "completed",
+        "anatomy_classifier_accepted": false,
+        "classifier_gate_passed": false,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": false,
+        "regional_model_configured": false,
+        "regional_model_available": false,
+        "regional_model_name": null,
+        "regional_model_status": null,
+        "anatomy_user_confirmed": false,
+        "anatomy_verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "knee",
+        "body_part_confidence": 0.5232,
+        "confidence_threshold_validated": false,
+        "preprocessing_id": null,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "model_artifact_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "model_size_bytes": null,
+        "model_input_shape": null,
+        "model_output_shape": null,
+        "output_score_semantics": null,
+        "classifier_version": "convnext_tiny_onnx_33class",
+        "top_candidates": [
+          {
+            "label": "KNEE",
+            "probability": 0.5232
+          },
+          {
+            "label": "LOWER_EXTREMITY",
+            "probability": 0.0827
+          },
+          {
+            "label": "HEAD",
+            "probability": 0.052
+          },
+          {
+            "label": "ABDOMEN",
+            "probability": 0.0286
+          },
+          {
+            "label": "LEG",
+            "probability": 0.0273
+          }
+        ],
+        "classifier_output": {
+          "success": true,
+          "class_count": 33,
+          "predicted_anatomy": "KNEE",
+          "confidence": 0.5232,
+          "prediction_status": "needs_confirmation",
+          "requires_user_confirmation": true,
+          "preprocessing_verified": false,
+          "warnings": [
+            "Prediction confidence (52.3%) is below the review threshold (60.0%).",
+            "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+          ],
+          "status": "unverified",
+          "body_part_label": null,
+          "candidate_body_part": "KNEE",
+          "body_part_confidence": 0.5232,
+          "second_candidate_body_part": "LOWER_EXTREMITY",
+          "second_candidate_confidence": 0.0827,
+          "top_two_margin": 0.4405,
+          "confidence_threshold": 0.6,
+          "confidence_threshold_validated": false,
+          "top_two_margin_threshold": 0.1,
+          "top_two_margin_threshold_validated": false,
+          "preprocessing_mode": "center_crop",
+          "preprocessing_verified_against_training": false,
+          "colored_annotation_cleanup": {
+            "applied": false,
+            "method": "none",
+            "masked_pixel_fraction": 0.0,
+            "reason": "disabled"
+          },
+          "colored_cleanup_candidate": null,
+          "inference_view_selected": "original_upload_copy",
+          "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+          "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+          "anatomy_independently_verified": false,
+          "candidate_is_specific_anatomy": true,
+          "routing_requires_independent_verification": true,
+          "model_name": "convnext_tiny_onnx_33class",
+          "model_checkpoint": "model.onnx",
+          "model_license": "Apache-2.0; see upstream model card",
+          "device": "cpu",
+          "classifier_labels": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "supported_body_parts": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "top_predictions": [
+            {
+              "label": "KNEE",
+              "probability": 0.5232
+            },
+            {
+              "label": "LOWER_EXTREMITY",
+              "probability": 0.0827
+            },
+            {
+              "label": "HEAD",
+              "probability": 0.052
+            },
+            {
+              "label": "ABDOMEN",
+              "probability": 0.0286
+            },
+            {
+              "label": "LEG",
+              "probability": 0.0273
+            }
+          ],
+          "message": "The anatomy classifier's best candidate is Knee (52.3%). Verification requires score >= 60.0% and top-two margin >= 10.0%; observed margin is 44.1%. Anatomy remains unverified; no regional abnormality model should be selected automatically.",
+          "image_name": "67892922e9eb4dac93adbba0265b49c4.png",
+          "primary_classifier_result": {
+            "candidate_body_part": "KNEE",
+            "confidence": 0.5232,
+            "second_candidate_body_part": "LOWER_EXTREMITY",
+            "second_candidate_confidence": 0.0827,
+            "top_two_margin": 0.4405,
+            "top_predictions": [
+              {
+                "label": "KNEE",
+                "probability": 0.5232
+              },
+              {
+                "label": "LOWER_EXTREMITY",
+                "probability": 0.0827
+              },
+              {
+                "label": "HEAD",
+                "probability": 0.052
+              },
+              {
+                "label": "ABDOMEN",
+                "probability": 0.0286
+              },
+              {
+                "label": "LEG",
+                "probability": 0.0273
+              }
+            ],
+            "model_name": "convnext_tiny_onnx_33class"
+          },
+          "upper_extremity_refinement": {
+            "status": "rejected_anatomical_mismatch",
+            "reason_code": "incompatible_anatomical_region",
+            "primary_candidate": "KNEE",
+            "primary_confidence": 0.5232,
+            "candidate_body_part": "ELBOW",
+            "confidence": 0.8944054657057859,
+            "second_candidate_body_part": "HUMERUS",
+            "second_confidence": 0.07640794742494635,
+            "top_two_margin": 0.8179975182808396,
+            "top_predictions": [
+              {
+                "label": "ELBOW",
+                "probability": 0.8944
+              },
+              {
+                "label": "HUMERUS",
+                "probability": 0.0764
+              },
+              {
+                "label": "FOREARM",
+                "probability": 0.027
+              },
+              {
+                "label": "SHOULDER",
+                "probability": 0.0017
+              },
+              {
+                "label": "WRIST",
+                "probability": 0.0002
+              },
+              {
+                "label": "FINGER",
+                "probability": 0.0002
+              },
+              {
+                "label": "HAND",
+                "probability": 0.0001
+              }
+            ],
+            "confidence_threshold": 0.6,
+            "min_confidence_margin": 0.1,
+            "confidence_threshold_validated": false,
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+            "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+            "message": "The dedicated upper-extremity specialist predicted ELBOW (89.4%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (KNEE). The original primary candidate (KNEE) is preserved and requires explicit user confirmation."
+          }
+        },
+        "image_sha256": "7dfdaa21e9af6eb552d34d502991bb7e8bfdab528563f601907e7b3b24c86600"
+      },
+      "detected_region": null,
+      "candidate_region": "knee",
+      "region_source": "image_classifier",
+      "is_broad_region": false,
+      "broad_region_classifier_accepted": false,
+      "specific_region_confirmation_required": true,
+      "anatomy_verification_status": "unverified",
+      "classification_status": "completed",
+      "anatomy_independently_verified": false,
+      "anatomy_classifier_accepted": false,
+      "classifier_gate_passed": false,
+      "regional_model_configured": false,
+      "regional_model_available": false,
+      "regional_model_name": null,
+      "regional_model_status": null,
+      "anatomy_verification_method": null,
+      "anatomy_confirmation_required": true,
+      "next_action": "confirm_or_select_body_region",
+      "body_part_confidence": 0.5232,
+      "report_region_verification": {
+        "status": "UNVERIFIED",
+        "detected_image_region": null,
+        "report_regions": [],
+        "unrecognized_report_region_count": 0,
+        "association_scope": "AMBIGUOUS_OR_INCOMPLETE",
+        "association_explicitly_confirmed": false,
+        "region_compatible": false,
+        "can_combine": false,
+        "message": "The image/report relationship could not be uniquely verified. Keep report findings separate from image-model predictions until the correct pair is confirmed."
+      },
+      "primary_prediction": {
+        "candidate_body_part": "KNEE",
+        "confidence": 0.5232
+      },
+      "specialist_prediction": {
+        "candidate_body_part": "ELBOW",
+        "confidence": 0.8944054657057859,
+        "status": "rejected_anatomical_mismatch",
+        "reason_code": "incompatible_anatomical_region",
+        "message": "The dedicated upper-extremity specialist predicted ELBOW (89.4%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (KNEE). The original primary candidate (KNEE) is preserved and requires explicit user confirmation."
+      }
+    }
+  },
+  "09_ankle.png": {
+    "filename": "09_ankle.png",
+    "path": "d:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\54f31ae08f364399bd4d462285049246.png",
+    "sha256": "ca97b072585e449b3298111352da7f5018b4d7a76d238ffeef33529271be8636",
+    "ground_truth": "ANKLE",
+    "center_crop": {
+      "candidate": "LOWER_EXTREMITY",
+      "confidence": 0.4326825439929962,
+      "second_candidate": "ANKLE",
+      "second_confidence": 0.30947014689445496,
+      "margin": 0.12321239709854126,
+      "top_predictions": [
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.4327
+        },
+        {
+          "label": "ANKLE",
+          "probability": 0.3095
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.057
+        },
+        {
+          "label": "TIBIA",
+          "probability": 0.0292
+        },
+        {
+          "label": "LEG",
+          "probability": 0.0287
+        }
+      ]
+    },
+    "letterbox": {
+      "candidate": "ANKLE",
+      "confidence": 0.4835358262062073,
+      "second_candidate": "LOWER_EXTREMITY",
+      "second_confidence": 0.27809250354766846,
+      "margin": 0.20544332265853882,
+      "top_predictions": [
+        {
+          "label": "ANKLE",
+          "probability": 0.4835
+        },
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.2781
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0358
+        },
+        {
+          "label": "HEEL",
+          "probability": 0.0288
+        },
+        {
+          "label": "FOOT",
+          "probability": 0.0286
+        }
+      ]
+    },
+    "dual_ensemble": {
+      "candidate": "ANKLE",
+      "confidence": 0.3965029716491699,
+      "second_candidate": "LOWER_EXTREMITY",
+      "second_confidence": 0.35538750886917114,
+      "margin": 0.04111546277999878,
+      "top_predictions": [
+        {
+          "label": "ANKLE",
+          "probability": 0.3965
+        },
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.3554
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0464
+        },
+        {
+          "label": "TIBIA",
+          "probability": 0.0254
+        },
+        {
+          "label": "FOOT",
+          "probability": 0.0232
+        }
+      ]
+    },
+    "api_response": {
+      "status": "unavailable",
+      "xray_result_id": "bc838457-63b7-43c1-b8be-c9bd3724e677",
+      "file_name": "09_ankle.png",
+      "message": "The image type could not be verified. No regional disease model was run. The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray.",
+      "region": "unknown",
+      "model_version": null,
+      "prediction": null,
+      "findings": [],
+      "confidence_if_valid": null,
+      "uncertainty": "The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray.",
+      "source": "unavailable",
+      "reason_code": "anatomy_unverified",
+      "diagnostic_message": "The image type could not be verified. No regional disease model was run.",
+      "image_anatomy_verification": {
+        "status": "UNVERIFIED",
+        "confirmation_required": true,
+        "next_action": "confirm_or_select_body_region",
+        "classification_status": "completed",
+        "anatomy_independently_verified": false,
+        "anatomy_classifier_accepted": false,
+        "classifier_gate_passed": false,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": true,
+        "regional_model_configured": false,
+        "regional_model_available": false,
+        "regional_model_name": null,
+        "regional_model_status": null,
+        "verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "lower extremity",
+        "body_part_confidence": 0.4327,
+        "confidence_threshold_validated": false,
+        "message": "The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray."
+      },
+      "image_type_detection": {
+        "success": true,
+        "class_count": 33,
+        "predicted_anatomy": "LOWER_EXTREMITY",
+        "confidence": 0.4327,
+        "prediction_status": "needs_confirmation",
+        "requires_user_confirmation": true,
+        "preprocessing_verified": false,
+        "warnings": [
+          "Prediction confidence (43.3%) is below the review threshold (60.0%).",
+          "Predicted anatomy 'LOWER_EXTREMITY' is a broad anatomical region; specific site confirmation is required.",
+          "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+        ],
+        "status": "unverified",
+        "body_part_label": null,
+        "candidate_body_part": "LOWER_EXTREMITY",
+        "body_part_confidence": 0.4327,
+        "second_candidate_body_part": "ANKLE",
+        "second_candidate_confidence": 0.3095,
+        "top_two_margin": 0.1232,
+        "confidence_threshold": 0.6,
+        "confidence_threshold_validated": false,
+        "top_two_margin_threshold": 0.1,
+        "top_two_margin_threshold_validated": false,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "colored_annotation_cleanup": {
+          "applied": false,
+          "method": "none",
+          "masked_pixel_fraction": 0.0,
+          "reason": "disabled"
+        },
+        "colored_cleanup_candidate": null,
+        "inference_view_selected": "original_upload_copy",
+        "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "anatomy_independently_verified": false,
+        "candidate_is_specific_anatomy": false,
+        "routing_requires_independent_verification": true,
+        "model_name": "convnext_tiny_onnx_33class",
+        "model_checkpoint": "model.onnx",
+        "model_license": "Apache-2.0; see upstream model card",
+        "device": "cpu",
+        "classifier_labels": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "supported_body_parts": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "top_predictions": [
+          {
+            "label": "LOWER_EXTREMITY",
+            "probability": 0.4327
+          },
+          {
+            "label": "ANKLE",
+            "probability": 0.3095
+          },
+          {
+            "label": "KNEE",
+            "probability": 0.057
+          },
+          {
+            "label": "TIBIA",
+            "probability": 0.0292
+          },
+          {
+            "label": "LEG",
+            "probability": 0.0287
+          }
+        ],
+        "message": "The anatomy classifier's best candidate is the broad region Lower Extremity (43.3%). This is not specific enough to select a regional abnormality model. Ask the user to confirm the exact X-ray body part; do not infer a specific site from this broad label.",
+        "image_name": "60afab639443435ea27089b9fe39d4f0.png",
+        "primary_classifier_result": {
+          "candidate_body_part": "LOWER_EXTREMITY",
+          "confidence": 0.4327,
+          "second_candidate_body_part": "ANKLE",
+          "second_candidate_confidence": 0.3095,
+          "top_two_margin": 0.1232,
+          "top_predictions": [
+            {
+              "label": "LOWER_EXTREMITY",
+              "probability": 0.4327
+            },
+            {
+              "label": "ANKLE",
+              "probability": 0.3095
+            },
+            {
+              "label": "KNEE",
+              "probability": 0.057
+            },
+            {
+              "label": "TIBIA",
+              "probability": 0.0292
+            },
+            {
+              "label": "LEG",
+              "probability": 0.0287
+            }
+          ],
+          "model_name": "convnext_tiny_onnx_33class"
+        },
+        "upper_extremity_refinement": {
+          "status": "rejected_anatomical_mismatch",
+          "reason_code": "incompatible_anatomical_region",
+          "primary_candidate": "LOWER_EXTREMITY",
+          "primary_confidence": 0.4327,
+          "candidate_body_part": "ELBOW",
+          "confidence": 0.8580527996058355,
+          "second_candidate_body_part": "FOREARM",
+          "second_confidence": 0.07878621952079067,
+          "top_two_margin": 0.7792665800850448,
+          "top_predictions": [
+            {
+              "label": "ELBOW",
+              "probability": 0.8581
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.0788
+            },
+            {
+              "label": "HUMERUS",
+              "probability": 0.0609
+            },
+            {
+              "label": "FINGER",
+              "probability": 0.0009
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0007
+            },
+            {
+              "label": "WRIST",
+              "probability": 0.0006
+            },
+            {
+              "label": "HAND",
+              "probability": 0.0001
+            }
+          ],
+          "confidence_threshold": 0.6,
+          "min_confidence_margin": 0.1,
+          "confidence_threshold_validated": false,
+          "model_name": "swin_tiny_mura_upper_extremity_7class",
+          "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+          "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+          "message": "The dedicated upper-extremity specialist predicted ELBOW (85.8%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (LOWER_EXTREMITY). The original primary candidate (LOWER_EXTREMITY) is preserved and requires explicit user confirmation."
+        }
+      },
+      "anatomy_metadata_persisted": true,
+      "anatomy_metadata": {
+        "status": "UNVERIFIED",
+        "classification_status": "completed",
+        "anatomy_classifier_accepted": false,
+        "classifier_gate_passed": false,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": false,
+        "regional_model_configured": false,
+        "regional_model_available": false,
+        "regional_model_name": null,
+        "regional_model_status": null,
+        "anatomy_user_confirmed": false,
+        "anatomy_verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "lower extremity",
+        "body_part_confidence": 0.4327,
+        "confidence_threshold_validated": false,
+        "preprocessing_id": null,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "model_artifact_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "model_size_bytes": null,
+        "model_input_shape": null,
+        "model_output_shape": null,
+        "output_score_semantics": null,
+        "classifier_version": "convnext_tiny_onnx_33class",
+        "top_candidates": [
+          {
+            "label": "LOWER_EXTREMITY",
+            "probability": 0.4327
+          },
+          {
+            "label": "ANKLE",
+            "probability": 0.3095
+          },
+          {
+            "label": "KNEE",
+            "probability": 0.057
+          },
+          {
+            "label": "TIBIA",
+            "probability": 0.0292
+          },
+          {
+            "label": "LEG",
+            "probability": 0.0287
+          }
+        ],
+        "classifier_output": {
+          "success": true,
+          "class_count": 33,
+          "predicted_anatomy": "LOWER_EXTREMITY",
+          "confidence": 0.4327,
+          "prediction_status": "needs_confirmation",
+          "requires_user_confirmation": true,
+          "preprocessing_verified": false,
+          "warnings": [
+            "Prediction confidence (43.3%) is below the review threshold (60.0%).",
+            "Predicted anatomy 'LOWER_EXTREMITY' is a broad anatomical region; specific site confirmation is required.",
+            "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+          ],
+          "status": "unverified",
+          "body_part_label": null,
+          "candidate_body_part": "LOWER_EXTREMITY",
+          "body_part_confidence": 0.4327,
+          "second_candidate_body_part": "ANKLE",
+          "second_candidate_confidence": 0.3095,
+          "top_two_margin": 0.1232,
+          "confidence_threshold": 0.6,
+          "confidence_threshold_validated": false,
+          "top_two_margin_threshold": 0.1,
+          "top_two_margin_threshold_validated": false,
+          "preprocessing_mode": "center_crop",
+          "preprocessing_verified_against_training": false,
+          "colored_annotation_cleanup": {
+            "applied": false,
+            "method": "none",
+            "masked_pixel_fraction": 0.0,
+            "reason": "disabled"
+          },
+          "colored_cleanup_candidate": null,
+          "inference_view_selected": "original_upload_copy",
+          "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+          "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+          "anatomy_independently_verified": false,
+          "candidate_is_specific_anatomy": false,
+          "routing_requires_independent_verification": true,
+          "model_name": "convnext_tiny_onnx_33class",
+          "model_checkpoint": "model.onnx",
+          "model_license": "Apache-2.0; see upstream model card",
+          "device": "cpu",
+          "classifier_labels": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "supported_body_parts": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "top_predictions": [
+            {
+              "label": "LOWER_EXTREMITY",
+              "probability": 0.4327
+            },
+            {
+              "label": "ANKLE",
+              "probability": 0.3095
+            },
+            {
+              "label": "KNEE",
+              "probability": 0.057
+            },
+            {
+              "label": "TIBIA",
+              "probability": 0.0292
+            },
+            {
+              "label": "LEG",
+              "probability": 0.0287
+            }
+          ],
+          "message": "The anatomy classifier's best candidate is the broad region Lower Extremity (43.3%). This is not specific enough to select a regional abnormality model. Ask the user to confirm the exact X-ray body part; do not infer a specific site from this broad label.",
+          "image_name": "60afab639443435ea27089b9fe39d4f0.png",
+          "primary_classifier_result": {
+            "candidate_body_part": "LOWER_EXTREMITY",
+            "confidence": 0.4327,
+            "second_candidate_body_part": "ANKLE",
+            "second_candidate_confidence": 0.3095,
+            "top_two_margin": 0.1232,
+            "top_predictions": [
+              {
+                "label": "LOWER_EXTREMITY",
+                "probability": 0.4327
+              },
+              {
+                "label": "ANKLE",
+                "probability": 0.3095
+              },
+              {
+                "label": "KNEE",
+                "probability": 0.057
+              },
+              {
+                "label": "TIBIA",
+                "probability": 0.0292
+              },
+              {
+                "label": "LEG",
+                "probability": 0.0287
+              }
+            ],
+            "model_name": "convnext_tiny_onnx_33class"
+          },
+          "upper_extremity_refinement": {
+            "status": "rejected_anatomical_mismatch",
+            "reason_code": "incompatible_anatomical_region",
+            "primary_candidate": "LOWER_EXTREMITY",
+            "primary_confidence": 0.4327,
+            "candidate_body_part": "ELBOW",
+            "confidence": 0.8580527996058355,
+            "second_candidate_body_part": "FOREARM",
+            "second_confidence": 0.07878621952079067,
+            "top_two_margin": 0.7792665800850448,
+            "top_predictions": [
+              {
+                "label": "ELBOW",
+                "probability": 0.8581
+              },
+              {
+                "label": "FOREARM",
+                "probability": 0.0788
+              },
+              {
+                "label": "HUMERUS",
+                "probability": 0.0609
+              },
+              {
+                "label": "FINGER",
+                "probability": 0.0009
+              },
+              {
+                "label": "SHOULDER",
+                "probability": 0.0007
+              },
+              {
+                "label": "WRIST",
+                "probability": 0.0006
+              },
+              {
+                "label": "HAND",
+                "probability": 0.0001
+              }
+            ],
+            "confidence_threshold": 0.6,
+            "min_confidence_margin": 0.1,
+            "confidence_threshold_validated": false,
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+            "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+            "message": "The dedicated upper-extremity specialist predicted ELBOW (85.8%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (LOWER_EXTREMITY). The original primary candidate (LOWER_EXTREMITY) is preserved and requires explicit user confirmation."
+          }
+        },
+        "image_sha256": "ca97b072585e449b3298111352da7f5018b4d7a76d238ffeef33529271be8636"
+      },
+      "detected_region": null,
+      "candidate_region": "lower extremity",
+      "region_source": "image_classifier",
+      "is_broad_region": false,
+      "broad_region_classifier_accepted": false,
+      "specific_region_confirmation_required": true,
+      "anatomy_verification_status": "unverified",
+      "classification_status": "completed",
+      "anatomy_independently_verified": false,
+      "anatomy_classifier_accepted": false,
+      "classifier_gate_passed": false,
+      "regional_model_configured": false,
+      "regional_model_available": false,
+      "regional_model_name": null,
+      "regional_model_status": null,
+      "anatomy_verification_method": null,
+      "anatomy_confirmation_required": true,
+      "next_action": "confirm_or_select_body_region",
+      "body_part_confidence": 0.4327,
+      "report_region_verification": {
+        "status": "UNVERIFIED",
+        "detected_image_region": null,
+        "report_regions": [],
+        "unrecognized_report_region_count": 0,
+        "association_scope": "AMBIGUOUS_OR_INCOMPLETE",
+        "association_explicitly_confirmed": false,
+        "region_compatible": false,
+        "can_combine": false,
+        "message": "The image/report relationship could not be uniquely verified. Keep report findings separate from image-model predictions until the correct pair is confirmed."
+      },
+      "primary_prediction": {
+        "candidate_body_part": "LOWER_EXTREMITY",
+        "confidence": 0.4327
+      },
+      "specialist_prediction": {
+        "candidate_body_part": "ELBOW",
+        "confidence": 0.8580527996058355,
+        "status": "rejected_anatomical_mismatch",
+        "reason_code": "incompatible_anatomical_region",
+        "message": "The dedicated upper-extremity specialist predicted ELBOW (85.8%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (LOWER_EXTREMITY). The original primary candidate (LOWER_EXTREMITY) is preserved and requires explicit user confirmation."
+      }
+    }
+  },
+  "15_ankle.png": {
+    "filename": "15_ankle.png",
+    "path": "d:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\b0a43092ef5645b09bd64fbf754fe571.png",
+    "sha256": "74ce702cdc8467e2cb20b4a96a8e1906ed1c5dbbec64f93721a37b735b785e4d",
+    "ground_truth": "ANKLE",
+    "center_crop": {
+      "candidate": "ANKLE",
+      "confidence": 0.554462194442749,
+      "second_candidate": "LOWER_EXTREMITY",
+      "second_confidence": 0.18248920142650604,
+      "margin": 0.371972993016243,
+      "top_predictions": [
+        {
+          "label": "ANKLE",
+          "probability": 0.5545
+        },
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.1825
+        },
+        {
+          "label": "TIBIA",
+          "probability": 0.05
+        },
+        {
+          "label": "LEG",
+          "probability": 0.0351
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0242
+        }
+      ]
+    },
+    "letterbox": {
+      "candidate": "ANKLE",
+      "confidence": 0.6244032979011536,
+      "second_candidate": "LOWER_EXTREMITY",
+      "second_confidence": 0.146799236536026,
+      "margin": 0.47760406136512756,
+      "top_predictions": [
+        {
+          "label": "ANKLE",
+          "probability": 0.6244
+        },
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.1468
+        },
+        {
+          "label": "HEEL",
+          "probability": 0.027
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0252
+        },
+        {
+          "label": "TIBIA",
+          "probability": 0.0244
+        }
+      ]
+    },
+    "dual_ensemble": {
+      "candidate": "ANKLE",
+      "confidence": 0.5894327163696289,
+      "second_candidate": "LOWER_EXTREMITY",
+      "second_confidence": 0.16464421153068542,
+      "margin": 0.4247885048389435,
+      "top_predictions": [
+        {
+          "label": "ANKLE",
+          "probability": 0.5894
+        },
+        {
+          "label": "LOWER_EXTREMITY",
+          "probability": 0.1646
+        },
+        {
+          "label": "TIBIA",
+          "probability": 0.0372
+        },
+        {
+          "label": "LEG",
+          "probability": 0.0277
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0247
+        }
+      ]
+    },
+    "api_response": {
+      "status": "unavailable",
+      "xray_result_id": "0edd2f3b-203f-4865-83eb-f05bebd4b12b",
+      "file_name": "15_ankle.png",
+      "message": "The image type could not be verified. No regional disease model was run. The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray.",
+      "region": "unknown",
+      "model_version": null,
+      "prediction": null,
+      "findings": [],
+      "confidence_if_valid": null,
+      "uncertainty": "The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray.",
+      "source": "unavailable",
+      "reason_code": "anatomy_unverified",
+      "diagnostic_message": "The image type could not be verified. No regional disease model was run.",
+      "image_anatomy_verification": {
+        "status": "UNVERIFIED",
+        "confirmation_required": true,
+        "next_action": "confirm_or_select_body_region",
+        "classification_status": "completed",
+        "anatomy_independently_verified": false,
+        "anatomy_classifier_accepted": false,
+        "classifier_gate_passed": false,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": true,
+        "regional_model_configured": false,
+        "regional_model_available": false,
+        "regional_model_name": null,
+        "regional_model_status": null,
+        "verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "ankle",
+        "body_part_confidence": 0.5545,
+        "confidence_threshold_validated": false,
+        "message": "The candidate body region did not meet the required confidence threshold (60%). No regional interpretation model was selected. Please confirm the region or upload a clearer X-ray."
+      },
+      "image_type_detection": {
+        "success": true,
+        "class_count": 33,
+        "predicted_anatomy": "ANKLE",
+        "confidence": 0.5545,
+        "prediction_status": "needs_confirmation",
+        "requires_user_confirmation": true,
+        "preprocessing_verified": false,
+        "warnings": [
+          "Prediction confidence (55.4%) is below the review threshold (60.0%).",
+          "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+        ],
+        "status": "unverified",
+        "body_part_label": null,
+        "candidate_body_part": "ANKLE",
+        "body_part_confidence": 0.5545,
+        "second_candidate_body_part": "LOWER_EXTREMITY",
+        "second_candidate_confidence": 0.1825,
+        "top_two_margin": 0.372,
+        "confidence_threshold": 0.6,
+        "confidence_threshold_validated": false,
+        "top_two_margin_threshold": 0.1,
+        "top_two_margin_threshold_validated": false,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "colored_annotation_cleanup": {
+          "applied": false,
+          "method": "none",
+          "masked_pixel_fraction": 0.0,
+          "reason": "disabled"
+        },
+        "colored_cleanup_candidate": null,
+        "inference_view_selected": "original_upload_copy",
+        "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "anatomy_independently_verified": false,
+        "candidate_is_specific_anatomy": true,
+        "routing_requires_independent_verification": true,
+        "model_name": "convnext_tiny_onnx_33class",
+        "model_checkpoint": "model.onnx",
+        "model_license": "Apache-2.0; see upstream model card",
+        "device": "cpu",
+        "classifier_labels": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "supported_body_parts": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "top_predictions": [
+          {
+            "label": "ANKLE",
+            "probability": 0.5545
+          },
+          {
+            "label": "LOWER_EXTREMITY",
+            "probability": 0.1825
+          },
+          {
+            "label": "TIBIA",
+            "probability": 0.05
+          },
+          {
+            "label": "LEG",
+            "probability": 0.0351
+          },
+          {
+            "label": "KNEE",
+            "probability": 0.0242
+          }
+        ],
+        "message": "The anatomy classifier's best candidate is Ankle (55.4%). Verification requires score >= 60.0% and top-two margin >= 10.0%; observed margin is 37.2%. Anatomy remains unverified; no regional abnormality model should be selected automatically.",
+        "image_name": "f02526c8e38c4a0da68b7f9252851103.png",
+        "primary_classifier_result": {
+          "candidate_body_part": "ANKLE",
+          "confidence": 0.5545,
+          "second_candidate_body_part": "LOWER_EXTREMITY",
+          "second_candidate_confidence": 0.1825,
+          "top_two_margin": 0.372,
+          "top_predictions": [
+            {
+              "label": "ANKLE",
+              "probability": 0.5545
+            },
+            {
+              "label": "LOWER_EXTREMITY",
+              "probability": 0.1825
+            },
+            {
+              "label": "TIBIA",
+              "probability": 0.05
+            },
+            {
+              "label": "LEG",
+              "probability": 0.0351
+            },
+            {
+              "label": "KNEE",
+              "probability": 0.0242
+            }
+          ],
+          "model_name": "convnext_tiny_onnx_33class"
+        },
+        "upper_extremity_refinement": {
+          "status": "rejected_anatomical_mismatch",
+          "reason_code": "incompatible_anatomical_region",
+          "primary_candidate": "ANKLE",
+          "primary_confidence": 0.5545,
+          "candidate_body_part": "ELBOW",
+          "confidence": 0.5926533205083688,
+          "second_candidate_body_part": "FOREARM",
+          "second_confidence": 0.2216127091969956,
+          "top_two_margin": 0.3710406113113732,
+          "top_predictions": [
+            {
+              "label": "ELBOW",
+              "probability": 0.5927
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.2216
+            },
+            {
+              "label": "HUMERUS",
+              "probability": 0.1818
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0018
+            },
+            {
+              "label": "WRIST",
+              "probability": 0.0012
+            },
+            {
+              "label": "FINGER",
+              "probability": 0.0008
+            },
+            {
+              "label": "HAND",
+              "probability": 0.0001
+            }
+          ],
+          "confidence_threshold": 0.6,
+          "min_confidence_margin": 0.1,
+          "confidence_threshold_validated": false,
+          "model_name": "swin_tiny_mura_upper_extremity_7class",
+          "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+          "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+          "message": "The dedicated upper-extremity specialist predicted ELBOW (59.3%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (ANKLE). The original primary candidate (ANKLE) is preserved and requires explicit user confirmation."
+        }
+      },
+      "anatomy_metadata_persisted": true,
+      "anatomy_metadata": {
+        "status": "UNVERIFIED",
+        "classification_status": "completed",
+        "anatomy_classifier_accepted": false,
+        "classifier_gate_passed": false,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": false,
+        "regional_model_configured": false,
+        "regional_model_available": false,
+        "regional_model_name": null,
+        "regional_model_status": null,
+        "anatomy_user_confirmed": false,
+        "anatomy_verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "ankle",
+        "body_part_confidence": 0.5545,
+        "confidence_threshold_validated": false,
+        "preprocessing_id": null,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "model_artifact_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "model_size_bytes": null,
+        "model_input_shape": null,
+        "model_output_shape": null,
+        "output_score_semantics": null,
+        "classifier_version": "convnext_tiny_onnx_33class",
+        "top_candidates": [
+          {
+            "label": "ANKLE",
+            "probability": 0.5545
+          },
+          {
+            "label": "LOWER_EXTREMITY",
+            "probability": 0.1825
+          },
+          {
+            "label": "TIBIA",
+            "probability": 0.05
+          },
+          {
+            "label": "LEG",
+            "probability": 0.0351
+          },
+          {
+            "label": "KNEE",
+            "probability": 0.0242
+          }
+        ],
+        "classifier_output": {
+          "success": true,
+          "class_count": 33,
+          "predicted_anatomy": "ANKLE",
+          "confidence": 0.5545,
+          "prediction_status": "needs_confirmation",
+          "requires_user_confirmation": true,
+          "preprocessing_verified": false,
+          "warnings": [
+            "Prediction confidence (55.4%) is below the review threshold (60.0%).",
+            "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+          ],
+          "status": "unverified",
+          "body_part_label": null,
+          "candidate_body_part": "ANKLE",
+          "body_part_confidence": 0.5545,
+          "second_candidate_body_part": "LOWER_EXTREMITY",
+          "second_candidate_confidence": 0.1825,
+          "top_two_margin": 0.372,
+          "confidence_threshold": 0.6,
+          "confidence_threshold_validated": false,
+          "top_two_margin_threshold": 0.1,
+          "top_two_margin_threshold_validated": false,
+          "preprocessing_mode": "center_crop",
+          "preprocessing_verified_against_training": false,
+          "colored_annotation_cleanup": {
+            "applied": false,
+            "method": "none",
+            "masked_pixel_fraction": 0.0,
+            "reason": "disabled"
+          },
+          "colored_cleanup_candidate": null,
+          "inference_view_selected": "original_upload_copy",
+          "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+          "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+          "anatomy_independently_verified": false,
+          "candidate_is_specific_anatomy": true,
+          "routing_requires_independent_verification": true,
+          "model_name": "convnext_tiny_onnx_33class",
+          "model_checkpoint": "model.onnx",
+          "model_license": "Apache-2.0; see upstream model card",
+          "device": "cpu",
+          "classifier_labels": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "supported_body_parts": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "top_predictions": [
+            {
+              "label": "ANKLE",
+              "probability": 0.5545
+            },
+            {
+              "label": "LOWER_EXTREMITY",
+              "probability": 0.1825
+            },
+            {
+              "label": "TIBIA",
+              "probability": 0.05
+            },
+            {
+              "label": "LEG",
+              "probability": 0.0351
+            },
+            {
+              "label": "KNEE",
+              "probability": 0.0242
+            }
+          ],
+          "message": "The anatomy classifier's best candidate is Ankle (55.4%). Verification requires score >= 60.0% and top-two margin >= 10.0%; observed margin is 37.2%. Anatomy remains unverified; no regional abnormality model should be selected automatically.",
+          "image_name": "f02526c8e38c4a0da68b7f9252851103.png",
+          "primary_classifier_result": {
+            "candidate_body_part": "ANKLE",
+            "confidence": 0.5545,
+            "second_candidate_body_part": "LOWER_EXTREMITY",
+            "second_candidate_confidence": 0.1825,
+            "top_two_margin": 0.372,
+            "top_predictions": [
+              {
+                "label": "ANKLE",
+                "probability": 0.5545
+              },
+              {
+                "label": "LOWER_EXTREMITY",
+                "probability": 0.1825
+              },
+              {
+                "label": "TIBIA",
+                "probability": 0.05
+              },
+              {
+                "label": "LEG",
+                "probability": 0.0351
+              },
+              {
+                "label": "KNEE",
+                "probability": 0.0242
+              }
+            ],
+            "model_name": "convnext_tiny_onnx_33class"
+          },
+          "upper_extremity_refinement": {
+            "status": "rejected_anatomical_mismatch",
+            "reason_code": "incompatible_anatomical_region",
+            "primary_candidate": "ANKLE",
+            "primary_confidence": 0.5545,
+            "candidate_body_part": "ELBOW",
+            "confidence": 0.5926533205083688,
+            "second_candidate_body_part": "FOREARM",
+            "second_confidence": 0.2216127091969956,
+            "top_two_margin": 0.3710406113113732,
+            "top_predictions": [
+              {
+                "label": "ELBOW",
+                "probability": 0.5927
+              },
+              {
+                "label": "FOREARM",
+                "probability": 0.2216
+              },
+              {
+                "label": "HUMERUS",
+                "probability": 0.1818
+              },
+              {
+                "label": "SHOULDER",
+                "probability": 0.0018
+              },
+              {
+                "label": "WRIST",
+                "probability": 0.0012
+              },
+              {
+                "label": "FINGER",
+                "probability": 0.0008
+              },
+              {
+                "label": "HAND",
+                "probability": 0.0001
+              }
+            ],
+            "confidence_threshold": 0.6,
+            "min_confidence_margin": 0.1,
+            "confidence_threshold_validated": false,
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+            "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+            "message": "The dedicated upper-extremity specialist predicted ELBOW (59.3%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (ANKLE). The original primary candidate (ANKLE) is preserved and requires explicit user confirmation."
+          }
+        },
+        "image_sha256": "74ce702cdc8467e2cb20b4a96a8e1906ed1c5dbbec64f93721a37b735b785e4d"
+      },
+      "detected_region": null,
+      "candidate_region": "ankle",
+      "region_source": "image_classifier",
+      "is_broad_region": false,
+      "broad_region_classifier_accepted": false,
+      "specific_region_confirmation_required": true,
+      "anatomy_verification_status": "unverified",
+      "classification_status": "completed",
+      "anatomy_independently_verified": false,
+      "anatomy_classifier_accepted": false,
+      "classifier_gate_passed": false,
+      "regional_model_configured": false,
+      "regional_model_available": false,
+      "regional_model_name": null,
+      "regional_model_status": null,
+      "anatomy_verification_method": null,
+      "anatomy_confirmation_required": true,
+      "next_action": "confirm_or_select_body_region",
+      "body_part_confidence": 0.5545,
+      "report_region_verification": {
+        "status": "UNVERIFIED",
+        "detected_image_region": null,
+        "report_regions": [],
+        "unrecognized_report_region_count": 0,
+        "association_scope": "AMBIGUOUS_OR_INCOMPLETE",
+        "association_explicitly_confirmed": false,
+        "region_compatible": false,
+        "can_combine": false,
+        "message": "The image/report relationship could not be uniquely verified. Keep report findings separate from image-model predictions until the correct pair is confirmed."
+      },
+      "primary_prediction": {
+        "candidate_body_part": "ANKLE",
+        "confidence": 0.5545
+      },
+      "specialist_prediction": {
+        "candidate_body_part": "ELBOW",
+        "confidence": 0.5926533205083688,
+        "status": "rejected_anatomical_mismatch",
+        "reason_code": "incompatible_anatomical_region",
+        "message": "The dedicated upper-extremity specialist predicted ELBOW (59.3%), but this was rejected as an anatomical mismatch: an upper-extremity specialist cannot override a lower-extremity candidate (ANKLE). The original primary candidate (ANKLE) is preserved and requires explicit user confirmation."
+      }
+    }
+  },
+  "19_hand.png": {
+    "filename": "19_hand.png",
+    "path": "d:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\f5766c844fca47709d5450bce3f68cab.png",
+    "sha256": "fabdc39f2d0bc6fd199fb4d289d6f70a4018c7cf80ca577bea8e0ac6a996578b",
+    "ground_truth": "HAND",
+    "center_crop": {
+      "candidate": "HAND",
+      "confidence": 0.7024094462394714,
+      "second_candidate": "ELBOW",
+      "second_confidence": 0.16281235218048096,
+      "margin": 0.5395970940589905,
+      "top_predictions": [
+        {
+          "label": "HAND",
+          "probability": 0.7024
+        },
+        {
+          "label": "ELBOW",
+          "probability": 0.1628
+        },
+        {
+          "label": "WRIST",
+          "probability": 0.0249
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.014
+        },
+        {
+          "label": "SHOULDER",
+          "probability": 0.0118
+        }
+      ]
+    },
+    "letterbox": {
+      "candidate": "HAND",
+      "confidence": 0.831976592540741,
+      "second_candidate": "ELBOW",
+      "second_confidence": 0.0631377175450325,
+      "margin": 0.7688388749957085,
+      "top_predictions": [
+        {
+          "label": "HAND",
+          "probability": 0.832
+        },
+        {
+          "label": "ELBOW",
+          "probability": 0.0631
+        },
+        {
+          "label": "WRIST",
+          "probability": 0.0119
+        },
+        {
+          "label": "SHOULDER",
+          "probability": 0.0111
+        },
+        {
+          "label": "FINGER",
+          "probability": 0.0087
+        }
+      ]
+    },
+    "dual_ensemble": {
+      "candidate": "HAND",
+      "confidence": 0.7671930193901062,
+      "second_candidate": "ELBOW",
+      "second_confidence": 0.11297503113746643,
+      "margin": 0.6542179882526398,
+      "top_predictions": [
+        {
+          "label": "HAND",
+          "probability": 0.7672
+        },
+        {
+          "label": "ELBOW",
+          "probability": 0.113
+        },
+        {
+          "label": "WRIST",
+          "probability": 0.0184
+        },
+        {
+          "label": "SHOULDER",
+          "probability": 0.0114
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0089
+        }
+      ]
+    },
+    "api_response": {
+      "status": "unavailable",
+      "xray_result_id": "699c7981-b0ac-4ee0-b0dd-46efc71cd599",
+      "file_name": "19_hand.png",
+      "message": "The image classifier suggested a body region, but a specific body region still needs confirmation. No regional disease model was run. The image classifier suggests Hand (score: 97.2%, classifier gate passed). A compatible regional interpretation model (Hand) is configured and available. Confirm the specific X-ray region to proceed with interpretation. The classifier score is not independent clinical verification or a diagnosis.",
+      "region": "unknown",
+      "model_version": null,
+      "prediction": null,
+      "findings": [],
+      "confidence_if_valid": null,
+      "uncertainty": "The image classifier suggests Hand (score: 97.2%, classifier gate passed). A compatible regional interpretation model (Hand) is configured and available. Confirm the specific X-ray region to proceed with interpretation. The classifier score is not independent clinical verification or a diagnosis.",
+      "source": "unavailable",
+      "reason_code": "anatomy_confirmation_required",
+      "diagnostic_message": "The image classifier suggested a body region, but a specific body region still needs confirmation. No regional disease model was run.",
+      "image_anatomy_verification": {
+        "status": "CONFIRMATION_REQUIRED",
+        "confirmation_required": true,
+        "next_action": "confirm_or_select_body_region",
+        "classification_status": "completed",
+        "anatomy_independently_verified": false,
+        "anatomy_classifier_accepted": true,
+        "classifier_gate_passed": true,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": true,
+        "regional_model_configured": true,
+        "regional_model_available": true,
+        "regional_model_name": "Hand",
+        "regional_model_status": "configured_and_available",
+        "verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "hand",
+        "body_part_confidence": 0.9722537045350644,
+        "confidence_threshold_validated": false,
+        "message": "The image classifier suggests Hand (score: 97.2%, classifier gate passed). A compatible regional interpretation model (Hand) is configured and available. Confirm the specific X-ray region to proceed with interpretation. The classifier score is not independent clinical verification or a diagnosis."
+      },
+      "image_type_detection": {
+        "success": true,
+        "class_count": 33,
+        "predicted_anatomy": "HAND",
+        "confidence": 0.7024,
+        "prediction_status": "completed",
+        "requires_user_confirmation": true,
+        "preprocessing_verified": false,
+        "warnings": [
+          "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+        ],
+        "status": "completed",
+        "body_part_label": "HAND",
+        "candidate_body_part": "HAND",
+        "body_part_confidence": 0.9722537045350644,
+        "second_candidate_body_part": "FINGER",
+        "second_candidate_confidence": 0.02773635328776502,
+        "top_two_margin": 0.9445173512472994,
+        "confidence_threshold": 0.6,
+        "confidence_threshold_validated": false,
+        "top_two_margin_threshold": 0.1,
+        "top_two_margin_threshold_validated": false,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "colored_annotation_cleanup": {
+          "applied": false,
+          "method": "none",
+          "masked_pixel_fraction": 0.0,
+          "reason": "disabled"
+        },
+        "colored_cleanup_candidate": null,
+        "inference_view_selected": "original_upload_copy",
+        "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "anatomy_independently_verified": false,
+        "candidate_is_specific_anatomy": true,
+        "routing_requires_independent_verification": true,
+        "model_name": "convnext_tiny_onnx_33class",
+        "model_checkpoint": "model.onnx",
+        "model_license": "Apache-2.0; see upstream model card",
+        "device": "cpu",
+        "classifier_labels": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "supported_body_parts": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "top_predictions": [
+          {
+            "label": "HAND",
+            "probability": 0.9723
+          },
+          {
+            "label": "FINGER",
+            "probability": 0.0277
+          },
+          {
+            "label": "WRIST",
+            "probability": 0.0
+          },
+          {
+            "label": "HUMERUS",
+            "probability": 0.0
+          },
+          {
+            "label": "SHOULDER",
+            "probability": 0.0
+          },
+          {
+            "label": "FOREARM",
+            "probability": 0.0
+          },
+          {
+            "label": "ELBOW",
+            "probability": 0.0
+          }
+        ],
+        "message": "The primary classifier returned HAND and a dedicated upper-extremity classifier refined the candidate to HAND (97.2% specialist score). The specialist score is not a clinical probability.",
+        "image_name": "4a84bf0109814d828259d98b68018d44.png",
+        "primary_classifier_result": {
+          "candidate_body_part": "HAND",
+          "confidence": 0.7024,
+          "second_candidate_body_part": "ELBOW",
+          "second_candidate_confidence": 0.1628,
+          "top_two_margin": 0.5396,
+          "top_predictions": [
+            {
+              "label": "HAND",
+              "probability": 0.7024
+            },
+            {
+              "label": "ELBOW",
+              "probability": 0.1628
+            },
+            {
+              "label": "WRIST",
+              "probability": 0.0249
+            },
+            {
+              "label": "KNEE",
+              "probability": 0.014
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0118
+            }
+          ],
+          "model_name": "convnext_tiny_onnx_33class"
+        },
+        "upper_extremity_refinement": {
+          "status": "accepted",
+          "reason_code": null,
+          "primary_candidate": "HAND",
+          "primary_confidence": 0.7024,
+          "candidate_body_part": "HAND",
+          "confidence": 0.9722537045350644,
+          "second_candidate_body_part": "FINGER",
+          "second_confidence": 0.02773635328776502,
+          "top_two_margin": 0.9445173512472994,
+          "top_predictions": [
+            {
+              "label": "HAND",
+              "probability": 0.9723
+            },
+            {
+              "label": "FINGER",
+              "probability": 0.0277
+            },
+            {
+              "label": "WRIST",
+              "probability": 0.0
+            },
+            {
+              "label": "HUMERUS",
+              "probability": 0.0
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.0
+            },
+            {
+              "label": "ELBOW",
+              "probability": 0.0
+            }
+          ],
+          "confidence_threshold": 0.6,
+          "min_confidence_margin": 0.1,
+          "confidence_threshold_validated": false,
+          "model_name": "swin_tiny_mura_upper_extremity_7class",
+          "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+          "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+          "message": "The dedicated upper-extremity classifier passed its provisional confidence and margin gates."
+        },
+        "min_confidence_margin": 0.1,
+        "refined_by_model_name": "swin_tiny_mura_upper_extremity_7class",
+        "refined_by_model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+        "refined_preprocessing_id": "rgb_resize224_imagenet_norm_v1"
+      },
+      "anatomy_metadata_persisted": true,
+      "anatomy_metadata": {
+        "status": "CONFIRMATION_REQUIRED",
+        "classification_status": "completed",
+        "anatomy_classifier_accepted": true,
+        "classifier_gate_passed": true,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": true,
+        "regional_model_configured": true,
+        "regional_model_available": true,
+        "regional_model_name": "Hand",
+        "regional_model_status": "configured_and_available",
+        "anatomy_user_confirmed": false,
+        "anatomy_verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "hand",
+        "body_part_confidence": 0.9722537045350644,
+        "confidence_threshold_validated": false,
+        "preprocessing_id": null,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "model_artifact_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "model_size_bytes": null,
+        "model_input_shape": null,
+        "model_output_shape": null,
+        "output_score_semantics": null,
+        "classifier_version": "convnext_tiny_onnx_33class",
+        "top_candidates": [
+          {
+            "label": "HAND",
+            "probability": 0.9723
+          },
+          {
+            "label": "FINGER",
+            "probability": 0.0277
+          },
+          {
+            "label": "WRIST",
+            "probability": 0.0
+          },
+          {
+            "label": "HUMERUS",
+            "probability": 0.0
+          },
+          {
+            "label": "SHOULDER",
+            "probability": 0.0
+          },
+          {
+            "label": "FOREARM",
+            "probability": 0.0
+          },
+          {
+            "label": "ELBOW",
+            "probability": 0.0
+          }
+        ],
+        "classifier_output": {
+          "success": true,
+          "class_count": 33,
+          "predicted_anatomy": "HAND",
+          "confidence": 0.7024,
+          "prediction_status": "completed",
+          "requires_user_confirmation": true,
+          "preprocessing_verified": false,
+          "warnings": [
+            "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+          ],
+          "status": "completed",
+          "body_part_label": "HAND",
+          "candidate_body_part": "HAND",
+          "body_part_confidence": 0.9722537045350644,
+          "second_candidate_body_part": "FINGER",
+          "second_candidate_confidence": 0.02773635328776502,
+          "top_two_margin": 0.9445173512472994,
+          "confidence_threshold": 0.6,
+          "confidence_threshold_validated": false,
+          "top_two_margin_threshold": 0.1,
+          "top_two_margin_threshold_validated": false,
+          "preprocessing_mode": "center_crop",
+          "preprocessing_verified_against_training": false,
+          "colored_annotation_cleanup": {
+            "applied": false,
+            "method": "none",
+            "masked_pixel_fraction": 0.0,
+            "reason": "disabled"
+          },
+          "colored_cleanup_candidate": null,
+          "inference_view_selected": "original_upload_copy",
+          "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+          "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+          "anatomy_independently_verified": false,
+          "candidate_is_specific_anatomy": true,
+          "routing_requires_independent_verification": true,
+          "model_name": "convnext_tiny_onnx_33class",
+          "model_checkpoint": "model.onnx",
+          "model_license": "Apache-2.0; see upstream model card",
+          "device": "cpu",
+          "classifier_labels": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "supported_body_parts": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "top_predictions": [
+            {
+              "label": "HAND",
+              "probability": 0.9723
+            },
+            {
+              "label": "FINGER",
+              "probability": 0.0277
+            },
+            {
+              "label": "WRIST",
+              "probability": 0.0
+            },
+            {
+              "label": "HUMERUS",
+              "probability": 0.0
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.0
+            },
+            {
+              "label": "ELBOW",
+              "probability": 0.0
+            }
+          ],
+          "message": "The primary classifier returned HAND and a dedicated upper-extremity classifier refined the candidate to HAND (97.2% specialist score). The specialist score is not a clinical probability.",
+          "image_name": "4a84bf0109814d828259d98b68018d44.png",
+          "primary_classifier_result": {
+            "candidate_body_part": "HAND",
+            "confidence": 0.7024,
+            "second_candidate_body_part": "ELBOW",
+            "second_candidate_confidence": 0.1628,
+            "top_two_margin": 0.5396,
+            "top_predictions": [
+              {
+                "label": "HAND",
+                "probability": 0.7024
+              },
+              {
+                "label": "ELBOW",
+                "probability": 0.1628
+              },
+              {
+                "label": "WRIST",
+                "probability": 0.0249
+              },
+              {
+                "label": "KNEE",
+                "probability": 0.014
+              },
+              {
+                "label": "SHOULDER",
+                "probability": 0.0118
+              }
+            ],
+            "model_name": "convnext_tiny_onnx_33class"
+          },
+          "upper_extremity_refinement": {
+            "status": "accepted",
+            "reason_code": null,
+            "primary_candidate": "HAND",
+            "primary_confidence": 0.7024,
+            "candidate_body_part": "HAND",
+            "confidence": 0.9722537045350644,
+            "second_candidate_body_part": "FINGER",
+            "second_confidence": 0.02773635328776502,
+            "top_two_margin": 0.9445173512472994,
+            "top_predictions": [
+              {
+                "label": "HAND",
+                "probability": 0.9723
+              },
+              {
+                "label": "FINGER",
+                "probability": 0.0277
+              },
+              {
+                "label": "WRIST",
+                "probability": 0.0
+              },
+              {
+                "label": "HUMERUS",
+                "probability": 0.0
+              },
+              {
+                "label": "SHOULDER",
+                "probability": 0.0
+              },
+              {
+                "label": "FOREARM",
+                "probability": 0.0
+              },
+              {
+                "label": "ELBOW",
+                "probability": 0.0
+              }
+            ],
+            "confidence_threshold": 0.6,
+            "min_confidence_margin": 0.1,
+            "confidence_threshold_validated": false,
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+            "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+            "message": "The dedicated upper-extremity classifier passed its provisional confidence and margin gates."
+          },
+          "min_confidence_margin": 0.1,
+          "refined_by_model_name": "swin_tiny_mura_upper_extremity_7class",
+          "refined_by_model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+          "refined_preprocessing_id": "rgb_resize224_imagenet_norm_v1"
+        },
+        "image_sha256": "fabdc39f2d0bc6fd199fb4d289d6f70a4018c7cf80ca577bea8e0ac6a996578b"
+      },
+      "detected_region": null,
+      "candidate_region": "hand",
+      "region_source": "image_classifier",
+      "is_broad_region": false,
+      "broad_region_classifier_accepted": false,
+      "specific_region_confirmation_required": true,
+      "anatomy_verification_status": "confirmation_required",
+      "classification_status": "completed",
+      "anatomy_independently_verified": false,
+      "anatomy_classifier_accepted": true,
+      "classifier_gate_passed": true,
+      "regional_model_configured": true,
+      "regional_model_available": true,
+      "regional_model_name": "Hand",
+      "regional_model_status": "configured_and_available",
+      "anatomy_verification_method": null,
+      "anatomy_confirmation_required": true,
+      "next_action": "confirm_or_select_body_region",
+      "body_part_confidence": 0.9722537045350644,
+      "report_region_verification": {
+        "status": "UNVERIFIED",
+        "detected_image_region": null,
+        "report_regions": [],
+        "unrecognized_report_region_count": 0,
+        "association_scope": "AMBIGUOUS_OR_INCOMPLETE",
+        "association_explicitly_confirmed": false,
+        "region_compatible": false,
+        "can_combine": false,
+        "message": "The image/report relationship could not be uniquely verified. Keep report findings separate from image-model predictions until the correct pair is confirmed."
+      },
+      "primary_prediction": {
+        "candidate_body_part": "HAND",
+        "confidence": 0.7024
+      },
+      "specialist_prediction": {
+        "candidate_body_part": "HAND",
+        "confidence": 0.9722537045350644,
+        "status": "accepted",
+        "reason_code": null,
+        "message": "The dedicated upper-extremity classifier passed its provisional confidence and margin gates."
+      }
+    }
+  },
+  "Normal Hand and Wrist X-ray.png": {
+    "filename": "Normal Hand and Wrist X-ray.png",
+    "path": "d:\\projects\\MEDISENSE_AI\\backend\\uploads\\xrays\\1a651f4f4b1f473ab44ed7261f9334a4.png",
+    "sha256": "bfba1fed2e0393a9fb9cc460ad0541787e5295d218c75fcab914042426fef583",
+    "ground_truth": "WRIST",
+    "center_crop": {
+      "candidate": "WRIST",
+      "confidence": 0.5753415822982788,
+      "second_candidate": "HAND",
+      "second_confidence": 0.16869911551475525,
+      "margin": 0.40664246678352356,
+      "top_predictions": [
+        {
+          "label": "WRIST",
+          "probability": 0.5753
+        },
+        {
+          "label": "HAND",
+          "probability": 0.1687
+        },
+        {
+          "label": "EXTREMITY",
+          "probability": 0.0547
+        },
+        {
+          "label": "ELBOW",
+          "probability": 0.0415
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0229
+        }
+      ]
+    },
+    "letterbox": {
+      "candidate": "WRIST",
+      "confidence": 0.598892867565155,
+      "second_candidate": "HAND",
+      "second_confidence": 0.1570872813463211,
+      "margin": 0.4418055862188339,
+      "top_predictions": [
+        {
+          "label": "WRIST",
+          "probability": 0.5989
+        },
+        {
+          "label": "HAND",
+          "probability": 0.1571
+        },
+        {
+          "label": "EXTREMITY",
+          "probability": 0.0678
+        },
+        {
+          "label": "ELBOW",
+          "probability": 0.0265
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0203
+        }
+      ]
+    },
+    "dual_ensemble": {
+      "candidate": "WRIST",
+      "confidence": 0.5871171951293945,
+      "second_candidate": "HAND",
+      "second_confidence": 0.16289320588111877,
+      "margin": 0.42422398924827576,
+      "top_predictions": [
+        {
+          "label": "WRIST",
+          "probability": 0.5871
+        },
+        {
+          "label": "HAND",
+          "probability": 0.1629
+        },
+        {
+          "label": "EXTREMITY",
+          "probability": 0.0613
+        },
+        {
+          "label": "ELBOW",
+          "probability": 0.034
+        },
+        {
+          "label": "KNEE",
+          "probability": 0.0216
+        }
+      ]
+    },
+    "api_response": {
+      "status": "unavailable",
+      "xray_result_id": "e0b128a2-c425-48f6-94e2-43ccd7530e64",
+      "file_name": "Normal Hand and Wrist X-ray.png",
+      "message": "The image classifier suggested a body region, but a specific body region still needs confirmation. No regional disease model was run. The image classifier suggests Wrist (score: 99.9%, classifier gate passed). A compatible regional interpretation model (Wrist) is configured and available. Confirm the specific X-ray region to proceed with interpretation. The classifier score is not independent clinical verification or a diagnosis.",
+      "region": "unknown",
+      "model_version": null,
+      "prediction": null,
+      "findings": [],
+      "confidence_if_valid": null,
+      "uncertainty": "The image classifier suggests Wrist (score: 99.9%, classifier gate passed). A compatible regional interpretation model (Wrist) is configured and available. Confirm the specific X-ray region to proceed with interpretation. The classifier score is not independent clinical verification or a diagnosis.",
+      "source": "unavailable",
+      "reason_code": "anatomy_confirmation_required",
+      "diagnostic_message": "The image classifier suggested a body region, but a specific body region still needs confirmation. No regional disease model was run.",
+      "image_anatomy_verification": {
+        "status": "CONFIRMATION_REQUIRED",
+        "confirmation_required": true,
+        "next_action": "confirm_or_select_body_region",
+        "classification_status": "completed",
+        "anatomy_independently_verified": false,
+        "anatomy_classifier_accepted": true,
+        "classifier_gate_passed": true,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": true,
+        "regional_model_configured": true,
+        "regional_model_available": true,
+        "regional_model_name": "Wrist",
+        "regional_model_status": "configured_and_available",
+        "verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "wrist",
+        "body_part_confidence": 0.9993902888684053,
+        "confidence_threshold_validated": false,
+        "message": "The image classifier suggests Wrist (score: 99.9%, classifier gate passed). A compatible regional interpretation model (Wrist) is configured and available. Confirm the specific X-ray region to proceed with interpretation. The classifier score is not independent clinical verification or a diagnosis."
+      },
+      "image_type_detection": {
+        "success": true,
+        "class_count": 33,
+        "predicted_anatomy": "WRIST",
+        "confidence": 0.5753,
+        "prediction_status": "needs_confirmation",
+        "requires_user_confirmation": true,
+        "preprocessing_verified": false,
+        "warnings": [
+          "Prediction confidence (57.5%) is below the review threshold (60.0%).",
+          "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+        ],
+        "status": "completed",
+        "body_part_label": "WRIST",
+        "candidate_body_part": "WRIST",
+        "body_part_confidence": 0.9993902888684053,
+        "second_candidate_body_part": "FOREARM",
+        "second_candidate_confidence": 0.0002799696064095732,
+        "top_two_margin": 0.9991103192619958,
+        "confidence_threshold": 0.6,
+        "confidence_threshold_validated": false,
+        "top_two_margin_threshold": 0.1,
+        "top_two_margin_threshold_validated": false,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "colored_annotation_cleanup": {
+          "applied": false,
+          "method": "none",
+          "masked_pixel_fraction": 0.0,
+          "reason": "disabled"
+        },
+        "colored_cleanup_candidate": null,
+        "inference_view_selected": "original_upload_copy",
+        "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "anatomy_independently_verified": false,
+        "candidate_is_specific_anatomy": true,
+        "routing_requires_independent_verification": true,
+        "model_name": "convnext_tiny_onnx_33class",
+        "model_checkpoint": "model.onnx",
+        "model_license": "Apache-2.0; see upstream model card",
+        "device": "cpu",
+        "classifier_labels": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "supported_body_parts": [
+          "ABDOMEN",
+          "ANKLE",
+          "ARM",
+          "CERVICAL_SPINE",
+          "CHEST",
+          "DORSAL_SPINE",
+          "ELBOW",
+          "EXTREMITY",
+          "FEMUR",
+          "FINGER",
+          "FOOT",
+          "FOREARM",
+          "HAND",
+          "HEAD",
+          "HEEL",
+          "HIP",
+          "KNEE",
+          "KUB",
+          "LEG",
+          "LOWER_EXTREMITY",
+          "LUMBAR_SPINE",
+          "NASOPHARYNX",
+          "NECK",
+          "PELVIS",
+          "PNS",
+          "SHOULDER",
+          "SI_JOINT",
+          "SKULL",
+          "SPINE",
+          "TEMPORAL_BONE",
+          "TIBIA",
+          "UPPER_EXTREMITY",
+          "WRIST"
+        ],
+        "top_predictions": [
+          {
+            "label": "WRIST",
+            "probability": 0.9994
+          },
+          {
+            "label": "FOREARM",
+            "probability": 0.0003
+          },
+          {
+            "label": "HAND",
+            "probability": 0.0001
+          },
+          {
+            "label": "FINGER",
+            "probability": 0.0001
+          },
+          {
+            "label": "ELBOW",
+            "probability": 0.0
+          },
+          {
+            "label": "SHOULDER",
+            "probability": 0.0
+          },
+          {
+            "label": "HUMERUS",
+            "probability": 0.0
+          }
+        ],
+        "message": "The primary classifier returned WRIST and a dedicated upper-extremity classifier refined the candidate to WRIST (99.9% specialist score). The specialist score is not a clinical probability.",
+        "image_name": "e5c840178e364fcaaad209d245e5d364.png",
+        "primary_classifier_result": {
+          "candidate_body_part": "WRIST",
+          "confidence": 0.5753,
+          "second_candidate_body_part": "HAND",
+          "second_candidate_confidence": 0.1687,
+          "top_two_margin": 0.4066,
+          "top_predictions": [
+            {
+              "label": "WRIST",
+              "probability": 0.5753
+            },
+            {
+              "label": "HAND",
+              "probability": 0.1687
+            },
+            {
+              "label": "EXTREMITY",
+              "probability": 0.0547
+            },
+            {
+              "label": "ELBOW",
+              "probability": 0.0415
+            },
+            {
+              "label": "KNEE",
+              "probability": 0.0229
+            }
+          ],
+          "model_name": "convnext_tiny_onnx_33class"
+        },
+        "upper_extremity_refinement": {
+          "status": "accepted",
+          "reason_code": null,
+          "primary_candidate": "WRIST",
+          "primary_confidence": 0.5753,
+          "candidate_body_part": "WRIST",
+          "confidence": 0.9993902888684053,
+          "second_candidate_body_part": "FOREARM",
+          "second_confidence": 0.0002799696064095732,
+          "top_two_margin": 0.9991103192619958,
+          "top_predictions": [
+            {
+              "label": "WRIST",
+              "probability": 0.9994
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.0003
+            },
+            {
+              "label": "HAND",
+              "probability": 0.0001
+            },
+            {
+              "label": "FINGER",
+              "probability": 0.0001
+            },
+            {
+              "label": "ELBOW",
+              "probability": 0.0
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0
+            },
+            {
+              "label": "HUMERUS",
+              "probability": 0.0
+            }
+          ],
+          "confidence_threshold": 0.6,
+          "min_confidence_margin": 0.1,
+          "confidence_threshold_validated": false,
+          "model_name": "swin_tiny_mura_upper_extremity_7class",
+          "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+          "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+          "message": "The dedicated upper-extremity classifier passed its provisional confidence and margin gates."
+        },
+        "min_confidence_margin": 0.1,
+        "refined_by_model_name": "swin_tiny_mura_upper_extremity_7class",
+        "refined_by_model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+        "refined_preprocessing_id": "rgb_resize224_imagenet_norm_v1"
+      },
+      "anatomy_metadata_persisted": true,
+      "anatomy_metadata": {
+        "status": "CONFIRMATION_REQUIRED",
+        "classification_status": "completed",
+        "anatomy_classifier_accepted": true,
+        "classifier_gate_passed": true,
+        "broad_region_classifier_accepted": false,
+        "is_broad_region": false,
+        "specific_region_confirmation_required": true,
+        "regional_model_configured": true,
+        "regional_model_available": true,
+        "regional_model_name": "Wrist",
+        "regional_model_status": "configured_and_available",
+        "anatomy_user_confirmed": false,
+        "anatomy_verification_method": null,
+        "source": "image_classifier",
+        "detected_region": null,
+        "candidate_region": "wrist",
+        "body_part_confidence": 0.9993902888684053,
+        "confidence_threshold_validated": false,
+        "preprocessing_id": null,
+        "preprocessing_mode": "center_crop",
+        "preprocessing_verified_against_training": false,
+        "model_artifact_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+        "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+        "model_size_bytes": null,
+        "model_input_shape": null,
+        "model_output_shape": null,
+        "output_score_semantics": null,
+        "classifier_version": "convnext_tiny_onnx_33class",
+        "top_candidates": [
+          {
+            "label": "WRIST",
+            "probability": 0.9994
+          },
+          {
+            "label": "FOREARM",
+            "probability": 0.0003
+          },
+          {
+            "label": "HAND",
+            "probability": 0.0001
+          },
+          {
+            "label": "FINGER",
+            "probability": 0.0001
+          },
+          {
+            "label": "ELBOW",
+            "probability": 0.0
+          },
+          {
+            "label": "SHOULDER",
+            "probability": 0.0
+          },
+          {
+            "label": "HUMERUS",
+            "probability": 0.0
+          }
+        ],
+        "classifier_output": {
+          "success": true,
+          "class_count": 33,
+          "predicted_anatomy": "WRIST",
+          "confidence": 0.5753,
+          "prediction_status": "needs_confirmation",
+          "requires_user_confirmation": true,
+          "preprocessing_verified": false,
+          "warnings": [
+            "Prediction confidence (57.5%) is below the review threshold (60.0%).",
+            "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+          ],
+          "status": "completed",
+          "body_part_label": "WRIST",
+          "candidate_body_part": "WRIST",
+          "body_part_confidence": 0.9993902888684053,
+          "second_candidate_body_part": "FOREARM",
+          "second_candidate_confidence": 0.0002799696064095732,
+          "top_two_margin": 0.9991103192619958,
+          "confidence_threshold": 0.6,
+          "confidence_threshold_validated": false,
+          "top_two_margin_threshold": 0.1,
+          "top_two_margin_threshold_validated": false,
+          "preprocessing_mode": "center_crop",
+          "preprocessing_verified_against_training": false,
+          "colored_annotation_cleanup": {
+            "applied": false,
+            "method": "none",
+            "masked_pixel_fraction": 0.0,
+            "reason": "disabled"
+          },
+          "colored_cleanup_candidate": null,
+          "inference_view_selected": "original_upload_copy",
+          "model_sha256": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+          "labels_sha256": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+          "anatomy_independently_verified": false,
+          "candidate_is_specific_anatomy": true,
+          "routing_requires_independent_verification": true,
+          "model_name": "convnext_tiny_onnx_33class",
+          "model_checkpoint": "model.onnx",
+          "model_license": "Apache-2.0; see upstream model card",
+          "device": "cpu",
+          "classifier_labels": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "supported_body_parts": [
+            "ABDOMEN",
+            "ANKLE",
+            "ARM",
+            "CERVICAL_SPINE",
+            "CHEST",
+            "DORSAL_SPINE",
+            "ELBOW",
+            "EXTREMITY",
+            "FEMUR",
+            "FINGER",
+            "FOOT",
+            "FOREARM",
+            "HAND",
+            "HEAD",
+            "HEEL",
+            "HIP",
+            "KNEE",
+            "KUB",
+            "LEG",
+            "LOWER_EXTREMITY",
+            "LUMBAR_SPINE",
+            "NASOPHARYNX",
+            "NECK",
+            "PELVIS",
+            "PNS",
+            "SHOULDER",
+            "SI_JOINT",
+            "SKULL",
+            "SPINE",
+            "TEMPORAL_BONE",
+            "TIBIA",
+            "UPPER_EXTREMITY",
+            "WRIST"
+          ],
+          "top_predictions": [
+            {
+              "label": "WRIST",
+              "probability": 0.9994
+            },
+            {
+              "label": "FOREARM",
+              "probability": 0.0003
+            },
+            {
+              "label": "HAND",
+              "probability": 0.0001
+            },
+            {
+              "label": "FINGER",
+              "probability": 0.0001
+            },
+            {
+              "label": "ELBOW",
+              "probability": 0.0
+            },
+            {
+              "label": "SHOULDER",
+              "probability": 0.0
+            },
+            {
+              "label": "HUMERUS",
+              "probability": 0.0
+            }
+          ],
+          "message": "The primary classifier returned WRIST and a dedicated upper-extremity classifier refined the candidate to WRIST (99.9% specialist score). The specialist score is not a clinical probability.",
+          "image_name": "e5c840178e364fcaaad209d245e5d364.png",
+          "primary_classifier_result": {
+            "candidate_body_part": "WRIST",
+            "confidence": 0.5753,
+            "second_candidate_body_part": "HAND",
+            "second_candidate_confidence": 0.1687,
+            "top_two_margin": 0.4066,
+            "top_predictions": [
+              {
+                "label": "WRIST",
+                "probability": 0.5753
+              },
+              {
+                "label": "HAND",
+                "probability": 0.1687
+              },
+              {
+                "label": "EXTREMITY",
+                "probability": 0.0547
+              },
+              {
+                "label": "ELBOW",
+                "probability": 0.0415
+              },
+              {
+                "label": "KNEE",
+                "probability": 0.0229
+              }
+            ],
+            "model_name": "convnext_tiny_onnx_33class"
+          },
+          "upper_extremity_refinement": {
+            "status": "accepted",
+            "reason_code": null,
+            "primary_candidate": "WRIST",
+            "primary_confidence": 0.5753,
+            "candidate_body_part": "WRIST",
+            "confidence": 0.9993902888684053,
+            "second_candidate_body_part": "FOREARM",
+            "second_confidence": 0.0002799696064095732,
+            "top_two_margin": 0.9991103192619958,
+            "top_predictions": [
+              {
+                "label": "WRIST",
+                "probability": 0.9994
+              },
+              {
+                "label": "FOREARM",
+                "probability": 0.0003
+              },
+              {
+                "label": "HAND",
+                "probability": 0.0001
+              },
+              {
+                "label": "FINGER",
+                "probability": 0.0001
+              },
+              {
+                "label": "ELBOW",
+                "probability": 0.0
+              },
+              {
+                "label": "SHOULDER",
+                "probability": 0.0
+              },
+              {
+                "label": "HUMERUS",
+                "probability": 0.0
+              }
+            ],
+            "confidence_threshold": 0.6,
+            "min_confidence_margin": 0.1,
+            "confidence_threshold_validated": false,
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+            "preprocessing_id": "rgb_resize224_imagenet_norm_v1",
+            "message": "The dedicated upper-extremity classifier passed its provisional confidence and margin gates."
+          },
+          "min_confidence_margin": 0.1,
+          "refined_by_model_name": "swin_tiny_mura_upper_extremity_7class",
+          "refined_by_model_sha256": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+          "refined_preprocessing_id": "rgb_resize224_imagenet_norm_v1"
+        },
+        "image_sha256": "bfba1fed2e0393a9fb9cc460ad0541787e5295d218c75fcab914042426fef583"
+      },
+      "detected_region": null,
+      "candidate_region": "wrist",
+      "region_source": "image_classifier",
+      "is_broad_region": false,
+      "broad_region_classifier_accepted": false,
+      "specific_region_confirmation_required": true,
+      "anatomy_verification_status": "confirmation_required",
+      "classification_status": "completed",
+      "anatomy_independently_verified": false,
+      "anatomy_classifier_accepted": true,
+      "classifier_gate_passed": true,
+      "regional_model_configured": true,
+      "regional_model_available": true,
+      "regional_model_name": "Wrist",
+      "regional_model_status": "configured_and_available",
+      "anatomy_verification_method": null,
+      "anatomy_confirmation_required": true,
+      "next_action": "confirm_or_select_body_region",
+      "body_part_confidence": 0.9993902888684053,
+      "report_region_verification": {
+        "status": "UNVERIFIED",
+        "detected_image_region": null,
+        "report_regions": [],
+        "unrecognized_report_region_count": 0,
+        "association_scope": "AMBIGUOUS_OR_INCOMPLETE",
+        "association_explicitly_confirmed": false,
+        "region_compatible": false,
+        "can_combine": false,
+        "message": "The image/report relationship could not be uniquely verified. Keep report findings separate from image-model predictions until the correct pair is confirmed."
+      },
+      "primary_prediction": {
+        "candidate_body_part": "WRIST",
+        "confidence": 0.5753
+      },
+      "specialist_prediction": {
+        "candidate_body_part": "WRIST",
+        "confidence": 0.9993902888684053,
+        "status": "accepted",
+        "reason_code": null,
+        "message": "The dedicated upper-extremity classifier passed its provisional confidence and margin gates."
+      }
+    }
+  }
+}

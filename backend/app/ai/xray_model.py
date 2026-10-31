@@ -70,7 +70,7 @@ TORCHXRAYVISION_LABELS = (
 # Region-specific MURA checkpoints downloaded and strictly architecture-validated.
 # These are separate binary research classifiers; never share one region's weights with another.
 MURA_REGION_CHECKPOINTS = {
-    "wrist": ("XRAY_WRIST_CHECKPOINT", Path("models/xray/wrist/XR_WRIST_FINAL_best.pt"), "XR_WRIST"),
+    "wrist": ("XRAY_WRIST_CHECKPOINT", Path("models/xray/mura_regions/XR_WRIST_FINAL_best.pt"), "XR_WRIST"),
     "elbow": ("XRAY_ELBOW_CHECKPOINT", Path("models/xray/mura_regions/XR_ELBOW_FINAL_best.pt"), "XR_ELBOW"),
     "finger": ("XRAY_FINGER_CHECKPOINT", Path("models/xray/mura_regions/XR_FINGER_FINAL_best.pt"), "XR_FINGER"),
     "forearm": ("XRAY_FOREARM_CHECKPOINT", Path("models/xray/mura_regions/XR_FOREARM_FINAL_best.pt"), "XR_FOREARM"),
@@ -383,7 +383,9 @@ class XRayModelService:
                 candidate = project_root / candidate
             path = candidate
         else:
-            path = project_root / "models" / "xray" / "wrist" / "XR_WRIST_FINAL_best.pt"
+            path = project_root / "models" / "xray" / "mura_regions" / "XR_WRIST_FINAL_best.pt"
+            if not path.is_file():
+                path = project_root / "models" / "xray" / "wrist" / "XR_WRIST_FINAL_best.pt"
 
         self._checkpoint_path = str(path.resolve(strict=False))
         if not path.is_file() or path.stat().st_size <= 0:

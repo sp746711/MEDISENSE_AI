@@ -145,7 +145,7 @@ def test_low_confidence_result_is_unverified_and_has_no_routable_label(
 def test_default_preprocessing_matches_documented_model_transform(
     tmp_path, monkeypatch
 ):
-    """Default is shorter-edge resize + center crop, matching the model card."""
+    """Default is aspect-ratio-preserving letterbox, preserving peripheral anatomy."""
     classifier, session = _make_classifier(tmp_path)
     _install_fake_runtime(monkeypatch, session)
     classifier.load()
@@ -156,10 +156,10 @@ def test_default_preprocessing_matches_documented_model_transform(
     image = Image.fromarray(gradient, mode="L").convert("RGB")
     tensor = classifier._preprocess(image)
 
-    assert classifier.preprocessing_mode == "center_crop"
+    assert classifier.preprocessing_mode == "letterbox"
     assert tensor.shape == (1, 3, 224, 224)
-    assert tensor[0, 0, 100, 0] > -2.0
-    assert tensor[0, 0, 100, -1] < 2.0
+    assert tensor[0, 0, 112, 112] > -2.0
+    assert tensor[0, 0, 112, -1] < 2.5
 
 
 def test_direct_resize_is_available_only_for_comparison(tmp_path, monkeypatch):

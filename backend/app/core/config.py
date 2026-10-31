@@ -57,6 +57,10 @@ class Settings(BaseSettings):
         alias="XRAY_DEFAULT_MODEL",
     )
     xray_chest_checkpoint: str = Field(default="", alias="XRAY_CHEST_CHECKPOINT")
+    xray_anatomy_preprocessing: str = Field(
+        default="letterbox",
+        alias="XRAY_ANATOMY_PREPROCESSING",
+    )
 
     llm_provider: str = Field(default="groq", alias="LLM_PROVIDER")
     llm_fallback: str = Field(default="gemini", alias="LLM_FALLBACK")
@@ -135,6 +139,20 @@ class Settings(BaseSettings):
     @classmethod
     def _strip_origins(cls, value: str) -> str:
         return value.strip() if isinstance(value, str) else value
+
+    @field_validator("xray_anatomy_preprocessing", mode="before")
+    @classmethod
+    def _validate_xray_anatomy_preprocessing(cls, value: str | None) -> str:
+        if value is None:
+            return "letterbox"
+        mode = str(value).strip().lower()
+        allowed = {"direct_resize", "center_crop", "letterbox", "dual_ensemble"}
+        if mode not in allowed:
+            raise ValueError(
+                f"Unsupported XRAY_ANATOMY_PREPROCESSING value '{value}'. "
+                f"Allowed values: {', '.join(sorted(allowed))}."
+            )
+        return mode
 
     @property
     def cors_origin_list(self) -> List[str]:

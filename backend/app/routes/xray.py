@@ -10,6 +10,7 @@ Task 1 safeguards:
 - do not combine radiology-report and image evidence without explicit association and region compatibility.
 """
 
+import hashlib
 import uuid
 import logging
 from pathlib import Path
@@ -57,6 +58,14 @@ class XrayAnatomyConfirmationRequest(BaseModel):
     region: str
 
 
+_ALL_33_ANATOMY_CONFIRMATION_LABELS = {
+    "ABDOMEN", "ANKLE", "ARM", "CERVICAL_SPINE", "CHEST", "DORSAL_SPINE",
+    "ELBOW", "EXTREMITY", "FEMUR", "FINGER", "FOOT", "FOREARM", "HAND",
+    "HEAD", "HEEL", "HIP", "KNEE", "KUB", "LEG", "LOWER_EXTREMITY",
+    "LUMBAR_SPINE", "NASOPHARYNX", "NECK", "PELVIS", "PNS", "SHOULDER",
+    "SI_JOINT", "SKULL", "SPINE", "TEMPORAL_BONE", "TIBIA",
+    "UPPER_EXTREMITY", "WRIST",
+}
 _SPECIFIC_ANATOMY_CONFIRMATION_LABELS = {
     "ABDOMEN", "ANKLE", "CERVICAL_SPINE", "CHEST", "DORSAL_SPINE", "ELBOW",
     "FEMUR", "FINGER", "FOOT", "FOREARM", "HAND", "HEEL", "HIP", "KNEE",
@@ -69,23 +78,23 @@ _BROAD_ANATOMY_CONFIRMATION_LABELS = {
 
 
 def _canonical_user_confirmed_region(raw_region: str) -> str:
-    """Validate a user-confirmed specific anatomy label against the 33-class catalogue."""
+    """Validate a user-confirmed anatomy label against the 33-class catalogue.
+
+    Accepts any of the 33 required anatomical classes. If a broad or unsupported
+    region is confirmed, routing will safely record the confirmed anatomy and
+    disclose that automated abnormality interpretation is unsupported.
+    """
     token = str(raw_region or "").strip().upper().replace("-", "_")
     token = "_".join(token.split())
-    if token in _BROAD_ANATOMY_CONFIRMATION_LABELS:
+    if token not in _ALL_33_ANATOMY_CONFIRMATION_LABELS:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Choose a specific anatomical region; broad regions such as HEAD or SPINE cannot route a regional model.",
-        )
-    if token not in _SPECIFIC_ANATOMY_CONFIRMATION_LABELS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Choose a specific region from the supported anatomy list.",
+            status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
+            detail="Choose a valid region from the 33 supported anatomical classes.",
         )
     canonical, recognized = normalize_region_name(token)
     if not recognized or not canonical or canonical == "unknown":
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=getattr(status, "HTTP_422_UNPROCESSABLE_CONTENT", 422),
             detail="The selected anatomical region could not be normalized safely.",
         )
     return canonical
@@ -178,13 +187,22 @@ def _build_anatomy_metadata(
             or (detection.get("status") if isinstance(detection, dict) else None)
             or "unknown"
         ).lower(),
-        "anatomy_independently_verified": routing.get(
-            "anatomy_independently_verified"
-        ) is True,
         "anatomy_classifier_accepted": routing.get("anatomy_classifier_accepted") is True,
+        "classifier_gate_passed": bool(
+            routing.get("classifier_gate_passed") or routing.get("anatomy_classifier_accepted")
+        ),
         "broad_region_classifier_accepted": routing.get("broad_region_classifier_accepted") is True,
         "is_broad_region": routing.get("is_broad_region") is True,
         "specific_region_confirmation_required": routing.get("specific_region_confirmation_required") is True,
+        "regional_model_configured": bool(routing.get("regional_model_configured", False)),
+        "regional_model_available": bool(routing.get("regional_model_available", False)),
+        "regional_model_name": routing.get("regional_model_name"),
+        "regional_model_status": routing.get("regional_model_status"),
+        "anatomy_user_confirmed": bool(
+            region_source == "user_confirmed"
+            or routing.get("anatomy_user_confirmed") is True
+            or routing.get("user_confirmation_status") == "confirmed"
+        ),
         "anatomy_verification_method": _safe_json_value(routing.get("anatomy_verification_method")),
         "source": str(region_source or "unknown"),
         "detected_region": (
@@ -196,8 +214,8 @@ def _build_anatomy_metadata(
         "confidence_threshold_validated": bool(
             detection.get("confidence_threshold_validated", False)
         ),
-        "preprocessing_id": _safe_json_value(detection.get("preprocessing_id")),
-        "preprocessing_mode": _safe_json_value(detection.get("preprocessing_mode")),
+        "preprocessing_id": _safe_json_value(detection.get("preprocessing_id") or detection.get("preprocessing_mode")),
+        "preprocessing_mode": _safe_json_value(detection.get("preprocessing_mode") or detection.get("preprocessing_id")),
         "preprocessing_verified_against_training": bool(
             detection.get("preprocessing_verified_against_training", False)
         ),
@@ -208,10 +226,23 @@ def _build_anatomy_metadata(
         "model_output_shape": _safe_json_value(detection.get("model_output_shape")),
         "output_score_semantics": _safe_json_value(detection.get("output_score_semantics")),
         "classifier_version": _safe_json_value(classifier_version),
-        "top_candidates": _safe_json_value(top_candidates),
         # Keep the source classifier payload so later diagnostics can inspect the
         # actual candidate labels and scores rather than reconstructing them.
         "classifier_output": _safe_json_value(detection),
+        "two_model_comparison": _safe_json_value(
+            routing.get("two_model_comparison")
+            or detection.get("two_model_comparison")
+        ),
+        "final_candidate": _safe_json_value(
+            routing.get("final_candidate")
+            or detection.get("final_candidate")
+            or candidate_region
+        ),
+        "selection_source": _safe_json_value(
+            routing.get("selection_source")
+            or detection.get("selection_source")
+            or "PRIMARY MODEL"
+        ),
     }
 
 
@@ -435,15 +466,38 @@ async def upload_xray(
         else:
             resolved_region = resolved_region.strip().lower()
 
-        # A broad classifier label is a candidate, not a specific image region.
-        # Keep it in anatomy metadata/candidate_region, but persist the canonical
-        # result region as unknown until the user chooses a specific site. This
-        # also prevents a broad label from creating a false report/image mismatch.
-        if routing.get("is_broad_region") is True:
-            resolved_region = "unknown"
-
         region_source = routing.get("region_source") or "unknown"
-        anatomy_status = str(routing.get("anatomy_verification_status") or "unverified").lower()
+        anatomy_status = str(
+            routing.get("anatomy_verification_status") or "unverified"
+        ).strip().lower()
+
+        # A classifier output is a candidate, not user confirmation. Persist a
+        # canonical region only after explicit confirmation (or a separately
+        # established independent verification). Keep the model's candidate and
+        # scores in anatomy_metadata so the UI can ask the user to confirm it.
+        # This also prevents an unconfirmed candidate from being compared with an
+        # X-ray report as though the image region were already established.
+        anatomy_independently_verified_for_storage = (
+            routing.get("anatomy_independently_verified") is True
+        )
+        anatomy_user_confirmed_for_storage = (
+            str(region_source).strip().lower() == "user_confirmed_region"
+            or routing.get("anatomy_user_confirmed") is True
+        )
+        confirmation_pending = (
+            routing.get("specific_region_confirmation_required") is True
+            or anatomy_status in {"confirmation_required", "unverified"}
+        )
+        if (
+            routing.get("is_broad_region") is True
+            or (
+                str(region_source).strip().lower() == "image_classifier"
+                and confirmation_pending
+                and not anatomy_independently_verified_for_storage
+                and not anatomy_user_confirmed_for_storage
+            )
+        ):
+            resolved_region = "unknown"
         anatomy_detection = routing.get("anatomy_detection")
         if not isinstance(anatomy_detection, dict):
             # Older/current router responses may expose classifier values as
@@ -749,9 +803,14 @@ async def upload_xray(
             ).lower(),
             "anatomy_independently_verified": anatomy_independently_verified,
             "anatomy_classifier_accepted": anatomy_classifier_accepted,
+            "classifier_gate_passed": bool(routing.get("classifier_gate_passed") or anatomy_classifier_accepted),
             "broad_region_classifier_accepted": routing.get("broad_region_classifier_accepted") is True,
             "is_broad_region": routing.get("is_broad_region") is True,
             "specific_region_confirmation_required": anatomy_confirmation_required,
+            "regional_model_configured": bool(routing.get("regional_model_configured", False)),
+            "regional_model_available": bool(routing.get("regional_model_available", False)),
+            "regional_model_name": routing.get("regional_model_name"),
+            "regional_model_status": routing.get("regional_model_status"),
             "verification_method": routing.get("anatomy_verification_method"),
             "source": region_source,
             "detected_region": (
@@ -783,6 +842,7 @@ async def upload_xray(
             persisted_parts.append(report_region_verification["message"])
         persisted_message = " ".join(dict.fromkeys(persisted_parts))
 
+        image_sha256 = hashlib.sha256(content).hexdigest()
         anatomy_metadata = _build_anatomy_metadata(
             routing=routing,
             resolved_region=resolved_region,
@@ -790,6 +850,7 @@ async def upload_xray(
             anatomy_status=anatomy_status,
             body_part_confidence=body_part_confidence,
         )
+        anatomy_metadata["image_sha256"] = image_sha256
         result_kwargs = {}
         if hasattr(XrayResult, "anatomy_metadata"):
             result_kwargs["anatomy_metadata"] = anatomy_metadata
@@ -821,8 +882,27 @@ async def upload_xray(
         saved_findings = (
             getattr(result, findings_column, []) if findings_column else []
         ) or []
+        
+        is_unresolved_mismatch = (
+            routing.get("two_model_comparison", {}).get("is_unresolved") is True
+            or routing.get("two_model_comparison", {}).get("decision_case") == "CASE_D_UNRESOLVED"
+        )
+        if result.status == "failed" or routing.get("anatomy_verification_status") == "failed":
+            decision_state = "UNABLE_TO_CLASSIFY"
+        elif (
+            routing.get("classifier_gate_passed")
+            and not routing.get("is_broad_region")
+            and not is_unresolved_mismatch
+            and body_part_confidence is not None
+            and body_part_confidence >= 0.60
+        ):
+            decision_state = "HIGH_CONFIDENCE_CANDIDATE"
+        else:
+            decision_state = "NEEDS_CONFIRMATION"
+
         return {
             "status": result.status,
+            "decision_state": decision_state,
             "xray_result_id": str(result.xray_result_id),
             "file_name": result.file_name,
             "message": result.message,
@@ -861,6 +941,11 @@ async def upload_xray(
             ).lower(),
             "anatomy_independently_verified": anatomy_independently_verified,
             "anatomy_classifier_accepted": anatomy_classifier_accepted,
+            "classifier_gate_passed": bool(routing.get("classifier_gate_passed") or anatomy_classifier_accepted),
+            "regional_model_configured": bool(routing.get("regional_model_configured", False)),
+            "regional_model_available": bool(routing.get("regional_model_available", False)),
+            "regional_model_name": routing.get("regional_model_name"),
+            "regional_model_status": routing.get("regional_model_status"),
             "anatomy_verification_method": routing.get("anatomy_verification_method"),
             "anatomy_confirmation_required": anatomy_confirmation_required,
             "next_action": (
@@ -869,6 +954,60 @@ async def upload_xray(
             ),
             "body_part_confidence": body_part_confidence,
             "report_region_verification": report_region_verification,
+            "primary_prediction": (
+                {
+                    "model_name": anatomy_detection.get("primary_classifier_result", {}).get("model_name", "convnext_tiny_onnx_33class"),
+                    "candidate_body_part": anatomy_detection.get("primary_classifier_result", {}).get("candidate_body_part"),
+                    "confidence": anatomy_detection.get("primary_classifier_result", {}).get("confidence"),
+                    "body_part_confidence": anatomy_detection.get("primary_classifier_result", {}).get("confidence"),
+                    "top_two_margin": anatomy_detection.get("primary_classifier_result", {}).get("top_two_margin"),
+                    "top_predictions": anatomy_detection.get("primary_classifier_result", {}).get("top_predictions", []),
+                    "gate_passed": anatomy_detection.get("primary_classifier_result", {}).get("gate_passed", False),
+                    "is_broad_region": anatomy_detection.get("primary_classifier_result", {}).get("is_broad_region", False),
+                }
+                if isinstance(anatomy_detection, dict) and anatomy_detection.get("primary_classifier_result")
+                else None
+            ),
+            "specialist_prediction": (
+                {
+                    "model_name": anatomy_detection.get("upper_extremity_refinement", {}).get("model_name"),
+                    "candidate_body_part": anatomy_detection.get("upper_extremity_refinement", {}).get("candidate_body_part"),
+                    "confidence": anatomy_detection.get("upper_extremity_refinement", {}).get("confidence"),
+                    "body_part_confidence": anatomy_detection.get("upper_extremity_refinement", {}).get("confidence"),
+                    "top_two_margin": anatomy_detection.get("upper_extremity_refinement", {}).get("top_two_margin"),
+                    "top_predictions": anatomy_detection.get("upper_extremity_refinement", {}).get("top_predictions", []),
+                    "eligibility": anatomy_detection.get("upper_extremity_refinement", {}).get("eligibility"),
+                    "status": anatomy_detection.get("upper_extremity_refinement", {}).get("status"),
+                    "reason_code": anatomy_detection.get("upper_extremity_refinement", {}).get("reason_code"),
+                    "message": anatomy_detection.get("upper_extremity_refinement", {}).get("message"),
+                }
+                if isinstance(anatomy_detection, dict) and anatomy_detection.get("upper_extremity_refinement")
+                else None
+            ),
+            "two_model_comparison": (
+                routing.get("two_model_comparison")
+                or (anatomy_detection.get("two_model_comparison") if isinstance(anatomy_detection, dict) else None)
+            ),
+            "final_candidate": (
+                routing.get("final_candidate")
+                or (anatomy_detection.get("final_candidate") if isinstance(anatomy_detection, dict) else None)
+                or routing.get("candidate_region")
+            ),
+            "selection_source": (
+                routing.get("selection_source")
+                or (anatomy_detection.get("selection_source") if isinstance(anatomy_detection, dict) else None)
+                or "PRIMARY MODEL"
+            ),
+            "preprocessing_id": (
+                anatomy_metadata.get("preprocessing_id")
+                or (anatomy_detection.get("preprocessing_id") if isinstance(anatomy_detection, dict) else None)
+                or (anatomy_detection.get("preprocessing_mode") if isinstance(anatomy_detection, dict) else None)
+            ),
+            "preprocessing_mode": (
+                anatomy_metadata.get("preprocessing_mode")
+                or (anatomy_detection.get("preprocessing_mode") if isinstance(anatomy_detection, dict) else None)
+                or (anatomy_detection.get("preprocessing_id") if isinstance(anatomy_detection, dict) else None)
+            ),
         }
     except HTTPException:
         _remove_file(dest)
@@ -1066,6 +1205,8 @@ def confirm_xray_anatomy(
     if not successful_inference:
         message_parts.append("The image was saved, but automated abnormality interpretation is unavailable; no pathology finding was inferred.")
     persisted_message = " ".join(dict.fromkeys(message_parts))
+    if "image_sha256" not in metadata and stored_path.is_file():
+        metadata["image_sha256"] = hashlib.sha256(stored_path.read_bytes()).hexdigest()
 
     metadata.update({
         "status": "CONFIRMED",
@@ -1119,12 +1260,18 @@ def confirm_xray_anatomy(
 
     return {
         "status": result.status,
+        "decision_state": "USER_CORRECTED" if region_was_corrected else "USER_CONFIRMED",
         "xray_result_id": str(result.xray_result_id),
         "file_name": result.file_name,
         "message": result.message,
         "region": result.region,
-        "detected_region": result.region,
+        "detected_region": selected_region,
         "candidate_region": original_candidate_region,
+        "primary_prediction": metadata.get("classifier_output", {}).get("primary_classifier_result"),
+        "specialist_prediction": metadata.get("classifier_output", {}).get("upper_extremity_refinement"),
+        "two_model_comparison": metadata.get("two_model_comparison") or metadata.get("classifier_output", {}).get("two_model_comparison"),
+        "final_candidate": metadata.get("final_candidate") or metadata.get("classifier_output", {}).get("final_candidate"),
+        "selection_source": metadata.get("selection_source") or metadata.get("classifier_output", {}).get("selection_source"),
         "model_version": result.model_version,
         "prediction": result.prediction,
         "findings": getattr(result, "findings", getattr(result, "findings_json", [])) or [],
@@ -1133,12 +1280,19 @@ def confirm_xray_anatomy(
         "source": "trained_model" if successful_inference else "unavailable",
         "reason_code": analysis.get("reason_code") or routing.get("reason_code"),
         "diagnostic_message": analysis.get("diagnostic_message") or routing.get("diagnostic_message"),
-        "detected_region": selected_region,
         "region_source": "user_confirmed_region",
         "anatomy_verification_status": "confirmed",
         "classification_status": "completed",
         "anatomy_independently_verified": False,
+        "anatomy_user_confirmed": True,
+        "anatomy_classifier_accepted": bool(metadata.get("anatomy_classifier_accepted", True)),
+        "classifier_gate_passed": bool(metadata.get("classifier_gate_passed", True)),
+        "regional_model_configured": bool(routing.get("is_supported", False)),
+        "regional_model_available": bool(routing.get("is_available", False)),
+        "regional_model_name": routing.get("registry_entry", {}).get("display_name") if isinstance(routing.get("registry_entry"), dict) else None,
+        "regional_model_status": "completed" if successful_inference else (analysis.get("reason_code") or routing.get("reason_code") or "unavailable"),
         "anatomy_confirmation_required": False,
+        "specific_region_confirmation_required": False,
         "next_action": "review_interpretation_status" if not successful_inference else None,
         "body_part_confidence": score_for_selected_region,
         "image_anatomy_verification": {
@@ -1333,49 +1487,137 @@ def get_xray(
         .order_by(XrayResult.created_at.asc())
         .all()
     )
+    results = []
+    for row in rows:
+        meta = row.anatomy_metadata if isinstance(getattr(row, "anatomy_metadata", None), dict) else {}
+        is_user_confirmed = bool(meta.get("anatomy_user_confirmed", False) or meta.get("user_confirmation_status") == "confirmed")
+        conf_req = not is_user_confirmed
+        det_reg = meta.get("detected_region") or (row.region if row.region and row.region != "unknown" else None)
+        cand_reg = meta.get("candidate_region") or meta.get("original_classifier_candidate") or (meta.get("classifier_output", {}).get("candidate_body_part") if isinstance(meta.get("classifier_output"), dict) else None)
+        classifier_accepted = bool(meta.get("anatomy_classifier_accepted", False) or meta.get("classifier_gate_passed", False))
+        clf_out = meta.get("classifier_output") if isinstance(meta.get("classifier_output"), dict) else {}
+        primary_pred = clf_out.get("primary_classifier_result")
+        spec_pred = clf_out.get("upper_extremity_refinement")
+
+        if is_user_confirmed:
+            decision_state = "USER_CORRECTED" if (meta.get("region_was_corrected") or (det_reg and cand_reg and det_reg != cand_reg)) else "USER_CONFIRMED"
+        elif row.status == "failed":
+            decision_state = "UNABLE_TO_CLASSIFY"
+        elif (
+            classifier_accepted
+            and not bool(meta.get("is_broad_region", False))
+            and meta.get("two_model_comparison", {}).get("decision_case") != "CASE_D_UNRESOLVED"
+            and (meta.get("body_part_confidence") or 0) >= 0.60
+        ):
+            decision_state = "HIGH_CONFIDENCE_CANDIDATE"
+        else:
+            decision_state = "NEEDS_CONFIRMATION"
+
+        results.append({
+            "xray_result_id": str(row.xray_result_id),
+            "file_name": row.file_name or "xray_image",
+            "decision_state": decision_state,
+            "region": row.region,
+            "detected_region": det_reg,
+            "candidate_region": cand_reg,
+            "body_part_confidence": meta.get("body_part_confidence"),
+            "primary_prediction": (
+                {
+                    "model_name": primary_pred.get("model_name", "convnext_tiny_onnx_33class"),
+                    "candidate_body_part": primary_pred.get("candidate_body_part"),
+                    "confidence": primary_pred.get("confidence"),
+                    "top_two_margin": primary_pred.get("top_two_margin"),
+                    "top_predictions": primary_pred.get("top_predictions", []),
+                    "gate_passed": primary_pred.get("gate_passed", False),
+                    "is_broad_region": primary_pred.get("is_broad_region", False),
+                }
+                if isinstance(primary_pred, dict) and primary_pred.get("candidate_body_part")
+                else None
+            ),
+            "specialist_prediction": (
+                {
+                    "model_name": spec_pred.get("model_name"),
+                    "candidate_body_part": spec_pred.get("candidate_body_part"),
+                    "confidence": spec_pred.get("confidence"),
+                    "top_two_margin": spec_pred.get("top_two_margin"),
+                    "top_predictions": spec_pred.get("top_predictions", []),
+                    "eligibility": spec_pred.get("eligibility"),
+                    "status": spec_pred.get("status"),
+                    "reason_code": spec_pred.get("reason_code"),
+                    "message": spec_pred.get("message"),
+                }
+                if isinstance(spec_pred, dict) and (spec_pred.get("candidate_body_part") or spec_pred.get("status"))
+                else None
+            ),
+            "two_model_comparison": (
+                meta.get("two_model_comparison")
+                or clf_out.get("two_model_comparison")
+            ),
+            "final_candidate": (
+                meta.get("final_candidate")
+                or clf_out.get("final_candidate")
+                or cand_reg
+            ),
+            "selection_source": (
+                meta.get("selection_source")
+                or clf_out.get("selection_source")
+                or "PRIMARY MODEL"
+            ),
+            "model_version": row.model_version,
+            "prediction": row.prediction,
+            "findings": getattr(row, "findings", getattr(row, "findings_json", [])) or [],
+            "confidence_if_valid": row.confidence_if_valid,
+            "uncertainty": row.uncertainty,
+            "status": row.status,
+            "message": row.message,
+            "classification_status": str(meta.get("classification_status") or "completed").lower(),
+            "anatomy_verification_status": str(meta.get("status") or ("confirmed" if is_user_confirmed else "unverified")).lower(),
+            "anatomy_user_confirmed": is_user_confirmed,
+            "anatomy_independently_verified": bool(meta.get("anatomy_independently_verified", False)),
+            "anatomy_classifier_accepted": classifier_accepted,
+            "classifier_gate_passed": classifier_accepted,
+            "is_broad_region": bool(meta.get("is_broad_region", False)),
+            "broad_region_classifier_accepted": bool(meta.get("broad_region_classifier_accepted", False)),
+            "specific_region_confirmation_required": conf_req,
+            "anatomy_confirmation_required": conf_req,
+            "regional_model_configured": bool(meta.get("regional_model_configured", False)),
+            "regional_model_available": bool(meta.get("regional_model_available", False)),
+            "regional_model_name": meta.get("regional_model_name"),
+            "regional_model_status": meta.get("regional_model_status"),
+            "next_action": ("confirm_or_select_body_region" if conf_req else None),
+            "image_type_detection": meta.get("classifier_output") if isinstance(meta.get("classifier_output"), dict) else None,
+            "anatomy_metadata": meta,
+            "image_anatomy_verification": (
+                meta if meta else {
+                    "status": "NOT_PERSISTED",
+                    "detected_region": row.region if str(row.region or "").strip().lower() not in {"", "unknown"} else None,
+                    "body_part_confidence": None,
+                    "candidate_region": None,
+                    "metadata_persistence": "LIMITED_BY_CURRENT_XRAYRESULT_SCHEMA",
+                    "message": "Anatomy classifier confidence/candidate data is unavailable in this legacy saved row.",
+                }
+            ),
+            "report_associations": [
+                {
+                    "association_id": str(association.association_id),
+                    "report_id": str(association.report_id),
+                    "report_file_name": association.medical_report.file_name if association.medical_report else None,
+                    **_build_association_safety(
+                        status_value=str(association.status or "pending").lower(),
+                        image_region=row.region,
+                        report_region=_extract_report_region(association.medical_report)[0] if association.medical_report else None,
+                        region_recognized=_extract_report_region(association.medical_report)[1] if association.medical_report else False,
+                    ),
+                    "confirmed_at": association.confirmed_at.isoformat() if association.confirmed_at else None,
+                }
+                for association in (getattr(row, "report_associations", None) or [])
+            ],
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        })
+
     return {
         "assessment_id": str(assessment_id),
-        "results": [
-            {
-                "xray_result_id": str(row.xray_result_id),
-                "file_name": row.file_name or "xray_image",
-                "region": row.region,
-                "model_version": row.model_version,
-                "prediction": row.prediction,
-                "findings": getattr(row, "findings", getattr(row, "findings_json", [])) or [],
-                "confidence_if_valid": row.confidence_if_valid,
-                "uncertainty": row.uncertainty,
-                "status": row.status,
-                "message": row.message,
-                "image_anatomy_verification": (
-                    row.anatomy_metadata if isinstance(getattr(row, "anatomy_metadata", None), dict) else {
-                        "status": "NOT_PERSISTED",
-                        "detected_region": row.region if str(row.region or "").strip().lower() not in {"", "unknown"} else None,
-                        "body_part_confidence": None,
-                        "candidate_region": None,
-                        "metadata_persistence": "LIMITED_BY_CURRENT_XRAYRESULT_SCHEMA",
-                        "message": "Anatomy classifier confidence/candidate data is unavailable in this legacy saved row.",
-                    }
-                ),
-                "report_associations": [
-                    {
-                        "association_id": str(association.association_id),
-                        "report_id": str(association.report_id),
-                        "report_file_name": association.medical_report.file_name if association.medical_report else None,
-                        **_build_association_safety(
-                            status_value=str(association.status or "pending").lower(),
-                            image_region=row.region,
-                            report_region=_extract_report_region(association.medical_report)[0] if association.medical_report else None,
-                            region_recognized=_extract_report_region(association.medical_report)[1] if association.medical_report else False,
-                        ),
-                        "confirmed_at": association.confirmed_at.isoformat() if association.confirmed_at else None,
-                    }
-                    for association in (getattr(row, "report_associations", None) or [])
-                ],
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-            }
-            for row in rows
-        ],
+        "results": results,
     }
 
 

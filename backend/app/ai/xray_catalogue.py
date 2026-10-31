@@ -738,6 +738,14 @@ _REGION_DISPLAY_NAMES: dict[str, str] = {
     "mandible": "Mandible / Jaw",
     "sinuses": "Paranasal Sinuses",
     "neck": "Soft Tissue Neck",
+    "nasopharynx": "Nasopharynx",
+    "temporal bone": "Temporal Bone",
+    "sacroiliac joint": "Sacroiliac Joint",
+    "extremity": "Extremity",
+    "upper extremity": "Upper Extremity",
+    "lower extremity": "Lower Extremity",
+    "spine": "Spine",
+    "finger": "Finger / Thumb",
 }
 
 
@@ -792,27 +800,55 @@ def _build_searchable_body_regions() -> list[dict[str, Any]]:
 
 SEARCHABLE_BODY_REGIONS: list[dict[str, Any]] = _build_searchable_body_regions()
 
-# Provide the broad anatomical terms expected by the frontend autocomplete while
-# retaining specific cervical/thoracic/lumbar entries. The generic Spine option
-# is a catalogue/search choice only; model support is still checked by registry.
-for _generic_region in (
-    {
-        "id": "head",
-        "name": "Head",
-        "canonical_region": "skull",
-        "aliases": ["head", "hea", "skull", "cranium", "head x-ray"],
-    },
-    {
-        "id": "spine",
-        "name": "Spine",
-        "canonical_region": "spine",
-        "aliases": ["spine", "spi", "vertebral column", "backbone", "c-spine", "t-spine", "l-spine"],
-    },
-):
-    if not any(item["name"] == _generic_region["name"] for item in SEARCHABLE_BODY_REGIONS):
-        SEARCHABLE_BODY_REGIONS.append(_generic_region)
+# Provide all 33 required anatomical classes for MediSense AI Goal 1,
+# ensuring every required class is present in searchable manual anatomy selection.
+_REQUIRED_33_ANATOMY_REGIONS = [
+    {"id": "abdomen", "name": "Abdomen", "canonical_region": "abdomen", "aliases": ["abdomen", "abdominal", "belly", "stomach", "kub", "abdomen x-ray"]},
+    {"id": "ankle", "name": "Ankle", "canonical_region": "ankle", "aliases": ["ankle", "ankle joint", "malleolus"]},
+    {"id": "arm", "name": "Arm (Upper Limb)", "canonical_region": "upper extremity", "aliases": ["arm", "upper limb", "upper extremity", "arm x-ray"]},
+    {"id": "cervical_spine", "name": "Cervical Spine", "canonical_region": "cervical spine", "aliases": ["cervical spine", "c-spine", "cervical", "neck spine"]},
+    {"id": "chest", "name": "Chest", "canonical_region": "chest", "aliases": ["chest", "cxr", "thorax", "lungs", "pulmonary"]},
+    {"id": "dorsal_spine", "name": "Dorsal Spine (Thoracic)", "canonical_region": "thoracic spine", "aliases": ["dorsal spine", "dorsal", "thoracic spine", "t-spine", "mid-back"]},
+    {"id": "elbow", "name": "Elbow", "canonical_region": "elbow", "aliases": ["elbow", "elbow joint", "olecranon"]},
+    {"id": "extremity", "name": "Extremity (Limb)", "canonical_region": "extremity", "aliases": ["extremity", "limb", "extremities", "arm", "leg"]},
+    {"id": "femur", "name": "Femur / Thigh", "canonical_region": "femur", "aliases": ["femur", "thigh", "thigh bone", "femoral"]},
+    {"id": "finger", "name": "Finger / Thumb", "canonical_region": "finger", "aliases": ["finger", "thumb", "fingers", "digit", "digits"]},
+    {"id": "foot", "name": "Foot", "canonical_region": "foot", "aliases": ["foot", "feet", "metatarsal", "forefoot", "midfoot"]},
+    {"id": "forearm", "name": "Forearm", "canonical_region": "forearm", "aliases": ["forearm", "radius", "ulna"]},
+    {"id": "hand", "name": "Hand", "canonical_region": "hand", "aliases": ["hand", "metacarpal", "palm", "digits"]},
+    {"id": "head", "name": "Head", "canonical_region": "skull", "aliases": ["head", "skull", "cranium", "head x-ray"]},
+    {"id": "heel", "name": "Heel (Calcaneus)", "canonical_region": "calcaneus", "aliases": ["heel", "calcaneus", "heel bone", "os calcis"]},
+    {"id": "hip", "name": "Hip", "canonical_region": "hip", "aliases": ["hip", "hip joint", "acetabulum", "femoral head"]},
+    {"id": "knee", "name": "Knee", "canonical_region": "knee", "aliases": ["knee", "knee joint", "patella"]},
+    {"id": "kub", "name": "KUB (Kidneys, Ureters, Bladder)", "canonical_region": "abdomen", "aliases": ["kub", "kidneys", "ureters", "bladder", "abdomen kub"]},
+    {"id": "leg", "name": "Leg (Lower Limb)", "canonical_region": "lower extremity", "aliases": ["leg", "lower limb", "lower extremity", "leg x-ray"]},
+    {"id": "lower_extremity", "name": "Lower Extremity", "canonical_region": "lower extremity", "aliases": ["lower extremity", "lower limb", "leg", "legs"]},
+    {"id": "lumbar_spine", "name": "Lumbar Spine", "canonical_region": "lumbar spine", "aliases": ["lumbar spine", "l-spine", "lumbar", "lower back"]},
+    {"id": "nasopharynx", "name": "Nasopharynx", "canonical_region": "nasopharynx", "aliases": ["nasopharynx", "adenoids", "upper pharynx"]},
+    {"id": "neck", "name": "Soft Tissue Neck", "canonical_region": "neck", "aliases": ["neck", "throat", "soft tissue neck"]},
+    {"id": "pelvis", "name": "Pelvis", "canonical_region": "pelvis", "aliases": ["pelvis", "pelvic", "pelvic girdle"]},
+    {"id": "pns", "name": "PNS (Paranasal Sinuses)", "canonical_region": "sinuses", "aliases": ["pns", "paranasal sinuses", "sinus", "sinuses"]},
+    {"id": "shoulder", "name": "Shoulder", "canonical_region": "shoulder", "aliases": ["shoulder", "shoulder joint"]},
+    {"id": "si_joint", "name": "SI Joint (Sacroiliac)", "canonical_region": "sacroiliac joint", "aliases": ["si joint", "si-joint", "sacroiliac joint", "sacroiliac"]},
+    {"id": "skull", "name": "Skull (Cranium)", "canonical_region": "skull", "aliases": ["skull", "cranium", "calvarium"]},
+    {"id": "spine", "name": "Spine", "canonical_region": "spine", "aliases": ["spine", "vertebral column", "backbone", "back", "spine x-ray"]},
+    {"id": "temporal_bone", "name": "Temporal Bone (Mastoid)", "canonical_region": "temporal bone", "aliases": ["temporal bone", "mastoid", "petrous"]},
+    {"id": "tibia", "name": "Tibia / Fibula (Lower Leg)", "canonical_region": "lower leg", "aliases": ["tibia", "fibula", "lower leg", "shin"]},
+    {"id": "upper_extremity", "name": "Upper Extremity", "canonical_region": "upper extremity", "aliases": ["upper extremity", "upper limb", "arm", "arms"]},
+    {"id": "wrist", "name": "Wrist", "canonical_region": "wrist", "aliases": ["wrist", "carpus", "carpal"]},
+]
 
-# Keep search results deterministic after adding aggregate regions.
+_by_id = {item["id"]: item for item in SEARCHABLE_BODY_REGIONS}
+for _required_entry in _REQUIRED_33_ANATOMY_REGIONS:
+    if _required_entry["id"] in _by_id:
+        _existing = _by_id[_required_entry["id"]]
+        for _alias in _required_entry["aliases"]:
+            if _alias not in _existing["aliases"]:
+                _existing["aliases"].append(_alias)
+    else:
+        SEARCHABLE_BODY_REGIONS.append(_required_entry)
+
+# Keep search results deterministic after merging catalogue regions.
 SEARCHABLE_BODY_REGIONS.sort(key=lambda item: (item["name"].lower(), item["canonical_region"]))
 
 

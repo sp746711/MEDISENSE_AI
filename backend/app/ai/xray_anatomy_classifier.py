@@ -29,7 +29,12 @@ PROBABILITY_SUM_TOLERANCE = 0.03
 # Do not treat this choice as proof of clinical accuracy; verify against the original
 # training/export code and evaluate on independently labelled radiographs.
 DEFAULT_PREPROCESSING_MODE = "center_crop"
-SUPPORTED_PREPROCESSING_MODES = {"direct_resize", "center_crop"}
+SUPPORTED_PREPROCESSING_MODES = {
+    "direct_resize",
+    "center_crop",
+    "letterbox",
+    "dual_ensemble",
+}
 # Annotation cleanup has not been validated against this model's training pipeline.
 # Keep it disabled by default until a labelled A/B evaluation demonstrates benefit.
 # It can still be enabled explicitly for controlled evaluation via environment variable.
@@ -163,13 +168,23 @@ class XRayAnatomyClassifier:
         if not 0.0 <= self.min_top_two_margin <= 1.0:
             raise ValueError("XRAY_ANATOMY_MIN_TOP_TWO_MARGIN must be between 0 and 1.")
 
-        configured_preprocessing = (
-            preprocessing_mode
-            or os.getenv(
-                "XRAY_ANATOMY_PREPROCESSING",
-                DEFAULT_PREPROCESSING_MODE,
-            )
-        ).strip().lower()
+        if preprocessing_mode:
+            configured_preprocessing = str(preprocessing_mode).strip().lower()
+        else:
+            settings_mode = None
+            try:
+                from app.core.config import get_settings
+                settings_mode = getattr(get_settings(), "xray_anatomy_preprocessing", None)
+            except Exception:
+                settings_mode = None
+            configured_preprocessing = str(
+                settings_mode
+                or os.getenv(
+                    "XRAY_ANATOMY_PREPROCESSING",
+                    DEFAULT_PREPROCESSING_MODE,
+                )
+            ).strip().lower()
+
         if configured_preprocessing not in SUPPORTED_PREPROCESSING_MODES:
             allowed = ", ".join(sorted(SUPPORTED_PREPROCESSING_MODES))
             raise ValueError(
@@ -358,15 +373,8 @@ class XRayAnatomyClassifier:
                 "card rather than a radiograph. Upload the actual X-ray."
             )
 
-    def _preprocess(self, pil_image: Any):
-        """Prepare a 224x224 RGB tensor using the configured transform.
-
-        ``direct_resize`` retains the complete field of view but changes aspect
-        ratio. ``center_crop`` preserves the legacy aspect-ratio resize/crop
-        behavior but may discard anatomy at the ends of tall or wide images.
-        Neither can be claimed to match the training pipeline until the exact
-        training/export transform is recovered and evaluated.
-        """
+    def _preprocess_tensor(self, pil_image: Any, mode: str):
+        """Prepare a 224x224 RGB tensor using the specified transform."""
         if not self.is_loaded:
             self.load()
 
@@ -388,16 +396,23 @@ class XRayAnatomyClassifier:
 
         self._validate_image_content(image)
 
-        if self.preprocessing_mode == "direct_resize":
-            # Keep all visible anatomy in the tensor instead of cropping the
-            # top/bottom or sides. This reproduces the direct-resize variant
-            # examined in the Goal 1 preprocessing audit.
+        if mode == "direct_resize":
+            # Keep all visible anatomy in the tensor instead of cropping.
             image = image.resize(
                 (IMAGE_SIZE, IMAGE_SIZE),
                 resample=Image.Resampling.BILINEAR,
             )
+        elif mode == "letterbox":
+            # Retain true aspect ratio with black border padding.
+            scale = IMAGE_SIZE / max(width, height)
+            new_w = max(1, int(round(width * scale)))
+            new_h = max(1, int(round(height * scale)))
+            im_resized = image.resize((new_w, new_h), resample=Image.Resampling.BILINEAR)
+            pad_im = Image.new("RGB", (IMAGE_SIZE, IMAGE_SIZE), (0, 0, 0))
+            pad_im.paste(im_resized, ((IMAGE_SIZE - new_w) // 2, (IMAGE_SIZE - new_h) // 2))
+            image = pad_im
         else:
-            # Legacy inference transform retained for A/B comparison.
+            # center_crop: Legacy aspect-ratio resize/crop behavior.
             scale = IMAGE_SIZE / min(width, height)
             resized_width = max(
                 IMAGE_SIZE,
@@ -448,6 +463,11 @@ class XRayAnatomyClassifier:
             )
 
         return tensor
+
+    def _preprocess(self, pil_image: Any):
+        """Prepare a 224x224 RGB tensor using the configured transform."""
+        mode = "center_crop" if self.preprocessing_mode == "dual_ensemble" else self.preprocessing_mode
+        return self._preprocess_tensor(pil_image, mode=mode)
 
     def _remove_colored_annotations(self, pil_image: Any):
         """Return a cleaned inference copy and bounded cleanup metadata.
@@ -529,6 +549,26 @@ class XRayAnatomyClassifier:
     def _run_inference_probabilities(self, image: Any):
         """Run the configured ONNX artifact on one image and validate its scores."""
         import numpy as np
+
+        if self.preprocessing_mode == "dual_ensemble":
+            tensor_crop = self._preprocess_tensor(image, mode="center_crop")
+            out_crop = self.session.run(
+                [self.output_name],
+                {self.input_name: tensor_crop},
+            )
+            raw_crop = np.asarray(out_crop[0], dtype=np.float32)
+            probs_crop = self._interpret_output_scores(raw_crop[0])
+
+            tensor_letterbox = self._preprocess_tensor(image, mode="letterbox")
+            out_letterbox = self.session.run(
+                [self.output_name],
+                {self.input_name: tensor_letterbox},
+            )
+            raw_letterbox = np.asarray(out_letterbox[0], dtype=np.float32)
+            probs_letterbox = self._interpret_output_scores(raw_letterbox[0])
+
+            combined = (probs_crop + probs_letterbox) / 2.0
+            return combined
 
         tensor = self._preprocess(image)
         outputs = self.session.run(
@@ -736,8 +776,32 @@ class XRayAnatomyClassifier:
                 f"{top_two_margin:.1%}. Anatomy remains unverified; no regional "
                 "abnormality model should be selected automatically."
             )
+        warnings: list[str] = []
+        if not confidence_passes:
+            warnings.append(
+                f"Prediction confidence ({confidence:.1%}) is below the review threshold ({self.min_confidence:.1%})."
+            )
+        if not margin_passes:
+            warnings.append(
+                f"Top-two candidate score margin ({top_two_margin:.1%}) is below the ambiguity threshold ({self.min_top_two_margin:.1%})."
+            )
+        if not candidate_is_specific:
+            warnings.append(
+                f"Predicted anatomy '{candidate}' is a broad anatomical region; specific site confirmation is required."
+            )
+        warnings.append(
+            "Anatomy prediction is an automated assistive suggestion and must be confirmed by the user before regional analysis."
+        )
 
         return {
+            "success": True,
+            "class_count": len(self.classes),
+            "predicted_anatomy": candidate,
+            "confidence": round(confidence, 4),
+            "prediction_status": "completed" if accepted else "needs_confirmation",
+            "requires_user_confirmation": True,
+            "preprocessing_verified": False,
+            "warnings": warnings,
             "status": "completed" if accepted else "unverified",
             "body_part_label": candidate if accepted else None,
             "candidate_body_part": candidate,
@@ -750,6 +814,7 @@ class XRayAnatomyClassifier:
             "top_two_margin_threshold": self.min_top_two_margin,
             "top_two_margin_threshold_validated": False,
             "preprocessing_mode": selected_preprocessing,
+            "preprocessing_id": selected_preprocessing,
             "preprocessing_verified_against_training": False,
             "colored_annotation_cleanup": cleanup_meta,
             "colored_cleanup_candidate": (

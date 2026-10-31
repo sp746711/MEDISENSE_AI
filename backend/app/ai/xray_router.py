@@ -26,10 +26,16 @@ logger = get_logger(__name__)
 SUPPORTED_REGIONS: set[str] = {"chest"}  # Updated after registry configuration
 
 MURA_WRIST_CLASSES = ["No abnormality detected", "Abnormality detected"]
-MURA_WRIST_CHECKPOINT = (
+_possible_wrist_checkpoint = (
     Path(__file__).resolve().parents[2]
-    / "models" / "xray" / "wrist" / "XR_WRIST_FINAL_best.pt"
+    / "models" / "xray" / "mura_regions" / "XR_WRIST_FINAL_best.pt"
 )
+if not _possible_wrist_checkpoint.is_file():
+    _possible_wrist_checkpoint = (
+        Path(__file__).resolve().parents[2]
+        / "models" / "xray" / "wrist" / "XR_WRIST_FINAL_best.pt"
+    )
+MURA_WRIST_CHECKPOINT = _possible_wrist_checkpoint
 MURA_REGION_CHECKPOINTS = {
     "elbow": ("XR_ELBOW", "XR_ELBOW_FINAL_best.pt"),
     "finger": ("XR_FINGER", "XR_FINGER_FINAL_best.pt"),
@@ -1146,6 +1152,7 @@ def _broad_anatomy_route_result(
         # Specific-site confirmation remains required even if the broad-label
         # classifier gate passed. This status must not authorize regional inference.
         "anatomy_verification_status": "confirmation_required",
+        "interpretation_status": "not_run_pending_specific_region_confirmation",
         "anatomy_independently_verified": False,
         "anatomy_classifier_accepted": broad_accepted,
         "broad_region_classifier_accepted": broad_accepted,
@@ -1153,6 +1160,9 @@ def _broad_anatomy_route_result(
         "anatomy_verification_method": verification_method,
         "body_part_confidence": confidence,
         "anatomy_detection": anatomy_result,
+        "two_model_comparison": anatomy_result.get("two_model_comparison") if isinstance(anatomy_result, dict) else None,
+        "final_candidate": anatomy_result.get("final_candidate") if isinstance(anatomy_result, dict) else None,
+        "selection_source": anatomy_result.get("selection_source") if isinstance(anatomy_result, dict) else None,
         "reason_code": "broad_anatomy_label" if is_broad_label else "anatomy_specificity_unverified",
         "registry_entry": None,
         "message": message,
@@ -1178,112 +1188,414 @@ def _get_upper_extremity_classifier():
     return _UPPER_EXTREMITY_CLASSIFIER
 
 
+UPPER_EXTREMITY_ANATOMY = {
+    "UPPER_EXTREMITY", "ARM", "SHOULDER", "HUMERUS",
+    "ELBOW", "FOREARM", "WRIST", "HAND", "FINGER", "EXTREMITY",
+}
+LOWER_EXTREMITY_ANATOMY = {
+    "LOWER_EXTREMITY", "LEG", "HIP", "FEMUR",
+    "KNEE", "TIBIA", "ANKLE", "FOOT", "HEEL",
+}
+
+
+def _evaluate_two_model_comparison(
+    image_path: str,
+    anatomy_result: dict[str, Any],
+) -> dict[str, Any]:
+    """Transparently evaluate primary 33-class and 7-class specialist models separately.
+
+    Preserves both predictions, evaluates eligibility and anatomical boundaries,
+    and applies calibrated multi-model decision logic:
+    - CASE A (Agreement): Primary and specialist agree on the same anatomy.
+    - CASE B (Refinement): Specialist safely refines broad upper limb (e.g. UPPER_EXTREMITY -> HAND).
+    - CASE C (Anatomical Mismatch): Specialist prediction is incompatible with primary candidate (e.g. lower limb).
+    - CASE D (Unresolved Disagreement): Models disagree across anatomical boundaries without safe automatic override.
+    - CASE E (Specialist Ineligible/Unavailable): Non-limb anatomy or missing model checkpoint.
+    """
+    raw_candidate = anatomy_result.get("candidate_body_part") or anatomy_result.get("body_part_label")
+    candidate = str(raw_candidate or "").strip().upper().replace(" ", "_")
+    primary_conf = float(anatomy_result.get("body_part_confidence") or 0.0)
+    primary_margin = float(anatomy_result.get("top_two_margin") or 0.0)
+    primary_top = anatomy_result.get("top_predictions", [])
+    
+    # Import specific helper if available, or check BROAD_ANATOMY_LABELS
+    is_broad_primary = candidate in {
+        "EXTREMITY", "LOWER_EXTREMITY", "UPPER_EXTREMITY", "SPINE", "ARM", "LEG", "HEAD"
+    }
+    primary_gate_passed = primary_conf >= 0.60 and primary_margin >= 0.10 and not is_broad_primary
+
+    primary_snapshot = {
+        "model_name": anatomy_result.get("model_name", "convnext_tiny_onnx_33class"),
+        "model_version": anatomy_result.get("model_sha256"),
+        "candidate_body_part": candidate,
+        "confidence": round(primary_conf, 4),
+        "second_candidate_body_part": anatomy_result.get("second_candidate_body_part"),
+        "second_candidate_confidence": anatomy_result.get("second_candidate_confidence"),
+        "top_two_margin": round(primary_margin, 4),
+        "top_predictions": primary_top[:5],
+        "gate_passed": primary_gate_passed,
+        "is_broad_region": is_broad_primary,
+        "status": "gate_passed" if primary_gate_passed else ("broad_region" if is_broad_primary else "low_confidence"),
+    }
+    anatomy_result["primary_classifier_result"] = primary_snapshot
+
+    is_upper_extremity = candidate in UPPER_EXTREMITY_ANATOMY
+    is_lower_extremity = candidate in LOWER_EXTREMITY_ANATOMY
+    is_broad_upper = candidate in {"UPPER_EXTREMITY", "ARM", "EXTREMITY"}
+
+    # CASE E: Non-limb regions (Chest, Abdomen, Skull, Spine, etc.) - Specialist is ineligible
+    if not (is_upper_extremity or is_lower_extremity or is_broad_upper):
+        specialist_snapshot = {
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_version": None,
+            "candidate_body_part": None,
+            "confidence": None,
+            "top_two_margin": None,
+            "top_predictions": [],
+            "eligibility": "ineligible",
+            "status": "NOT_INVOKED",
+            "reason_code": "non_limb_anatomy",
+            "message": f"7-class upper-extremity specialist is not eligible for non-limb region '{candidate}'.",
+        }
+        two_model_comp = {
+            "decision_case": "CASE_E_SPECIALIST_NOT_INVOKED",
+            "compatibility_type": "specialist_not_applicable",
+            "is_compatible": True,
+            "is_unresolved": False,
+            "summary": f"Primary model evaluated {candidate} ({primary_conf:.1%}). Specialist model not invoked for non-limb anatomy.",
+            "final_candidate": candidate,
+            "selection_source": "PRIMARY MODEL",
+            "source_attributed_confidence": round(primary_conf, 4),
+            "confidence_source": "primary_model",
+            "primary_model": primary_snapshot,
+            "specialist_model": specialist_snapshot,
+        }
+        anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+        anatomy_result["two_model_comparison"] = two_model_comp
+        anatomy_result["final_candidate"] = candidate
+        anatomy_result["selection_source"] = "PRIMARY MODEL"
+        anatomy_result["confidence_source"] = "primary_model"
+        anatomy_result["source_attributed_confidence"] = round(primary_conf, 4)
+        return anatomy_result
+
+    # Limb regions: invoke dedicated specialist model
+    try:
+        classifier = _get_upper_extremity_classifier()
+        refined = classifier.predict_file(image_path)
+    except FileNotFoundError as exc:
+        specialist_snapshot = {
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_version": None,
+            "candidate_body_part": None,
+            "confidence": None,
+            "top_two_margin": None,
+            "top_predictions": [],
+            "eligibility": "eligible",
+            "status": "UNAVAILABLE",
+            "reason_code": "upper_extremity_specialist_checkpoint_missing",
+            "message": f"Specialist checkpoint is not installed: {exc}",
+        }
+        two_model_comp = {
+            "decision_case": "CASE_E_SPECIALIST_UNAVAILABLE",
+            "compatibility_type": "specialist_unavailable",
+            "is_compatible": False,
+            "is_unresolved": False,
+            "summary": f"Specialist evaluation unavailable (checkpoint missing). Primary candidate '{candidate}' preserved.",
+            "final_candidate": candidate,
+            "selection_source": "PRIMARY MODEL",
+            "source_attributed_confidence": round(primary_conf, 4),
+            "confidence_source": "primary_model",
+            "primary_model": primary_snapshot,
+            "specialist_model": specialist_snapshot,
+        }
+        anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+        anatomy_result["two_model_comparison"] = two_model_comp
+        anatomy_result["final_candidate"] = candidate
+        anatomy_result["selection_source"] = "PRIMARY MODEL"
+        anatomy_result["confidence_source"] = "primary_model"
+        anatomy_result["source_attributed_confidence"] = round(primary_conf, 4)
+        return anatomy_result
+    except Exception as exc:
+        specialist_snapshot = {
+            "model_name": "swin_tiny_mura_upper_extremity_7class",
+            "model_version": None,
+            "candidate_body_part": None,
+            "confidence": None,
+            "top_two_margin": None,
+            "top_predictions": [],
+            "eligibility": "eligible",
+            "status": "FAILED",
+            "reason_code": "upper_extremity_specialist_inference_failed",
+            "message": f"Specialist inference failed: {type(exc).__name__}: {exc}",
+        }
+        two_model_comp = {
+            "decision_case": "CASE_E_SPECIALIST_FAILED",
+            "compatibility_type": "specialist_inference_failed",
+            "is_compatible": False,
+            "is_unresolved": False,
+            "summary": f"Specialist execution failed. Primary candidate '{candidate}' preserved.",
+            "final_candidate": candidate,
+            "selection_source": "PRIMARY MODEL",
+            "source_attributed_confidence": round(primary_conf, 4),
+            "confidence_source": "primary_model",
+            "primary_model": primary_snapshot,
+            "specialist_model": specialist_snapshot,
+        }
+        anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+        anatomy_result["two_model_comparison"] = two_model_comp
+        anatomy_result["final_candidate"] = candidate
+        anatomy_result["selection_source"] = "PRIMARY MODEL"
+        anatomy_result["confidence_source"] = "primary_model"
+        anatomy_result["source_attributed_confidence"] = round(primary_conf, 4)
+        return anatomy_result
+
+    spec_cand = str(refined.get("candidate_body_part") or "").strip().upper()
+    spec_conf = float(refined.get("confidence") or 0.0)
+    spec_margin = float(refined.get("top_two_margin") or 0.0)
+    spec_top = refined.get("top_predictions", [])
+    spec_model_name = refined.get("model_name", "swin_tiny_mura_upper_extremity_7class")
+    spec_model_sha256 = refined.get("model_sha256")
+    spec_gate_passed = spec_conf >= 0.60 and spec_margin >= 0.10
+
+    # 1. CASE A: Both models agree on the specific anatomy
+    if candidate == spec_cand or (candidate == "ARM" and spec_cand == "HUMERUS"):
+        specialist_snapshot = {
+            "model_name": spec_model_name,
+            "model_version": spec_model_sha256,
+            "candidate_body_part": spec_cand,
+            "confidence": round(spec_conf, 4),
+            "top_two_margin": round(spec_margin, 4),
+            "top_predictions": spec_top[:5],
+            "eligibility": "eligible",
+            "status": "ACCEPTED",
+            "reason_code": "compatible_agreement",
+            "message": f"Specialist agrees with primary model: both identified {spec_cand}.",
+        }
+        two_model_comp = {
+            "decision_case": "CASE_A_AGREEMENT",
+            "compatibility_type": "compatible_agreement",
+            "is_compatible": True,
+            "is_unresolved": False,
+            "summary": f"Both models agree on {spec_cand} (Primary: {primary_conf:.1%}, Specialist: {spec_conf:.1%}).",
+            "final_candidate": spec_cand,
+            "selection_source": "PRIMARY MODEL (AGREED WITH SPECIALIST)",
+            "source_attributed_confidence": round(primary_conf, 4),
+            "confidence_source": "primary_model",
+            "primary_model": primary_snapshot,
+            "specialist_model": specialist_snapshot,
+        }
+        anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+        anatomy_result["two_model_comparison"] = two_model_comp
+        anatomy_result["final_candidate"] = spec_cand
+        anatomy_result["selection_source"] = "PRIMARY MODEL (AGREED WITH SPECIALIST)"
+        anatomy_result["confidence_source"] = "primary_model"
+        anatomy_result["source_attributed_confidence"] = round(primary_conf, 4)
+        return anatomy_result
+
+    # 2. CASE B: Broad upper limb refined by specialist to a specific site
+    from app.ai.upper_extremity_anatomy_classifier import UPPER_EXTREMITY_CLASSES
+    if is_broad_upper and spec_cand in UPPER_EXTREMITY_CLASSES:
+        if spec_gate_passed:
+            specialist_snapshot = {
+                "model_name": spec_model_name,
+                "model_version": spec_model_sha256,
+                "candidate_body_part": spec_cand,
+                "confidence": round(spec_conf, 4),
+                "top_two_margin": round(spec_margin, 4),
+                "top_predictions": spec_top[:5],
+                "eligibility": "eligible",
+                "status": "ACCEPTED",
+                "reason_code": "compatible_refinement",
+                "message": f"Specialist refined broad candidate '{candidate}' to specific anatomy '{spec_cand}' ({spec_conf:.1%}).",
+            }
+            two_model_comp = {
+                "decision_case": "CASE_B_REFINEMENT",
+                "compatibility_type": "compatible_refinement",
+                "is_compatible": True,
+                "is_unresolved": False,
+                "summary": f"Specialist refined broad region '{candidate}' ({primary_conf:.1%}) to specific anatomy '{spec_cand}' ({spec_conf:.1%}).",
+                "final_candidate": spec_cand,
+                "selection_source": "SPECIALIST REFINEMENT",
+                "source_attributed_confidence": round(spec_conf, 4),
+                "confidence_source": "specialist_refinement",
+                "primary_model": primary_snapshot,
+                "specialist_model": specialist_snapshot,
+            }
+            anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+            anatomy_result["two_model_comparison"] = two_model_comp
+            anatomy_result["final_candidate"] = spec_cand
+            anatomy_result["selection_source"] = "SPECIALIST REFINEMENT"
+            anatomy_result["confidence_source"] = "specialist_refinement"
+            anatomy_result["body_part_label"] = spec_cand
+            anatomy_result["candidate_body_part"] = spec_cand
+            anatomy_result["body_part_confidence"] = round(spec_conf, 4)
+            anatomy_result["source_attributed_confidence"] = round(spec_conf, 4)
+            anatomy_result["candidate_is_specific_anatomy"] = True
+            anatomy_result["refined_by_model_name"] = spec_model_name
+            anatomy_result["status"] = "completed"
+            anatomy_result["message"] = (
+                f"The primary classifier returned {candidate} ({primary_conf:.1%}) and the dedicated "
+                f"specialist refined the candidate to {spec_cand} ({spec_conf:.1%}). "
+                "User confirmation is required before regional analysis."
+            )
+            return anatomy_result
+        else:
+            specialist_snapshot = {
+                "model_name": spec_model_name,
+                "model_version": spec_model_sha256,
+                "candidate_body_part": spec_cand,
+                "confidence": round(spec_conf, 4),
+                "top_two_margin": round(spec_margin, 4),
+                "top_predictions": spec_top[:5],
+                "eligibility": "eligible",
+                "status": "REJECTED",
+                "reason_code": "specialist_below_confidence_gate",
+                "message": f"Specialist suggested '{spec_cand}' ({spec_conf:.1%}) but failed the 60% confidence/margin gate.",
+            }
+            two_model_comp = {
+                "decision_case": "CASE_B_REFINEMENT_BELOW_GATE",
+                "compatibility_type": "refinement_below_threshold",
+                "is_compatible": False,
+                "is_unresolved": False,
+                "summary": f"Broad region '{candidate}' preserved; specialist refinement '{spec_cand}' failed 60% confidence gate.",
+                "final_candidate": candidate,
+                "selection_source": "PRIMARY MODEL",
+                "source_attributed_confidence": round(primary_conf, 4),
+                "confidence_source": "primary_model",
+                "primary_model": primary_snapshot,
+                "specialist_model": specialist_snapshot,
+            }
+            anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+            anatomy_result["two_model_comparison"] = two_model_comp
+            anatomy_result["final_candidate"] = candidate
+            anatomy_result["selection_source"] = "PRIMARY MODEL"
+            anatomy_result["confidence_source"] = "primary_model"
+            anatomy_result["source_attributed_confidence"] = round(primary_conf, 4)
+            return anatomy_result
+
+    # 3. CASE D: Cross-limb disagreement where primary confidence is low (<60%) and specialist appears plausible
+    if is_lower_extremity and primary_conf < 0.60:
+        specialist_snapshot = {
+            "model_name": spec_model_name,
+            "model_version": spec_model_sha256,
+            "candidate_body_part": spec_cand,
+            "confidence": round(spec_conf, 4),
+            "top_two_margin": round(spec_margin, 4),
+            "top_predictions": spec_top[:5],
+            "eligibility": "evaluated_comparative_audit",
+            "status": "REJECTED",
+            "reason_code": "cross_limb_unresolved_disagreement",
+            "message": (
+                f"Cross-limb model disagreement: Primary predicted lower-extremity '{candidate}' ({primary_conf:.1%}) "
+                f"while specialist predicted upper-extremity '{spec_cand}' ({spec_conf:.1%}). "
+                "No safe automatic override permitted; user selection required."
+            ),
+        }
+        two_model_comp = {
+            "decision_case": "CASE_D_UNRESOLVED",
+            "compatibility_type": "unresolved_disagreement",
+            "is_compatible": False,
+            "is_unresolved": True,
+            "summary": f"Unresolved cross-limb disagreement: Primary predicted {candidate} ({primary_conf:.1%}), Specialist predicted {spec_cand} ({spec_conf:.1%}). Manual user selection required.",
+            "final_candidate": candidate,
+            "selection_source": "UNRESOLVED DISAGREEMENT (PRIMARY PRESERVED)",
+            "source_attributed_confidence": round(primary_conf, 4),
+            "confidence_source": "primary_model",
+            "primary_model": primary_snapshot,
+            "specialist_model": specialist_snapshot,
+        }
+        anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+        anatomy_result["two_model_comparison"] = two_model_comp
+        anatomy_result["final_candidate"] = candidate
+        anatomy_result["selection_source"] = "UNRESOLVED DISAGREEMENT (PRIMARY PRESERVED)"
+        anatomy_result["confidence_source"] = "primary_model"
+        anatomy_result["source_attributed_confidence"] = round(primary_conf, 4)
+        return anatomy_result
+
+    # 4. CASE C: Anatomical mismatch (e.g. Primary lower extremity with confident or high primary score)
+    if is_lower_extremity:
+        specialist_snapshot = {
+            "model_name": spec_model_name,
+            "model_version": spec_model_sha256,
+            "candidate_body_part": spec_cand,
+            "confidence": round(spec_conf, 4),
+            "top_two_margin": round(spec_margin, 4),
+            "top_predictions": spec_top[:5],
+            "eligibility": "evaluated_comparative_audit",
+            "status": "REJECTED",
+            "reason_code": "incompatible_anatomical_region",
+            "message": (
+                f"Anatomical boundary mismatch: upper-extremity specialist ({spec_cand} {spec_conf:.1%}) "
+                f"cannot override lower-extremity candidate ({candidate} {primary_conf:.1%}). "
+                f"The original primary candidate ({candidate}) is preserved."
+            ),
+        }
+        two_model_comp = {
+            "decision_case": "CASE_C_DISAGREEMENT",
+            "compatibility_type": "anatomical_mismatch",
+            "is_compatible": False,
+            "is_unresolved": False,
+            "summary": f"Specialist rejected: upper-extremity {spec_cand} is incompatible with lower-extremity {candidate}.",
+            "final_candidate": candidate,
+            "selection_source": "PRIMARY MODEL",
+            "source_attributed_confidence": round(primary_conf, 4),
+            "confidence_source": "primary_model",
+            "primary_model": primary_snapshot,
+            "specialist_model": specialist_snapshot,
+        }
+        anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+        anatomy_result["two_model_comparison"] = two_model_comp
+        anatomy_result["final_candidate"] = candidate
+        anatomy_result["selection_source"] = "PRIMARY MODEL"
+        anatomy_result["confidence_source"] = "primary_model"
+        anatomy_result["source_attributed_confidence"] = round(primary_conf, 4)
+        return anatomy_result
+
+    # 5. Within upper-extremity joint disagreement (e.g. Primary ELBOW, Specialist WRIST)
+    specialist_snapshot = {
+        "model_name": spec_model_name,
+        "model_version": spec_model_sha256,
+        "candidate_body_part": spec_cand,
+        "confidence": round(spec_conf, 4),
+        "top_two_margin": round(spec_margin, 4),
+        "top_predictions": spec_top[:5],
+        "eligibility": "eligible",
+        "status": "REJECTED",
+        "reason_code": "within_limb_joint_disagreement",
+        "message": (
+            f"Within-limb disagreement: Primary predicted {candidate} ({primary_conf:.1%}) "
+            f"while specialist predicted {spec_cand} ({spec_conf:.1%}). "
+            "No cross-joint override allowed without user confirmation."
+        ),
+    }
+    two_model_comp = {
+        "decision_case": "CASE_C_DISAGREEMENT",
+        "compatibility_type": "within_limb_disagreement",
+        "is_compatible": False,
+        "is_unresolved": False,
+        "summary": f"Model disagreement: Primary {candidate} vs Specialist {spec_cand}. Primary candidate preserved.",
+        "final_candidate": candidate,
+        "selection_source": "PRIMARY MODEL",
+        "source_attributed_confidence": round(primary_conf, 4),
+        "confidence_source": "primary_model",
+        "primary_model": primary_snapshot,
+        "specialist_model": specialist_snapshot,
+    }
+    anatomy_result["upper_extremity_refinement"] = specialist_snapshot
+    anatomy_result["two_model_comparison"] = two_model_comp
+    anatomy_result["final_candidate"] = candidate
+    anatomy_result["selection_source"] = "PRIMARY MODEL"
+    anatomy_result["confidence_source"] = "primary_model"
+    anatomy_result["source_attributed_confidence"] = round(primary_conf, 4)
+    return anatomy_result
+
+
 def _refine_broad_upper_extremity_candidate(
     image_path: str,
     anatomy_result: dict[str, Any],
 ) -> dict[str, Any]:
-    """Try a dedicated 7-class sub-classifier only for broad upper-limb outputs.
-
-    The primary 33-class model is weak at separating a wrist from the broad
-    UPPER_EXTREMITY category. A separately trained 7-class classifier can refine
-    that result. If its checkpoint is absent, fails, or does not pass the same
-    provisional score/margin gates, the original broad prediction is preserved.
-    No label is inferred from a filename or forcibly promoted.
-    """
-    raw_candidate = anatomy_result.get("candidate_body_part") or anatomy_result.get("body_part_label")
-    candidate = str(raw_candidate or "").strip().upper().replace(" ", "_")
-    if candidate not in {"UPPER_EXTREMITY", "ARM"}:
-        return anatomy_result
-
-    primary_snapshot = {
-        "candidate_body_part": anatomy_result.get("candidate_body_part") or anatomy_result.get("body_part_label"),
-        "confidence": anatomy_result.get("body_part_confidence"),
-        "second_candidate_body_part": anatomy_result.get("second_candidate_body_part"),
-        "second_candidate_confidence": anatomy_result.get("second_candidate_confidence"),
-        "top_two_margin": anatomy_result.get("top_two_margin"),
-        "top_predictions": anatomy_result.get("top_predictions", []),
-        "model_name": anatomy_result.get("model_name"),
-    }
-    try:
-        classifier = _get_upper_extremity_classifier()
-        # Use the untouched uploaded image for the specialist classifier.
-        # Annotation cleanup is not validated against this model's training pipeline
-        # and must not be applied here behind the primary classifier's opt-in setting.
-        # The original file is never modified.
-        refined = classifier.predict_file(image_path)
-        refined["annotation_cleanup"] = {
-            "applied": False,
-            "reason": "disabled_unvalidated_preprocessing",
-        }
-    except FileNotFoundError as exc:
-        anatomy_result["upper_extremity_refinement"] = {
-            "status": "unavailable",
-            "reason_code": "upper_extremity_specialist_checkpoint_missing",
-            "message": str(exc),
-            "primary_candidate": primary_snapshot["candidate_body_part"],
-            "top_predictions": [],
-        }
-        logger.info("Upper-extremity sub-classifier not installed; retaining broad candidate")
-        return anatomy_result
-    except Exception as exc:
-        anatomy_result["upper_extremity_refinement"] = {
-            "status": "failed",
-            "reason_code": "upper_extremity_specialist_inference_failed",
-            "message": f"{type(exc).__name__}: {exc}",
-            "primary_candidate": primary_snapshot["candidate_body_part"],
-            "top_predictions": [],
-        }
-        logger.exception("Upper-extremity sub-classification failed; retaining broad candidate")
-        return anatomy_result
-
-    accepted = bool(refined.get("accepted"))
-    specialist_result = {
-        "status": "accepted" if accepted else "unverified",
-        "reason_code": None if accepted else "upper_extremity_specialist_below_gate",
-        "primary_candidate": primary_snapshot["candidate_body_part"],
-        "primary_confidence": primary_snapshot["confidence"],
-        "candidate_body_part": refined.get("candidate_body_part"),
-        "confidence": refined.get("confidence"),
-        "second_candidate_body_part": refined.get("second_candidate_body_part"),
-        "second_confidence": refined.get("second_confidence"),
-        "top_two_margin": refined.get("top_two_margin"),
-        "top_predictions": refined.get("top_predictions", []),
-        "confidence_threshold": refined.get("confidence_threshold"),
-        "min_confidence_margin": refined.get("min_confidence_margin"),
-        "confidence_threshold_validated": False,
-        "model_name": refined.get("model_name"),
-        "model_sha256": refined.get("model_sha256"),
-        "preprocessing_id": refined.get("preprocessing_id"),
-        "message": refined.get("message"),
-    }
-    if not accepted:
-        anatomy_result["upper_extremity_refinement"] = specialist_result
-        return anatomy_result
-
-    # Preserve original full-body inference for debugging/traceability, then use
-    # the specific-region classifier's own output contract for downstream routing.
-    anatomy_result["primary_classifier_result"] = primary_snapshot
-    anatomy_result["upper_extremity_refinement"] = specialist_result
-    anatomy_result["body_part_label"] = refined["candidate_body_part"]
-    anatomy_result["candidate_body_part"] = refined["candidate_body_part"]
-    anatomy_result["body_part_confidence"] = float(refined["confidence"])
-    anatomy_result["second_candidate_body_part"] = refined.get("second_candidate_body_part")
-    anatomy_result["second_candidate_confidence"] = refined.get("second_confidence")
-    anatomy_result["top_two_margin"] = refined.get("top_two_margin")
-    anatomy_result["confidence_threshold"] = refined.get("confidence_threshold", 0.60)
-    anatomy_result["min_confidence_margin"] = refined.get("min_confidence_margin", 0.10)
-    anatomy_result["top_predictions"] = refined.get("top_predictions", [])
-    anatomy_result["candidate_is_specific_anatomy"] = True
-    anatomy_result["refined_by_model_name"] = refined.get("model_name")
-    anatomy_result["refined_by_model_sha256"] = refined.get("model_sha256")
-    anatomy_result["refined_preprocessing_id"] = refined.get("preprocessing_id")
-    anatomy_result["status"] = "completed"
-    anatomy_result["message"] = (
-        f"The primary classifier returned {primary_snapshot['candidate_body_part']} and a dedicated "
-        f"upper-extremity classifier refined the candidate to {refined['candidate_body_part']} "
-        f"({float(refined['confidence']):.1%} specialist score). The specialist score is not a clinical probability."
-    )
-    return anatomy_result
+    """Backward compatibility alias for _evaluate_two_model_comparison."""
+    return _evaluate_two_model_comparison(image_path, anatomy_result)
 
 
 def _get_body_part_classifier():
@@ -1293,10 +1605,12 @@ def _get_body_part_classifier():
         return _BODY_PART_CLASSIFIER
 
     with _BODY_PART_CLASSIFIER_LOCK:
-        if _BODY_PART_CLASSIFIER is None:
             from app.ai.xray_anatomy_classifier import XRayAnatomyClassifier
+            from app.core.config import get_settings
 
-            classifier = XRayAnatomyClassifier()
+            settings = get_settings()
+            configured_mode = getattr(settings, "xray_anatomy_preprocessing", None)
+            classifier = XRayAnatomyClassifier(preprocessing_mode=configured_mode)
             classifier.load()
             _BODY_PART_CLASSIFIER = classifier
     return _BODY_PART_CLASSIFIER
@@ -1305,12 +1619,13 @@ def _get_body_part_classifier():
 def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[str, Any]:
     """Route an X-ray by image-detected anatomy when no region is supplied.
 
-    The automatic path uses the separate body-part classifier first. It only
-    reaches the existing regional model registry when the classifier's configured
-    confidence and ambiguity gates are passed. The ordinary upload endpoint calls
-    this function without a declared region. `declared_region` is reserved for an
-    explicit post-upload user confirmation/correction path; it is never inferred
-    from the filename and does not itself verify clinical findings.
+    The automatic path uses the separate body-part classifier first. It evaluates
+    confidence and ambiguity gates, but a classifier prediction remains a candidate:
+    this path never launches regional abnormality inference until the user confirms
+    or corrects the specific region through the explicit ``declared_region`` path.
+    The ordinary upload endpoint calls this function without a declared region.
+    ``declared_region`` must come from an explicit user choice, never a filename or
+    an unconfirmed classifier candidate, and does not verify clinical findings.
     """
     if not isinstance(declared_region, str) or not declared_region.strip():
         try:
@@ -1326,6 +1641,7 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "is_recognized": False,
                 "region_source": "image_classifier",
                 "anatomy_verification_status": "unavailable",
+                "interpretation_status": "not_run_classifier_unavailable",
                 "reason_code": "anatomy_classifier_unavailable",
                 "registry_entry": None,
                 "diagnostic_message": str(exc),
@@ -1348,6 +1664,7 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "is_recognized": False,
                 "region_source": "image_classifier",
                 "anatomy_verification_status": "failed",
+                "interpretation_status": "not_run_classification_failed",
                 "reason_code": "anatomy_classification_failed",
                 "registry_entry": None,
                 "diagnostic_message": str(exc),
@@ -1387,6 +1704,7 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "region_source": "image_classifier",
                 "classification_status": classifier_status or "unknown",
                 "anatomy_verification_status": "unverified",
+                "interpretation_status": "not_run_anatomy_unverified",
                 "anatomy_independently_verified": False,
                 "anatomy_classifier_accepted": False,
                 "anatomy_verification_method": None,
@@ -1510,11 +1828,15 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "region_source": "image_classifier",
                 "classification_status": "completed",
                 "anatomy_verification_status": "unverified",
+                "interpretation_status": "not_run_anatomy_unverified",
                 "anatomy_independently_verified": False,
                 "anatomy_classifier_accepted": False,
                 "anatomy_verification_method": None,
                 "body_part_confidence": confidence_value,
                 "anatomy_detection": anatomy_result,
+                "two_model_comparison": anatomy_result.get("two_model_comparison") if isinstance(anatomy_result, dict) else None,
+                "final_candidate": anatomy_result.get("final_candidate") if isinstance(anatomy_result, dict) else None,
+                "selection_source": anatomy_result.get("selection_source") if isinstance(anatomy_result, dict) else None,
                 "reason_code": reason_code,
                 "registry_entry": None,
                 "message": message,
@@ -1536,6 +1858,7 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 "region_source": "image_classifier",
                 "classification_status": "completed",
                 "anatomy_verification_status": "failed",
+                "interpretation_status": "not_run_unrecognized_anatomy",
                 "anatomy_independently_verified": False,
                 "body_part_confidence": confidence,
                 "anatomy_detection": anatomy_result,
@@ -1592,17 +1915,25 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
                 # Confirmation is required even when this region is recognized.
                 "anatomy_verification_status": "confirmation_required",
                 "anatomy_independently_verified": False,
-                "anatomy_classifier_accepted": False,
+                "anatomy_classifier_accepted": True,
+                "classifier_gate_passed": True,
                 "anatomy_verification_method": None,
-                "interpretation_status": "unavailable",
+                "specific_region_confirmation_required": True,
+                "interpretation_status": "unavailable_no_compatible_model",
+                "regional_model_status": "unsupported_region",
+                "regional_model_configured": False,
+                "regional_model_available": False,
                 "body_part_confidence": confidence,
                 "anatomy_detection": anatomy_result,
+                "two_model_comparison": anatomy_result.get("two_model_comparison") if isinstance(anatomy_result, dict) else None,
+                "final_candidate": anatomy_result.get("final_candidate") if isinstance(anatomy_result, dict) else None,
+                "selection_source": anatomy_result.get("selection_source") if isinstance(anatomy_result, dict) else None,
                 "reason_code": "unsupported_region",
                 "registry_entry": None,
                 "message": (
-                    f"Anatomy classification accepted: {display} ({float(confidence):.1%} classifier score). "
-                    "Automated abnormality interpretation is unavailable because no compatible region-specific model is configured. "
-                    "The classifier score is not clinical confirmation or a diagnosis."
+                    f"The anatomy classifier accepted {display} ({float(confidence):.1%} classifier score, classifier gate passed). "
+                    f"However, automated abnormality interpretation is unavailable because no compatible region-specific regional model is configured for {display}. "
+                    "The classifier score is a candidate recommendation, not independent clinical verification or a diagnosis."
                 ),
             }
 
@@ -1611,6 +1942,7 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
         # This prevents a confident but incorrect body-part prediction from routing
         # the image into an incompatible model.
         display = detected_region.replace("_", " ").title()
+        is_available, _ = configured_entry.check_availability()
         return {
             "region": detected_region,
             "canonical_region": detected_region,
@@ -1624,43 +1956,30 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
             "classification_status": "completed",
             "anatomy_verification_status": "confirmation_required",
             "anatomy_independently_verified": False,
-            "anatomy_classifier_accepted": False,
+            "anatomy_classifier_accepted": True,
+            "classifier_gate_passed": True,
             "anatomy_verification_method": None,
             "specific_region_confirmation_required": True,
-            "interpretation_status": "not_run_pending_anatomy_confirmation",
+            "interpretation_status": "not_run_pending_specific_region_confirmation",
+            "regional_model_status": "configured_and_available" if is_available else "configured_unavailable",
+            "regional_model_configured": True,
+            "regional_model_available": is_available,
+            "regional_model_name": configured_entry.display_name,
             "body_part_confidence": confidence,
             "anatomy_detection": anatomy_result,
+            "two_model_comparison": anatomy_result.get("two_model_comparison") if isinstance(anatomy_result, dict) else None,
+            "final_candidate": anatomy_result.get("final_candidate") if isinstance(anatomy_result, dict) else None,
+            "selection_source": anatomy_result.get("selection_source") if isinstance(anatomy_result, dict) else None,
             "reason_code": "anatomy_confirmation_required",
             "registry_entry": None,
             "message": (
-                f"The image classifier suggests {display} "
-                f"(score: {float(confidence):.1%}), but this is not independent verification. "
-                "Confirm the specific X-ray region before regional interpretation. "
-                "No regional abnormality model was run."
+                f"The image classifier suggests {display} (score: {float(confidence):.1%}, classifier gate passed). "
+                f"A compatible regional interpretation model ({configured_entry.display_name}) is configured"
+                + (" and available." if is_available else " but currently unavailable.")
+                + " Confirm the specific X-ray region to proceed with interpretation. "
+                "The classifier score is not independent clinical verification or a diagnosis."
             ),
         }
-        # Intentionally unreachable until an explicit confirmation flow is wired in.
-        routed_result = route_xray(image_path, declared_region=detected_region)
-        routed_result["region_source"] = "image_classifier"
-        routed_result["detected_region"] = detected_region
-        routed_result["classification_status"] = "completed"
-        routed_result["anatomy_verification_status"] = "completed"
-        routed_result["anatomy_independently_verified"] = False
-        routed_result["anatomy_classifier_accepted"] = True
-        routed_result["anatomy_verification_method"] = "classifier_threshold"
-        routed_result["interpretation_status"] = str(routed_result.get("status") or "unavailable").lower()
-        routed_result["body_part_confidence"] = confidence
-        routed_result["anatomy_detection"] = anatomy_result
-        try:
-            confidence_label = f"{float(confidence):.1%}" if confidence is not None else "not available"
-        except (TypeError, ValueError):
-            confidence_label = "not available"
-        routed_result["message"] = (
-            f"Automatically classified this image as {detected_region.replace('_', ' ').title()} "
-            f"(classifier score: {confidence_label}). "
-            f"{routed_result.get('message', '')}"
-        ).strip()
-        return routed_result
 
     canonical_region, is_recognized = normalize_region_name(declared_region)
     entry = XRAY_MODEL_REGISTRY.get(canonical_region)
@@ -1697,6 +2016,10 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
             "is_supported": False,
             "is_available": False,
             "is_recognized": True,
+            "regional_model_configured": False,
+            "regional_model_available": False,
+            "regional_model_name": None,
+            "regional_model_status": "unsupported_region",
             "region_source": "declared_region",
             "reason_code": "broad_anatomy_label" if is_broad else "unsupported_region",
             "registry_entry": None,
@@ -1717,6 +2040,10 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
             "is_supported": True,
             "is_available": True,
             "is_recognized": True,
+            "regional_model_configured": True,
+            "regional_model_available": True,
+            "regional_model_name": entry.display_name,
+            "regional_model_status": "configured_and_available",
             "registry_entry": entry.to_dict(),
             "message": (
                 f"Routed to {entry.display_name} model adapter "
@@ -1766,6 +2093,10 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
             "is_supported": True,
             "is_available": False,
             "is_recognized": True,
+            "regional_model_configured": True,
+            "regional_model_available": False,
+            "regional_model_name": entry.display_name,
+            "regional_model_status": "configured_unavailable",
             "registry_entry": entry.to_dict(),
             "reason_code": reason_code,
             "diagnostic_message": str(avail_reason),
@@ -1784,6 +2115,10 @@ def route_xray(image_path: str, declared_region: Optional[str] = None) -> dict[s
         "is_supported": False,
         "is_available": False,
         "is_recognized": True,
+        "regional_model_configured": False,
+        "regional_model_available": False,
+        "regional_model_name": entry.display_name,
+        "regional_model_status": "unsupported_region",
         "registry_entry": entry.to_dict(),
         "reason_code": "unsupported_region",
         "message": (

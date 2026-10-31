@@ -1,0 +1,304 @@
+{
+  "crop_metrics": {
+    "mode": "center_crop",
+    "total": 27,
+    "top1_acc": 0.5925925925925926,
+    "top3_acc": 0.7407407407407407,
+    "abstention_rate": 0.5185185185185185,
+    "accepted_total": 13,
+    "accepted_acc": 0.8461538461538461,
+    "high_conf_wrong": 2,
+    "macro_f1": 0.5304988662131519,
+    "macro_prec": 0.5642857142857143,
+    "macro_rec": 0.5571428571428572,
+    "weighted_f1": 0.5982951205173428,
+    "per_class": {
+      "ABDOMEN": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "ANKLE": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      },
+      "CERVICAL_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "CHEST": {
+        "support": 5,
+        "correct": 4,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889
+      },
+      "ELBOW": {
+        "support": 3,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "FOOT": {
+        "support": 2,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "FOREARM": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "HAND": {
+        "support": 2,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "HIP": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "KNEE": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.4,
+        "recall": 1.0,
+        "f1": 0.5714285714285715
+      },
+      "LUMBAR_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "PELVIS": {
+        "support": 1,
+        "correct": 1,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666
+      },
+      "SKULL": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "WRIST": {
+        "support": 3,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 0.6666666666666666,
+        "f1": 0.8
+      }
+    },
+    "eval_classes": [
+      "ABDOMEN",
+      "ANKLE",
+      "CERVICAL_SPINE",
+      "CHEST",
+      "ELBOW",
+      "FOOT",
+      "FOREARM",
+      "HAND",
+      "HIP",
+      "KNEE",
+      "LUMBAR_SPINE",
+      "PELVIS",
+      "SKULL",
+      "WRIST"
+    ],
+    "unsupported_classes": [
+      "ARM",
+      "DORSAL_SPINE",
+      "EXTREMITY",
+      "FEMUR",
+      "FINGER",
+      "HEAD",
+      "HEEL",
+      "KUB",
+      "LEG",
+      "LOWER_EXTREMITY",
+      "NASOPHARYNX",
+      "NECK",
+      "PNS",
+      "SHOULDER",
+      "SI_JOINT",
+      "SPINE",
+      "TEMPORAL_BONE",
+      "TIBIA",
+      "UPPER_EXTREMITY"
+    ]
+  },
+  "resize_metrics": {
+    "mode": "direct_resize",
+    "total": 27,
+    "top1_acc": 0.6296296296296297,
+    "top3_acc": 0.8148148148148148,
+    "abstention_rate": 0.4074074074074074,
+    "accepted_total": 16,
+    "accepted_acc": 0.75,
+    "high_conf_wrong": 4,
+    "macro_f1": 0.48968253968253966,
+    "macro_prec": 0.5357142857142857,
+    "macro_rec": 0.5333333333333333,
+    "weighted_f1": 0.6251028806584361,
+    "per_class": {
+      "ABDOMEN": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "ANKLE": {
+        "support": 3,
+        "correct": 3,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "CERVICAL_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "CHEST": {
+        "support": 5,
+        "correct": 4,
+        "precision": 1.0,
+        "recall": 0.8,
+        "f1": 0.888888888888889
+      },
+      "ELBOW": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      },
+      "FOOT": {
+        "support": 2,
+        "correct": 2,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "FOREARM": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "HAND": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.6666666666666666,
+        "recall": 1.0,
+        "f1": 0.8
+      },
+      "HIP": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "KNEE": {
+        "support": 2,
+        "correct": 2,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": 0.6666666666666666
+      },
+      "LUMBAR_SPINE": {
+        "support": 1,
+        "correct": 0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "f1": 0.0
+      },
+      "PELVIS": {
+        "support": 1,
+        "correct": 1,
+        "precision": 0.3333333333333333,
+        "recall": 1.0,
+        "f1": 0.5
+      },
+      "SKULL": {
+        "support": 1,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1": 1.0
+      },
+      "WRIST": {
+        "support": 3,
+        "correct": 1,
+        "precision": 1.0,
+        "recall": 0.3333333333333333,
+        "f1": 0.5
+      }
+    },
+    "eval_classes": [
+      "ABDOMEN",
+      "ANKLE",
+      "CERVICAL_SPINE",
+      "CHEST",
+      "ELBOW",
+      "FOOT",
+      "FOREARM",
+      "HAND",
+      "HIP",
+      "KNEE",
+      "LUMBAR_SPINE",
+      "PELVIS",
+      "SKULL",
+      "WRIST"
+    ],
+    "unsupported_classes": [
+      "ARM",
+      "DORSAL_SPINE",
+      "EXTREMITY",
+      "FEMUR",
+      "FINGER",
+      "HEAD",
+      "HEEL",
+      "KUB",
+      "LEG",
+      "LOWER_EXTREMITY",
+      "NASOPHARYNX",
+      "NECK",
+      "PNS",
+      "SHOULDER",
+      "SI_JOINT",
+      "SPINE",
+      "TEMPORAL_BONE",
+      "TIBIA",
+      "UPPER_EXTREMITY"
+    ]
+  }
+}

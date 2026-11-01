@@ -183,7 +183,7 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
          Paragraph("<b>Assessment Date:</b>", body_style), Paragraph(date_str, body_style)],
         [Paragraph("<b>Inputs Provided:</b>", body_style), Paragraph(_esc(inputs_str), body_style),
          Paragraph("<b>Triage Pathway:</b>", body_style),
-         Paragraph(f"<font color='{pathway_color}'><b>{assessment.pathway or 'PENDING'}</b></font>", body_style)],
+         Paragraph(f"<font color='{pathway_color}'><b>{assessment.pathway or 'NOT DETERMINED'}</b></font>", body_style)],
         [Paragraph("<b>Suggested Specialty:</b>", body_style),
          Paragraph(_safe_dict(feedback.get("recommended_next_step")).get("suggested_specialty") or assessment.specialty or "General Physician", body_style),
          Paragraph("<b>Rules Version:</b>", body_style), Paragraph(_esc(assessment.rules_version or "v2.1"), body_style)],
@@ -203,16 +203,18 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     story.append(meta_table)
     story.append(Spacer(1, 10))
 
+    sec_idx = 1
+
     # 1. Assessment Summary
-    story.append(Paragraph("1. Assessment Summary", section_heading))
+    story.append(Paragraph(f"{sec_idx}. Assessment Summary", section_heading))
+    sec_idx += 1
     summary_text = feedback.get("assessment_summary") or (
-        f"Multimodal assessment based on patient inputs. Assigned triage pathway: {assessment.pathway or 'PENDING'}."
+        f"Multimodal assessment based on patient inputs. Assigned triage pathway: {assessment.pathway or 'NOT DETERMINED'}."
     )
     story.append(Paragraph(summary_text, body_style))
     story.append(Spacer(1, 8))
 
-    # 2. Symptoms Identified & Negative Red Flags
-    story.append(Paragraph("2. Symptoms Evidence", section_heading))
+    # 2. Symptoms Identified & Negative Red Flags (render only if provided/selected)
     symptoms_present = _safe_list(feedback.get("symptoms_identified"))
     if not symptoms_present and evidence_info:
         symptoms_present = _safe_list(_safe_dict(evidence_info.get("symptoms")).get("present"))
@@ -224,82 +226,82 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     if not negative_flags and evidence_info:
         negative_flags = _safe_list(_safe_dict(evidence_info.get("symptoms")).get("absent"))
 
-    if symptoms_present:
-        symp_data = [["Symptom", "Status", "Duration", "Severity", "Qualifiers / Context"]]
-        for s in symptoms_present:
-            name_disp = s.get("symptom", "").title()
-            qualifiers = []
-            if s.get("onset"):
-                qualifiers.append(f"Onset: {s['onset']}")
-            if s.get("laterality"):
-                qualifiers.append(f"{s['laterality']}-sided")
-            if s.get("quality"):
-                qualifiers.append(s["quality"])
-            if s.get("trigger"):
-                qualifiers.append(f"Trigger: {s['trigger']}")
-            if s.get("character") and s.get("character") not in {"CURRENT", "PRESENT"}:
-                qualifiers.append(s["character"])
-            elif s.get("type") and s.get("type") not in {"CURRENT", "PRESENT", "NEGATIVE"}:
-                qualifiers.append(s["type"])
-            if s.get("mucus"):
-                qualifiers.append(s["mucus"])
-            elif s.get("context") and s.get("context") != s.get("trigger"):
-                if len(s.get("context", "")) < 80:
-                    qualifiers.append(s["context"])
-            # Deduplicate qualifiers display text while preserving order (e.g. avoid 'mostly dry, mostly dry')
-            seen_q = set()
-            deduped_qualifiers = []
-            for q in qualifiers:
-                q_clean = str(q).strip()
-                q_norm = q_clean.lower()
-                if q_clean and q_norm not in seen_q:
-                    seen_q.add(q_norm)
-                    deduped_qualifiers.append(q_clean)
-            qual_str = ", ".join(deduped_qualifiers) if deduped_qualifiers else "—"
-
-            symp_data.append(
-                [
-                    Paragraph(f"<b>{_esc(name_disp)}</b>", body_style),
-                    Paragraph(_esc(s.get("status", "UNKNOWN")), body_style),
-                    Paragraph(_esc(s.get("duration") or "Unspecified"), body_style),
-                    Paragraph(_esc((s.get("severity") or "UNKNOWN").upper()), body_style),
-                    Paragraph(_esc(qual_str), body_style),
-                ]
-            )
-        symp_table = Table(symp_data, colWidths=[120, 60, 80, 80, 180])
-        symp_table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ]
-            )
-        )
-        story.append(symp_table)
-    else:
-        story.append(Paragraph("<i>No physical symptoms provided for this assessment.</i>", body_style))
-
-    if negative_flags:
-        story.append(Spacer(1, 4))
-        story.append(Paragraph("<b>Negative Findings / Red Flags Explicitly Denied:</b>", body_style))
-        abs_items = [f"• <b>{s.get('finding') or s.get('symptom', '')}:</b> ABSENT" for s in negative_flags]
-        story.append(Paragraph("<br/>".join(abs_items), body_style))
-
     historical_symptoms = _safe_list(feedback.get("historical_symptoms")) or _safe_list(feedback.get("historical_context"))
-    if historical_symptoms:
-        story.append(Spacer(1, 4))
-        story.append(Paragraph("<b>Historical Context (Documented for context; excluded from active acute counts):</b>", body_style))
-        hist_items = [f"• <b>{h.get('symptom') or h.get('finding', '')}:</b> {h.get('history') or h.get('context') or 'historical occurrence'}" for h in historical_symptoms]
-        story.append(Paragraph("<br/>".join(hist_items), body_style))
-    story.append(Spacer(1, 8))
 
-    # 3. Medical Report Findings
-    story.append(Paragraph("3. Medical Report Findings", section_heading))
+    if has_sym or symptoms_present or negative_flags or historical_symptoms:
+        story.append(Paragraph(f"{sec_idx}. Symptoms Evidence", section_heading))
+        sec_idx += 1
+        if symptoms_present:
+            symp_data = [["Symptom", "Status", "Duration", "Severity", "Qualifiers / Context"]]
+            for s in symptoms_present:
+                name_disp = s.get("symptom", "").title()
+                qualifiers = []
+                if s.get("onset"):
+                    qualifiers.append(f"Onset: {s['onset']}")
+                if s.get("laterality"):
+                    qualifiers.append(f"{s['laterality']}-sided")
+                if s.get("quality"):
+                    qualifiers.append(s["quality"])
+                if s.get("trigger"):
+                    qualifiers.append(f"Trigger: {s['trigger']}")
+                if s.get("character") and s.get("character") not in {"CURRENT", "PRESENT"}:
+                    qualifiers.append(s["character"])
+                elif s.get("type") and s.get("type") not in {"CURRENT", "PRESENT", "NEGATIVE"}:
+                    qualifiers.append(s["type"])
+                if s.get("mucus"):
+                    qualifiers.append(s["mucus"])
+                elif s.get("context") and s.get("context") != s.get("trigger"):
+                    if len(s.get("context", "")) < 80:
+                        qualifiers.append(s["context"])
+                seen_q = set()
+                deduped_qualifiers = []
+                for q in qualifiers:
+                    q_clean = str(q).strip()
+                    q_norm = q_clean.lower()
+                    if q_clean and q_norm not in seen_q:
+                        seen_q.add(q_norm)
+                        deduped_qualifiers.append(q_clean)
+                qual_str = ", ".join(deduped_qualifiers) if deduped_qualifiers else "—"
+
+                symp_data.append(
+                    [
+                        Paragraph(f"<b>{_esc(name_disp)}</b>", body_style),
+                        Paragraph(_esc(s.get("status", "UNKNOWN")), body_style),
+                        Paragraph(_esc(s.get("duration") or "Unspecified"), body_style),
+                        Paragraph(_esc((s.get("severity") or "UNKNOWN").upper()), body_style),
+                        Paragraph(_esc(qual_str), body_style),
+                    ]
+                )
+            symp_table = Table(symp_data, colWidths=[120, 60, 80, 80, 180])
+            symp_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+                        ("TOPPADDING", (0, 0), (-1, -1), 3),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ]
+                )
+            )
+            story.append(symp_table)
+
+        if negative_flags:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<b>Negative Findings / Red Flags Explicitly Denied:</b>", body_style))
+            abs_items = [f"• <b>{s.get('finding') or s.get('symptom', '')}:</b> ABSENT" for s in negative_flags]
+            story.append(Paragraph("<br/>".join(abs_items), body_style))
+
+        if historical_symptoms:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<b>Historical Context (Documented for context; excluded from active acute counts):</b>", body_style))
+            hist_items = [f"• <b>{h.get('symptom') or h.get('finding', '')}:</b> {h.get('history') or h.get('context') or 'historical occurrence'}" for h in historical_symptoms]
+            story.append(Paragraph("<br/>".join(hist_items), body_style))
+        story.append(Spacer(1, 8))
+
+    # 3. Medical Report Findings (render only if provided/selected)
     report_findings = _safe_list(feedback.get("medical_report_findings"))
     if not report_findings and evidence_info:
         rep_meta = _safe_dict(evidence_info.get("report"))
@@ -312,75 +314,75 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     qualitative_rep = feedback.get("qualitative_findings", []) or _safe_dict(evidence_info.get("report")).get("qualitative_findings", [])
     narrative_rep = feedback.get("narrative_findings", []) or _safe_dict(evidence_info.get("report")).get("narrative_findings", [])
     is_report_provided = report_status == "PROVIDED" or _safe_dict(evidence_info.get("report")).get("provided", False)
+    has_med_rep = bool(
+        report_findings or qualitative_rep or narrative_rep or is_report_provided
+        or "medical_report" in (assessment.input_types or [])
+    )
 
-    if report_findings:
-        rep_data = [["Test / Parameter", "Measured Value", "Reference Range", "Status"]]
-        for p in report_findings:
-            interp = p.get("status") or p.get("interpretation") or "RECORDED"
-            interp_color = "#dc2626" if interp in {"HIGH", "LOW"} else ("#059669" if interp == "NORMAL" else "#4b5563")
+    if has_med_rep:
+        story.append(Paragraph(f"{sec_idx}. Medical / Laboratory Report Findings", section_heading))
+        sec_idx += 1
+        if report_findings:
+            rep_data = [["Test / Parameter", "Measured Value", "Reference Range", "Status"]]
+            for p in report_findings:
+                interp = p.get("status") or p.get("interpretation") or "RECORDED"
+                interp_color = "#dc2626" if interp in {"HIGH", "LOW"} else ("#059669" if interp == "NORMAL" else "#4b5563")
 
-            raw_val = p.get("value", "")
-            unit = p.get("unit") or ""
-            val_str = str(raw_val).strip()
-            if unit and unit not in val_str:
-                val_display = _esc(f"{val_str} {unit}".strip())
-            else:
-                val_display = _esc(val_str)
+                raw_val = p.get("value", "")
+                unit = p.get("unit") or ""
+                val_str = str(raw_val).strip()
+                if unit and unit not in val_str:
+                    val_display = _esc(f"{val_str} {unit}".strip())
+                else:
+                    val_display = _esc(val_str)
 
-            status_display = f"<font color='{interp_color}'><b>{interp}</b></font>"
-            if p.get("conflict"):
-                status_display += "<br/><font size='6' color='#dc2626'><i>(Flag conflict)</i></font>"
+                status_display = f"<font color='{interp_color}'><b>{interp}</b></font>"
+                if p.get("conflict"):
+                    status_display += "<br/><font size='6' color='#dc2626'><i>(Flag conflict)</i></font>"
 
-            test_name = p.get("test_name", "Test")
-            src_file = p.get("source_file")
-            test_cell = f"<b>{_esc(test_name)}</b>"
-            if src_file:
-                test_cell += f"<br/><font size='6' color='#64748b'>Source: {_esc(src_file)}</font>"
+                test_name = p.get("test_name", "Test")
+                src_file = p.get("source_file")
+                test_cell = f"<b>{_esc(test_name)}</b>"
+                if src_file:
+                    test_cell += f"<br/><font size='6' color='#64748b'>Source: {_esc(src_file)}</font>"
 
-            rep_data.append(
-                [
-                    test_cell,
-                    val_display,
-                    _esc(p.get("reference_range") or "Not provided"),
-                    status_display,
-                ]
+                rep_data.append(
+                    [
+                        test_cell,
+                        val_display,
+                        _esc(p.get("reference_range") or "Not provided"),
+                        status_display,
+                    ]
+                )
+            rep_table = Table([[Paragraph(c, body_style) for c in row] for row in rep_data], colWidths=[160, 120, 140, 100])
+            rep_table.setStyle(
+                TableStyle(
+                    [
+                        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        ("FONTSIZE", (0, 0), (-1, -1), 8),
+                        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
+                        ("TOPPADDING", (0, 0), (-1, -1), 3),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                    ]
+                )
             )
-        rep_table = Table([[Paragraph(c, body_style) for c in row] for row in rep_data], colWidths=[160, 120, 140, 100])
-        rep_table.setStyle(
-            TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e2e8f0")),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, -1), 8),
-                    ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cbd5e1")),
-                    ("TOPPADDING", (0, 0), (-1, -1), 3),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                ]
-            )
-        )
-        story.append(rep_table)
+            story.append(rep_table)
 
-    if qualitative_rep:
-        story.append(Spacer(1, 4))
-        story.append(Paragraph("<b>Qualitative Clinical Findings:</b>", body_style))
-        q_lines = [f"• <b>{q.get('finding')}:</b> {q.get('state', 'PRESENT')}" for q in qualitative_rep]
-        story.append(Paragraph("<br/>".join(q_lines), body_style))
+        if qualitative_rep:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<b>Qualitative Clinical Findings:</b>", body_style))
+            q_lines = [f"• <b>{q.get('finding')}:</b> {q.get('state', 'PRESENT')}" for q in qualitative_rep]
+            story.append(Paragraph("<br/>".join(q_lines), body_style))
 
-    if narrative_rep:
-        story.append(Spacer(1, 4))
-        story.append(Paragraph("<b>Clinical History & Narrative:</b>", body_style))
-        n_lines = [f"• <b>{n.get('section')}:</b> {n.get('content')}" for n in narrative_rep]
-        story.append(Paragraph("<br/>".join(n_lines), body_style))
+        if narrative_rep:
+            story.append(Spacer(1, 4))
+            story.append(Paragraph("<b>Clinical History & Narrative:</b>", body_style))
+            n_lines = [f"• <b>{n.get('section')}:</b> {n.get('content')}" for n in narrative_rep]
+            story.append(Paragraph("<br/>".join(n_lines), body_style))
+        story.append(Spacer(1, 8))
 
-    if not report_findings and not qualitative_rep and not narrative_rep:
-        if not is_report_provided:
-            story.append(Paragraph("<i>Medical Report: Not provided.</i>", body_style))
-        else:
-            story.append(Paragraph("<i>Medical report provided.</i>", body_style))
-    story.append(Spacer(1, 8))
-
-    # 4. X-Ray & Radiology Evidence
-    story.append(Paragraph("4. X-Ray & Radiology Evidence", section_heading))
+    # 4. X-Ray & Radiology Evidence (render only if provided/selected)
     xray_info = _safe_dict(feedback.get("xray_findings"))
     if not xray_info and evidence_info:
         xray_info = _safe_dict(evidence_info.get("xray"))
@@ -390,6 +392,8 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     has_reports = bool(x_reports)
 
     if has_images or has_reports or xray_info.get("received") or "xray" in (assessment.input_types or []):
+        story.append(Paragraph(f"{sec_idx}. X-Ray & Radiology Evidence", section_heading))
+        sec_idx += 1
         if has_images:
             if x_images:
                 story.append(Paragraph("<b>Radiographic Images Evaluated:</b>", body_style))
@@ -411,8 +415,8 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                     f"<i>{x_desc}</i>"
                 )
                 story.append(Paragraph(x_block, body_style))
-        else:
-            story.append(Paragraph("<b>Radiographic Images:</b> None uploaded (no image file submitted for automated inference).", body_style))
+        elif has_reports:
+            story.append(Paragraph("<b>Radiographic Images:</b> None uploaded (radiology documentation provided as text report).", body_style))
 
         if x_reports:
             story.append(Spacer(1, 4))
@@ -422,7 +426,6 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                 rep_title = f"• <b>{rep.get('file_name', 'Radiology report')}</b>: Status: {r_status}"
                 story.append(Paragraph(rep_title, body_style))
 
-                # Render qualitative findings
                 q_findings = rep.get("qualitative_findings") or rep.get("structured_findings", {}).get("qualitative_findings", [])
                 if q_findings:
                     for q in q_findings:
@@ -430,7 +433,6 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                         q_st = q.get("state", "PRESENT")
                         story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;- <i>Finding:</i> {q_name} ({q_st})", body_style))
 
-                # Render narrative sections / impressions
                 n_findings = rep.get("narrative_findings") or rep.get("structured_findings", {}).get("narrative_findings", [])
                 if n_findings:
                     for n in n_findings:
@@ -438,7 +440,6 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                         cnt = n.get("content", "")
                         story.append(Paragraph(f"&nbsp;&nbsp;&nbsp;&nbsp;- <i>{sec}:</i> {cnt}", body_style))
 
-        # Cross-modal concordance display
         concordance_list = xray_info.get("cross_modal_concordance", [])
         if concordance_list:
             story.append(Spacer(1, 4))
@@ -448,12 +449,11 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                 c_detail = conc.get("details", "")
                 c_color = "#059669" if c_status == "CONCORDANT" else ("#dc2626" if c_status == "DISCORDANT" else "#64748b")
                 story.append(Paragraph(f"• <font color='{c_color}'><b>[{c_status}]</b></font> {c_detail}", body_style))
-    else:
-        story.append(Paragraph("<i>X-Ray & Radiology: Not provided.</i>", body_style))
-    story.append(Spacer(1, 8))
+        story.append(Spacer(1, 8))
 
     # 5. Supporting & Contradictory Evidence
-    story.append(Paragraph("5. Clinical Rationale & Evidence", section_heading))
+    story.append(Paragraph(f"{sec_idx}. Clinical Rationale & Evidence", section_heading))
+    sec_idx += 1
     support_items = _safe_list(feedback.get("supporting_evidence"))
     if support_items:
         story.append(Paragraph("<b>Supporting Indicators:</b>", body_style))
@@ -482,11 +482,16 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         story.append(Spacer(1, 4))
         story.append(Paragraph("<b>Unknown / Unassessed Factors:</b>", body_style))
         story.append(Paragraph("<br/>".join([f"• {item}" for item in missing_items]), body_style))
+    story.append(Spacer(1, 8))
+
     # 6. Possible Conditions (Assistive ML Differential)
-    story.append(Paragraph("6. Possible Conditions (Assistive ML Differential)", section_heading))
     possible_conditions = _safe_list(feedback.get("possible_conditions"))
     cond_status = feedback.get("condition_prediction_status") or _safe_dict(feedback.get("condition_predictions")).get("status")
     cond_message = feedback.get("condition_prediction_message") or _safe_dict(feedback.get("condition_predictions")).get("message")
+
+    if possible_conditions or cond_status in {"unsupported_condition", "insufficient_evidence", "completed"}:
+        story.append(Paragraph(f"{sec_idx}. Possible Conditions (Assistive ML Differential)", section_heading))
+        sec_idx += 1
 
     if possible_conditions:
         cond_data = [["Rank", "Possible Condition", "Confidence Alignment", "Supporting Evidence", "Specialty"]]
@@ -547,8 +552,9 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         ))
         story.append(Spacer(1, 8))
 
-    # 7. Safety Pathway & Clinical Navigation
-    story.append(Paragraph("7. Safety Pathway & Recommended Next Steps", section_heading))
+    # Safety Pathway & Clinical Navigation
+    story.append(Paragraph(f"{sec_idx}. Safety Pathway & Recommended Next Steps", section_heading))
+    sec_idx += 1
     why_path = feedback.get("why_this_triage_selected") or triage_info.get("why_this_pathway") or "Rule-based assessment."
     next_step_data = _safe_dict(feedback.get("recommended_next_step"))
     guidance = next_step_data.get("guidance") or triage_info.get("guidance") or "Consult a licensed healthcare professional."

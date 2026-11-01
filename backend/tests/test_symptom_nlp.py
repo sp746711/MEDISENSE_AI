@@ -150,3 +150,49 @@ def test_regression_f_chest_discomfort_not_erased_by_negative_chest_pain_at_rest
     assert s_map["chest pain at rest"]["state"] == "ABSENT"
 
 
+def test_issue1_exertional_breathlessness_and_resting_breathing_denial():
+    """Issue 1: 'I get slightly out of breath when climbing stairs. I can breathe normally when sitting or resting.'
+    Expected:
+    - Exertional shortness of breath: PRESENT, MILD, trigger/context climbing stairs.
+    - Resting breathing difficulty: ABSENT, context sitting or resting.
+    - Neither conflated nor marked as unknown difficulty breathing.
+    """
+    res = extract_symptoms("I get slightly out of breath when climbing stairs. I can breathe normally when sitting or resting.")
+    s_map = {s["symptom"]: s for s in res["symptoms"]}
+
+    assert "exertional shortness of breath" in s_map
+    sob = s_map["exertional shortness of breath"]
+    assert sob["state"] == "PRESENT"
+    assert sob["severity"] == "MILD"
+    assert sob.get("trigger") == "climbing stairs"
+    assert sob.get("context") == "when climbing stairs"
+
+    assert "resting breathing difficulty" in s_map
+    rbd = s_map["resting breathing difficulty"]
+    assert rbd["state"] == "ABSENT"
+    assert "sitting" in (rbd.get("context") or "") or "resting" in (rbd.get("context") or "")
+
+
+def test_issue2_chest_tightness_cough_triggered():
+    """Issue 2: 'Sometimes my chest feels a little tight when I cough.'
+    Expected:
+    - Chest tightness: PRESENT, MILD, trigger coughing.
+    - Preserves trigger and mild severity without leaking to cough.
+    """
+    res = extract_symptoms("Sometimes my chest feels a little tight when I cough.")
+    s_map = {s["symptom"]: s for s in res["symptoms"]}
+
+    assert "chest tightness" in s_map
+    ct = s_map["chest tightness"]
+    assert ct["state"] == "PRESENT"
+    assert ct["severity"] == "MILD"
+    assert ct.get("trigger") == "coughing"
+    assert ct.get("context") == "when coughing"
+
+    assert "cough" in s_map
+    cough = s_map["cough"]
+    assert cough["state"] == "PRESENT"
+    assert cough["severity"] == "UNKNOWN"
+
+
+

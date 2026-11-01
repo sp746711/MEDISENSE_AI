@@ -69,6 +69,28 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "respiratory",
         "body_area": "chest",
     },
+    "chest feels tight": {
+        "canonical": "chest tightness",
+        "domain": "respiratory",
+        "body_area": "chest",
+    },
+    "chest feeling tight": {
+        "canonical": "chest tightness",
+        "domain": "respiratory",
+        "body_area": "chest",
+    },
+    "chest feels a little tight": {
+        "canonical": "chest tightness",
+        "domain": "respiratory",
+        "body_area": "chest",
+        "explicit_severity": "mild",
+    },
+    "chest feels slightly tight": {
+        "canonical": "chest tightness",
+        "domain": "respiratory",
+        "body_area": "chest",
+        "explicit_severity": "mild",
+    },
 
     # Respiratory / Breathing
     "severe breathing difficulty": {
@@ -81,10 +103,171 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "respiratory",
         "body_area": "chest/lungs",
     },
+    "can breathe normally when sitting or resting": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when sitting or resting",
+        "explicit_state": "ABSENT",
+    },
+    "breathe normally when sitting or resting": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when sitting or resting",
+        "explicit_state": "ABSENT",
+    },
+    "breathing normally when sitting or resting": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when sitting or resting",
+        "explicit_state": "ABSENT",
+    },
+    "can breathe normally at rest": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+        "explicit_state": "ABSENT",
+    },
+    "breathe normally at rest": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+        "explicit_state": "ABSENT",
+    },
+    "breathing normally at rest": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+        "explicit_state": "ABSENT",
+    },
+    "can breathe normally when resting": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when resting",
+        "explicit_state": "ABSENT",
+    },
+    "breathe normally when resting": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when resting",
+        "explicit_state": "ABSENT",
+    },
+    "breathing normally when resting": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when resting",
+        "explicit_state": "ABSENT",
+    },
+    "can breathe normally": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+        "explicit_state": "ABSENT",
+    },
+    "breathe normally": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+        "explicit_state": "ABSENT",
+    },
+    "breathing normally": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+        "explicit_state": "ABSENT",
+    },
+    "resting breathing difficulty": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+    },
+    "breathing difficulty at rest": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+    },
+    "difficulty breathing at rest": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+    },
+    "shortness of breath at rest": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+    },
+    "breathlessness at rest": {
+        "canonical": "resting breathing difficulty",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "at rest",
+    },
+    "shortness of breath on exertion": {
+        "canonical": "exertional shortness of breath",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "on exertion",
+        "trigger": "exertion",
+    },
+    "shortness of breath when climbing stairs": {
+        "canonical": "exertional shortness of breath",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when climbing stairs",
+        "trigger": "climbing stairs",
+    },
     "shortness of breath": {
         "canonical": "shortness of breath",
         "domain": "respiratory",
         "body_area": "chest/lungs",
+    },
+    "out of breath when climbing stairs": {
+        "canonical": "exertional shortness of breath",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when climbing stairs",
+        "trigger": "climbing stairs",
+    },
+    "out of breath on exertion": {
+        "canonical": "exertional shortness of breath",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "on exertion",
+        "trigger": "exertion",
+    },
+    "out of breath": {
+        "canonical": "shortness of breath",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+    },
+    "breathlessness on exertion": {
+        "canonical": "exertional shortness of breath",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "on exertion",
+        "trigger": "exertion",
+    },
+    "breathlessness when climbing stairs": {
+        "canonical": "exertional shortness of breath",
+        "domain": "respiratory",
+        "body_area": "chest/lungs",
+        "context": "when climbing stairs",
+        "trigger": "climbing stairs",
     },
     "breathlessness": {
         "canonical": "shortness of breath",
@@ -713,6 +896,32 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "injury/trauma",
         "body_area": "unspecified",
     },
+    "severe bleeding": {
+        "canonical": "severe bleeding",
+        "domain": "injury/trauma",
+        "body_area": "unspecified",
+        "explicit_severity": "severe",
+    },
+    "bleeding": {
+        "canonical": "bleeding",
+        "domain": "injury/trauma",
+        "body_area": "unspecified",
+    },
+    "blood in sputum": {
+        "canonical": "hemoptysis",
+        "domain": "respiratory",
+        "body_area": "lungs/chest",
+    },
+    "blood in cough": {
+        "canonical": "hemoptysis",
+        "domain": "respiratory",
+        "body_area": "lungs/chest",
+    },
+    "hemoptysis": {
+        "canonical": "hemoptysis",
+        "domain": "respiratory",
+        "body_area": "lungs/chest",
+    },
     "right hand pain": {
         "canonical": "hand pain",
         "domain": "musculoskeletal",
@@ -804,6 +1013,17 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "dental",
         "body_area": "teeth/mouth",
     },
+    "severe pain": {
+        "canonical": "severe pain",
+        "domain": "general",
+        "body_area": "unspecified",
+        "explicit_severity": "severe",
+    },
+    "pain": {
+        "canonical": "pain",
+        "domain": "general",
+        "body_area": "unspecified",
+    },
 }
 
 NEGATION_PATTERNS = [
@@ -842,16 +1062,16 @@ AFFIRMATIVE_RESETS = re.compile(
 SEVERITY_PATTERNS = [
     (re.compile(r"\b(severe|intense|acute|excruciating|unbearable|worst)\b", re.IGNORECASE), "severe"),
     (re.compile(r"\b(moderate|considerable|medium|significant)\b", re.IGNORECASE), "moderate"),
-    (re.compile(r"\b(mild|slight|minimal|minor|low)\b", re.IGNORECASE), "mild"),
+    (re.compile(r"\b(mild|slight|slightly|minimal|minor|low|a little|a bit)\b", re.IGNORECASE), "mild"),
 ]
 
 DISALLOWED_SEVERITY_INTERVENING = re.compile(
-    r"\b(?:and|but|with|also|while|as well as|have|had|having|feel|felt|feeling|am|is|was|my|i|me|we|he|she|they|there)\b|[,;.?!\n]",
+    r"\b(?:and|but|with|also|while|as well as|have|had|having|am|is|was|i|me|we|he|she|they|there|when|if|because|tight|tightness)\b|[,;.?!\n]",
     re.IGNORECASE,
 )
 
 SEVERITY_REGEX = re.compile(
-    r"\b(severe|intense|acute|excruciating|unbearable|worst|moderate|considerable|medium|significant|mild|slight|minimal|minor|low)\b",
+    r"\b(severe|intense|acute|excruciating|unbearable|worst|moderate|considerable|medium|significant|mild|slight|slightly|minimal|minor|low|a little|a bit)\b",
     re.IGNORECASE,
 )
 
@@ -1031,44 +1251,51 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                                 break
                             if is_negated:
                                 break
-                        state = "ABSENT" if is_negated else "PRESENT"
+                        if meta.get("explicit_state") == "ABSENT":
+                            state = "PRESENT" if is_negated else "ABSENT"
+                        else:
+                            state = "ABSENT" if is_negated else "PRESENT"
 
                     # Severity: NEVER globally inferred. Must directly modify the symptom.
                     sev = ClinicalSeverity("UNKNOWN")
-                    if state == "PRESENT":
-                        if meta.get("explicit_severity"):
-                            sev = ClinicalSeverity(meta["explicit_severity"].upper())
-                        else:
-                            # 1. Direct pre-modifier check (e.g. "mild fever", "severe right-sided throbbing headache")
-                            sev_matches = list(SEVERITY_REGEX.finditer(preceding))
-                            if sev_matches:
-                                last_m = sev_matches[-1]
-                                between = preceding[last_m.end():]
-                                if not DISALLOWED_SEVERITY_INTERVENING.search(between):
-                                    val = last_m.group(1).lower()
-                                    if val in {"severe", "intense", "acute", "excruciating", "unbearable", "worst"}:
-                                        sev = ClinicalSeverity("SEVERE")
-                                    elif val in {"moderate", "considerable", "medium", "significant"}:
-                                        sev = ClinicalSeverity("MODERATE")
-                                    elif val in {"mild", "slight", "minimal", "minor", "low"}:
-                                        sev = ClinicalSeverity("MILD")
+                    negated_sev = None
+                    if meta.get("explicit_severity"):
+                        sev = ClinicalSeverity(meta["explicit_severity"].upper())
+                    else:
+                        # 1. Direct pre-modifier check (e.g. "mild fever", "severe right-sided throbbing headache", "no severe chest pain")
+                        sev_matches = list(SEVERITY_REGEX.finditer(preceding))
+                        if sev_matches:
+                            last_m = sev_matches[-1]
+                            between = preceding[last_m.end():]
+                            if not DISALLOWED_SEVERITY_INTERVENING.search(between):
+                                val = last_m.group(1).lower()
+                                if val in {"severe", "intense", "acute", "excruciating", "unbearable", "worst"}:
+                                    sev = ClinicalSeverity("SEVERE")
+                                elif val in {"moderate", "considerable", "medium", "significant"}:
+                                    sev = ClinicalSeverity("MODERATE")
+                                elif val in {"mild", "slight", "slightly", "minimal", "minor", "low", "a little", "a bit"}:
+                                    sev = ClinicalSeverity("MILD")
 
-                            # 2. Direct post-modifier check (predicative position, e.g. "headache is severe")
-                            if sev == ClinicalSeverity("UNKNOWN"):
-                                post_text = clause[end:]
-                                post_m = re.match(
-                                    r"^\s*(?:is|was|feels|became|feels\s+quite)?\s*(?:very|quite|extremely|fairly)?\s*(severe|intense|acute|excruciating|unbearable|worst|moderate|considerable|medium|significant|mild|slight|minimal|minor|low)\b",
-                                    post_text,
-                                    re.IGNORECASE,
-                                )
-                                if post_m:
-                                    val = post_m.group(1).lower()
-                                    if val in {"severe", "intense", "acute", "excruciating", "unbearable", "worst"}:
-                                        sev = ClinicalSeverity("SEVERE")
-                                    elif val in {"moderate", "considerable", "medium", "significant"}:
-                                        sev = ClinicalSeverity("MODERATE")
-                                    elif val in {"mild", "slight", "minimal", "minor", "low"}:
-                                        sev = ClinicalSeverity("MILD")
+                        # 2. Direct post-modifier check (predicative position, e.g. "headache is severe")
+                        if sev == ClinicalSeverity("UNKNOWN"):
+                            post_text = clause[end:]
+                            post_m = re.match(
+                                r"^\s*(?:is|was|feels|became|feels\s+quite)?\s*(?:very|quite|extremely|fairly)?\s*(severe|intense|acute|excruciating|unbearable|worst|moderate|considerable|medium|significant|mild|slight|slightly|minimal|minor|low|a little|a bit)\b",
+                                post_text,
+                                re.IGNORECASE,
+                            )
+                            if post_m:
+                                val = post_m.group(1).lower()
+                                if val in {"severe", "intense", "acute", "excruciating", "unbearable", "worst"}:
+                                    sev = ClinicalSeverity("SEVERE")
+                                elif val in {"moderate", "considerable", "medium", "significant"}:
+                                    sev = ClinicalSeverity("MODERATE")
+                                elif val in {"mild", "slight", "slightly", "minimal", "minor", "low", "a little", "a bit"}:
+                                    sev = ClinicalSeverity("MILD")
+
+                    if state == "ABSENT":
+                        if sev != ClinicalSeverity("UNKNOWN"):
+                            negated_sev = str(sev)
 
                     # Qualifiers for specific clinical presentation
                     item_laterality = meta.get("laterality")
@@ -1153,11 +1380,31 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                             item_trigger = "loud sounds"
                             item_context = "exposure to loud sounds"
 
-                    # Chest discomfort specific qualifiers
-                    if canonical == "chest discomfort" and state == "PRESENT":
-                        if not item_trigger and "cough" in clause_lower and ("when coughing" in clause_lower or "on coughing" in clause_lower):
+                    # Context and trigger fallbacks from lexicon metadata
+                    if meta.get("context") and not item_context:
+                        item_context = meta["context"]
+                    if meta.get("trigger") and not item_trigger:
+                        item_trigger = meta["trigger"]
+
+                    # Chest tightness and discomfort specific qualifiers
+                    if canonical in {"chest discomfort", "chest tightness"} and state == "PRESENT":
+                        if not item_trigger and "cough" in clause_lower and ("when coughing" in clause_lower or "on coughing" in clause_lower or "when i cough" in clause_lower):
                             item_trigger = "coughing"
                             item_context = "when coughing"
+
+                    # Shortness of breath / breathlessness specific context & triggers
+                    if canonical in {"shortness of breath", "exertional shortness of breath"} and state == "PRESENT":
+                        if "stair" in clause_lower or "climbing" in clause_lower:
+                            item_trigger = "climbing stairs"
+                            item_context = "when climbing stairs"
+                        elif "exertion" in clause_lower or "walking" in clause_lower or "exercise" in clause_lower:
+                            item_trigger = "exertion"
+                            item_context = "on exertion"
+                    elif canonical == "resting breathing difficulty":
+                        if "sitting" in clause_lower or "resting" in clause_lower:
+                            item_context = "when sitting or resting"
+                        else:
+                            item_context = "at rest"
 
                     # Distinguish current symptoms from historical/contextual findings
                     # Historical language only applies when it locally precedes this
@@ -1195,6 +1442,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         "type": item_type,
                         "duration": item_duration,
                         "severity": sev if state == "PRESENT" and not is_historical else None,
+                        "negated_severity": negated_sev,
                         "body_area": item_body_area,
                         "laterality": item_laterality,
                         "quality": item_quality,
@@ -1203,22 +1451,27 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         "onset": None,
                         # Keep the fallback context local to the matched finding.
                         "context": item_context or match.group(0),
+                        "history": (item_context or match.group(0)) if is_historical else None,
                         "source": "user_input",
                     }
-                    if is_historical:
-                        item["history"] = item_context or "historical occurrence"
-                    # Suppress only exact duplicate findings with the same canonical
-                    # symptom, state, and historical/current classification. Preserve
-                    # conflicting states as separate evidence instead of silently
-                    # letting the first mention erase later information.
-                    duplicate = any(
-                        existing.get("symptom") == item.get("symptom")
-                        and existing.get("state", existing.get("status")) == item.get("state")
-                        and existing.get("type") == item.get("type")
-                        and existing.get("context") == item.get("context")
-                        for existing in extracted
+                    is_item_hist = item.get("type") == "HISTORICAL"
+                    existing_match = next(
+                        (
+                            existing for existing in extracted
+                            if existing.get("symptom") == item.get("symptom")
+                            and existing.get("state", existing.get("status")) == item.get("state")
+                            and (existing.get("type") == "HISTORICAL") == is_item_hist
+                        ),
+                        None,
                     )
-                    if not duplicate:
+                    if existing_match:
+                        # Enrich existing match with any richer qualifiers
+                        for q_key in ("duration", "severity", "laterality", "quality", "trigger", "onset", "character", "mucus"):
+                            if not existing_match.get(q_key) and item.get(q_key):
+                                existing_match[q_key] = item[q_key]
+                        if item.get("type") and item.get("type") not in {"CURRENT", "PRESENT"}:
+                            existing_match["type"] = item["type"]
+                    else:
                         extracted.append(item)
                     seen_canonicals.add(canonical)
 

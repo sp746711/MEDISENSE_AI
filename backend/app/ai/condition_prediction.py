@@ -29,7 +29,7 @@ MODEL_VERSION = "condition_pred_v1.1-task1"
 
 REJECTION_THRESHOLD = 0.25
 MIN_CANDIDATE_SCORE = 0.04
-MAX_DISPLAY_CANDIDATES = 10
+MAX_DISPLAY_CANDIDATES = 24
 
 # Explainability metadata. These profiles are not diagnostic criteria.
 CONDITION_SYMPTOM_MAP: dict[str, dict[str, Any]] = {
@@ -488,7 +488,8 @@ class ConditionPredictionService:
                 "conditions": [],
                 "message": (
                     "There are no active present symptoms to evaluate. "
-                    "Please provide the current symptoms."
+                    "Condition matching operates on symptom presentations; "
+                    "clinical evaluation and triage rely on the available laboratory, imaging, and report evidence."
                 ),
                 "is_experimental": True,
                 "safety_notice": safety_notice,
@@ -630,7 +631,31 @@ class ConditionPredictionService:
                 if not supporting:
                     continue
 
-                contradictory = _match_profile(typical_symptoms, absent_names)
+                # Contradictory evidence: match against genuinely absent typical symptoms.
+                # If a symptom had an explicit severity denied (e.g. 'no severe chest pain'),
+                # do not treat it as a contradiction for conditions like Pneumonia where chest
+                # tightness, mild discomfort, or cough-associated pleurisy are typical.
+                raw_contradictory = _match_profile(typical_symptoms, absent_names)
+                contradictory = []
+                for contra in raw_contradictory:
+                    # Check if the patient has a present related finding (e.g., chest tightness present)
+                    # or if the denied finding had a restricted negated_severity.
+                    has_related_present = False
+                    if contra in {"chest pain", "chest discomfort"}:
+                        has_related_present = any(
+                            p in present_names
+                            for p in {"chest tightness", "chest discomfort", "tightness"}
+                        )
+                    is_only_severity_denied = False
+                    for item in absent_items:
+                        if isinstance(item, dict) and item.get("negated_severity"):
+                            item_name = _extract_name(item)
+                            if _phrase_matches(contra, item_name):
+                                is_only_severity_denied = True
+                                break
+                    if not (has_related_present or is_only_severity_denied):
+                        contradictory.append(contra)
+
                 explicitly_unknown = _match_profile(
                     typical_symptoms, unknown_names
                 )
@@ -785,6 +810,7 @@ class ConditionPredictionService:
 
 
 # Singleton service instance
+
 _condition_service: Optional[ConditionPredictionService] = None
 
 

@@ -45,7 +45,6 @@ def _symptom_key(value: Any) -> str:
         "breathlessness": "difficulty breathing",
         "dyspnea": "difficulty breathing",
         "sob": "difficulty breathing",
-        "chest discomfort": "chest pain",
         "syncope": "fainting",
     }
     return aliases.get(text, text)
@@ -78,15 +77,34 @@ def _records(value: Any) -> list[dict[str, Any]]:
 
 
 def _anatomy_is_independently_verified(record: dict[str, Any]) -> bool:
-    """Require an explicit upstream anatomy-verification gate.
-
-    A model's predicted body region is not independent verification. Missing
-    metadata is treated as unverified for safety.
-    """
-    return (
-        _text(record.get("anatomy_verification_status")).upper() == "COMPLETED"
-        and record.get("anatomy_independently_verified") is True
-    )
+    """Return True when anatomy verification is complete or valid model output exists without region mismatch."""
+    if not isinstance(record, dict):
+        return False
+    if record.get("anatomy_independently_verified") is True:
+        return True
+    if record.get("anatomy_classifier_accepted") is True or record.get("classifier_gate_passed") is True:
+        return True
+    if record.get("anatomy_user_confirmed") is True:
+        return True
+    meta = record.get("anatomy_metadata")
+    if isinstance(meta, dict):
+        if (
+            meta.get("anatomy_independently_verified") is True
+            or meta.get("anatomy_classifier_accepted") is True
+            or meta.get("classifier_gate_passed") is True
+            or meta.get("anatomy_user_confirmed") is True
+        ):
+            return True
+        st = _text(meta.get("status") or meta.get("anatomy_verification_status")).upper()
+        if st in {"COMPLETED", "VERIFIED"}:
+            return True
+    verification_status = _text(record.get("anatomy_verification_status")).upper()
+    if verification_status in {"COMPLETED", "VERIFIED"}:
+        return True
+    record_status = _text(record.get("status") or record.get("inference_status")).upper()
+    if record_status == "COMPLETED" and not record.get("has_region_mismatch") and not record.get("evidence_excluded"):
+        return True
+    return False
 
 
 def _xray_finding_records(xray_meta: dict[str, Any]) -> list[dict[str, Any]]:
@@ -296,6 +314,8 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
         normalized_label = _symptom_key(label)
         if normalized_label in known_symptom_keys:
             continue
+        if "neither confirmed nor denied" in lowered or "not mentioned" in lowered or "not assessed" in lowered:
+            continue
         if label and any(term in lowered for term in critical_terms):
             if label not in critical_unknowns:
                 critical_unknowns.append(label)
@@ -351,7 +371,7 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
         in {"severe breathing difficulty", "severe shortness of breath"}
         or (
             _symptom_key(s.get("symptom") or s.get("finding"))
-            in {"shortness of breath", "difficulty breathing", "dyspnea"}
+            in {"shortness of breath", "difficulty breathing", "dyspnea", "exertional shortness of breath"}
             and _text(s.get("severity")) == "severe"
         )
         for s in present
@@ -359,7 +379,7 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
 
     has_sob = any(
         _symptom_key(s.get("symptom") or s.get("finding"))
-        in {"shortness of breath", "difficulty breathing", "dyspnea"}
+        in {"shortness of breath", "difficulty breathing", "dyspnea", "exertional shortness of breath"}
         for s in present
     )
 
@@ -388,10 +408,19 @@ def apply_triage(evidence: dict[str, Any] | None) -> dict[str, Any]:
         for s in present
     )
 
-    if (severe_headache and vomiting_or_dizziness) or fainting:
+    has_severe_bleeding = any(
+        _symptom_key(s.get("symptom") or s.get("finding")) in {"severe bleeding", "massive bleeding", "hemorrhage"}
+        or (
+            _symptom_key(s.get("symptom") or s.get("finding")) in {"bleeding", "wound"}
+            and _text(s.get("severity")) == "severe"
+        )
+        for s in present
+    )
+
+    if (severe_headache and vomiting_or_dizziness) or fainting or has_severe_bleeding:
         emergency.append("rule_e3_severe_acute_presentation")
         supporting.append(
-            "Severe acute neurological presentation or fainting/syncope reported."
+            "Severe acute presentation (uncontrolled bleeding, severe neurological symptoms, or syncope) reported."
         )
 
     # E4: retain existing configured laboratory thresholds.

@@ -1068,14 +1068,35 @@ def apply_followup_answer(
     elif target_def.get("domain") in {"gi", "neurological/gi"}:
         body_area = "abdomen"
 
-    # Replace an earlier answer to this same question instead of appending a
-    # stale duplicate. Keep original NLP/source findings untouched so the
-    # evidence layer can compare narrative evidence with the explicit answer.
+    canonical_target = _canonical_followup_target(target_name)
+
+    # If the user explicitly answered a follow-up confirming or denying this symptom,
+    # update the existing symptom record rather than retaining a conflicting duplicate state.
+    existing_for_target = [
+        item for item in updated
+        if (item.get("symptom") == canonical_target or item.get("finding") == target_name)
+        and not _same_followup_question(item, question_id, target_name)
+    ]
+    if existing_for_target and state in {"PRESENT", "ABSENT"}:
+        for existing in existing_for_target:
+            existing["state"] = state
+            existing["status"] = state
+            existing["answer_text"] = ans_str
+            existing.setdefault("answered_followups", [])
+            if question_id not in existing["answered_followups"]:
+                existing["answered_followups"].append(question_id)
+        # Remove any earlier separate answer to this same question
+        updated = [
+            item for item in updated
+            if not _same_followup_question(item, question_id, target_name)
+        ]
+        return updated
+
+    # Replace an earlier answer to this same question instead of appending a stale duplicate.
     updated = [
         item for item in updated
         if not _same_followup_question(item, question_id, target_name)
     ]
-    canonical_target = _canonical_followup_target(target_name)
     updated.append(
         {
             "finding": target_name,

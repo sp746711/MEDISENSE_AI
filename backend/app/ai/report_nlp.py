@@ -135,10 +135,10 @@ TARGET_TESTS: list[dict[str, Any]] = [
 
 # Comprehensive clinical unit patterns ordered from most specific/compound to least specific
 UNIT_PATTERNS = [
-    # RBC and cell count compound units with multiplier phrases and volume
+    # RBC, WBC, platelet and cell count compound units with multiplier phrases and volume
     r"(?:million\s+cells?|mil(?:lion)?|cells?|lakh)\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
-    r"(?:x\s*10\^?6|10\^?6|x\s*10\*6|10\*6)\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
-    r"(?:x\s*10\^?12|10\^?12|x\s*10\*12|10\*12)\s*\/\s*L",
+    r"(?:x\s*10\^?\d+|10\^?\d+|x\s*10\*\d+|10\*\d+)\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3|L|mL)",
+    r"(?:x\s*10\^?\d+|10\^?\d+|x\s*10\*\d+|10\*\d+)\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3|L|mL)",
     r"mil\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
     r"M\s*\/\s*(?:[u\u00b5\u03bc]L|mcL)",
     r"(?:million\s+cells?|mil(?:lion)?)\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",

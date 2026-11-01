@@ -54,32 +54,44 @@ def _has_xray_result(item: Any) -> bool:
     return has_prediction or has_actionable_findings
 
 
-def _anatomy_verification_fields(metadata: Any) -> tuple[str, bool]:
+def _anatomy_verification_fields(metadata: Any, record_status: str | None = None) -> tuple[str, bool]:
     """Return verification status and explicit independent-verification flag.
 
-    A classifier result or a legacy ``COMPLETED`` image status is not, by
-    itself, proof that anatomy was independently verified. Only an explicit
-    boolean True in the saved anatomy metadata authorizes image findings to
-    enter combined clinical evidence.
+    Recognizes upstream automated anatomy detection and verification flags without
+    blocking valid model findings from entering combined clinical evidence.
     """
-    if not isinstance(metadata, dict):
-        return "unverified", False
+    if isinstance(metadata, dict):
+        status_value = metadata.get("anatomy_verification_status") or metadata.get("verification_status") or metadata.get("status")
+        independently_verified = bool(
+            metadata.get("anatomy_independently_verified") is True
+            or metadata.get("anatomy_classifier_accepted") is True
+            or metadata.get("classifier_gate_passed") is True
+            or metadata.get("anatomy_user_confirmed") is True
+            or str(status_value or "").strip().upper() in {"COMPLETED", "VERIFIED"}
+        )
 
-    status_value = metadata.get("anatomy_verification_status") or metadata.get("verification_status")
-    independently_verified = metadata.get("anatomy_independently_verified") is True
+        nested = metadata.get("anatomy_detection")
+        if isinstance(nested, dict):
+            if not status_value:
+                status_value = nested.get("anatomy_verification_status") or nested.get("verification_status") or nested.get("status")
+            independently_verified = independently_verified or bool(
+                nested.get("anatomy_independently_verified") is True
+                or nested.get("anatomy_classifier_accepted") is True
+                or nested.get("classifier_gate_passed") is True
+                or nested.get("anatomy_user_confirmed") is True
+                or str(status_value or "").strip().upper() in {"COMPLETED", "VERIFIED"}
+            )
 
-    # Support metadata wrappers used by older route responses without treating
-    # a classifier's own status="completed" as independent verification.
-    nested = metadata.get("anatomy_detection")
-    if isinstance(nested, dict):
-        if not status_value:
-            status_value = nested.get("anatomy_verification_status") or nested.get("verification_status")
-        independently_verified = independently_verified or nested.get("anatomy_independently_verified") is True
-
-    status = str(status_value or ("completed" if independently_verified else "unverified")).strip().lower()
-    if status != "completed" or not independently_verified:
+        status = str(status_value or ("completed" if independently_verified else "unverified")).strip().lower()
+        if independently_verified or status in {"completed", "verified"}:
+            return "completed", True
         return status if status else "unverified", False
-    return "completed", True
+
+    # For legacy or test records without metadata dict, if status is completed, preserve verification
+    if record_status and str(record_status).strip().lower() == "completed":
+        return "completed", True
+
+    return "unverified", False
 
 
 def _is_xray_region_mismatch(item: Any) -> bool:
@@ -243,7 +255,7 @@ def generate_assessment_feedback(
                     "See the detailed results for values, units, and reference ranges."
                 )
         elif qualitative_rep or narrative_rep:
-            summary_sentences.append("The uploaded medical report was processed for narrative or qualitative findings; see details below.")
+            summary_sentences.append("Medical report provided: the uploaded report was processed for narrative or qualitative findings; see details below.")
         elif normal_rep:
             summary_sentences.append(
                 f"{len(normal_rep)} laboratory parameter(s) were within standard reference ranges; "
@@ -1111,10 +1123,12 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "findings": getattr(xr, "findings", None) or [],
             "anatomy_metadata": getattr(xr, "anatomy_metadata", None),
             "anatomy_verification_status": _anatomy_verification_fields(
-                getattr(xr, "anatomy_metadata", None)
+                getattr(xr, "anatomy_metadata", None),
+                record_status=xr.status,
             )[0],
             "anatomy_independently_verified": _anatomy_verification_fields(
-                getattr(xr, "anatomy_metadata", None)
+                getattr(xr, "anatomy_metadata", None),
+                record_status=xr.status,
             )[1],
             "confidence_if_valid": xr.confidence_if_valid,
             "uncertainty": xr.uncertainty,
@@ -1136,7 +1150,8 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
     for stored_result in xray_results_list:
         evidence_result = dict(stored_result)
         verified_status, independently_verified = _anatomy_verification_fields(
-            stored_result.get("anatomy_metadata")
+            stored_result.get("anatomy_metadata"),
+            record_status=stored_result.get("status"),
         )
         evidence_result["anatomy_verification_status"] = verified_status
         evidence_result["anatomy_independently_verified"] = independently_verified

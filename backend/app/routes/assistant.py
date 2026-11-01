@@ -10,6 +10,56 @@ from app.schemas.assessment import AssistantChatRequest
 router = APIRouter(prefix="/assistant", tags=["AI Assistant"])
 
 
+def _build_assessment_context(assessment: Assessment) -> dict:
+    result = assessment.result_payload or {}
+    evidence = result.get("evidence") or {}
+    feedback = result.get("feedback") or {}
+    condition_preds = result.get("condition_predictions") or {}
+    report_meta = evidence.get("report") or {}
+    xray_meta = evidence.get("xray") or {}
+
+    symptoms_present = [
+        s.get("symptom") or s.get("finding")
+        for s in evidence.get("symptoms", {}).get("present", [])
+        if s.get("symptom") or s.get("finding")
+    ]
+    symptoms_absent = [
+        s.get("symptom") or s.get("finding")
+        for s in evidence.get("symptoms", {}).get("absent", [])
+        if s.get("symptom") or s.get("finding")
+    ]
+    abnormal_labs = [
+        f"{f.get('test_name')}: {f.get('value')} {f.get('unit') or ''} ({f.get('interpretation') or f.get('status') or 'abnormal'})"
+        for f in report_meta.get("abnormal_findings", [])
+        if f.get("test_name")
+    ]
+    xray_summary = xray_meta.get("prediction") or (
+        [f.get("label") for f in xray_meta.get("findings", []) if f.get("label")]
+        if xray_meta.get("findings")
+        else None
+    )
+
+    return {
+        "assessment_id": str(assessment.assessment_id),
+        "pathway": assessment.pathway,
+        "specialty": assessment.specialty,
+        "input_types": assessment.input_types,
+        "status": assessment.status,
+        "summary": feedback.get("assessment_summary"),
+        "symptoms": symptoms_present,
+        "absent_symptoms": symptoms_absent,
+        "report_findings": abnormal_labs,
+        "xray": xray_summary,
+        "possible_conditions": [
+            c.get("condition")
+            for c in condition_preds.get("conditions", [])
+            if c.get("condition")
+        ],
+        "triage_rationale": feedback.get("why_this_triage_selected"),
+        "recommended_next_step": feedback.get("recommended_next_step"),
+    }
+
+
 @router.post("/chat")
 def chat(
     payload: AssistantChatRequest,
@@ -24,13 +74,7 @@ def chat(
                 "status": "error",
                 "message": "Assessment not found for this user.",
             }
-        assessment_ctx = {
-            "assessment_id": str(assessment.assessment_id),
-            "pathway": assessment.pathway,
-            "specialty": assessment.specialty,
-            "input_types": assessment.input_types,
-            "status": assessment.status,
-        }
+        assessment_ctx = _build_assessment_context(assessment)
     else:
         latest = (
             db.query(Assessment)
@@ -39,13 +83,7 @@ def chat(
             .first()
         )
         if latest:
-            assessment_ctx = {
-                "assessment_id": str(latest.assessment_id),
-                "pathway": latest.pathway,
-                "specialty": latest.specialty,
-                "input_types": latest.input_types,
-                "status": latest.status,
-            }
+            assessment_ctx = _build_assessment_context(latest)
 
     session = None
     if payload.session_id:

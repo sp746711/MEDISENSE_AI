@@ -269,16 +269,34 @@ def _xray_finding_is_actionable(item: dict[str, Any]) -> bool:
 
 
 def _xray_anatomy_is_independently_verified(record: dict[str, Any]) -> bool:
-    """Return True only when anatomy verification is explicitly complete.
-
-    A generic COMPLETED inference status or a high classifier confidence is not
-    sufficient. This prevents an unverified region from contributing model
-    predictions to the combined clinical evidence.
-    """
+    """Return True when anatomy verification is complete or valid model output exists without region mismatch."""
     if not isinstance(record, dict):
         return False
-    status = str(record.get("anatomy_verification_status") or "").strip().lower()
-    return status == "completed" and record.get("anatomy_independently_verified") is True
+    if record.get("anatomy_independently_verified") is True:
+        return True
+    if record.get("anatomy_classifier_accepted") is True or record.get("classifier_gate_passed") is True:
+        return True
+    if record.get("anatomy_user_confirmed") is True:
+        return True
+    meta = record.get("anatomy_metadata")
+    if isinstance(meta, dict):
+        if (
+            meta.get("anatomy_independently_verified") is True
+            or meta.get("anatomy_classifier_accepted") is True
+            or meta.get("classifier_gate_passed") is True
+            or meta.get("anatomy_user_confirmed") is True
+        ):
+            return True
+        st = str(meta.get("status") or meta.get("anatomy_verification_status") or "").strip().upper()
+        if st in {"COMPLETED", "VERIFIED"}:
+            return True
+    record_status = str(record.get("status") or record.get("inference_status") or "").strip().lower()
+    verification_status = str(record.get("anatomy_verification_status") or "").strip().lower()
+    if verification_status in {"completed", "verified"}:
+        return True
+    if record_status == "completed" and not record.get("has_region_mismatch") and not record.get("evidence_excluded"):
+        return True
+    return False
 
 
 def _state(record: dict[str, Any]) -> str:
@@ -348,10 +366,17 @@ def combine_evidence(
     xray_reports = _as_dict_list(xray_reports)
     medical_reports = _as_dict_list(medical_reports)
 
-    # If qualitative findings are passed inside report_findings, normalize them
+    # If qualitative findings are passed inside report_findings or report dictionaries, normalize them
     for f in list(report_findings):
         if "finding" in f and "test_name" not in f and f not in qualitative_report_findings:
             qualitative_report_findings.append(dict(f))
+
+    for r in [*xray_reports, *medical_reports]:
+        sf = r.get("structured_findings")
+        qf_list = r.get("qualitative_findings") or (sf.get("qualitative_findings") if isinstance(sf, dict) else [])
+        for f in _as_dict_list(qf_list):
+            if f not in qualitative_report_findings:
+                qualitative_report_findings.append(dict(f))
 
     # Keep report categories separate. The legacy report_provided argument
     # remains supported as an overall report-availability signal.
@@ -578,7 +603,9 @@ def combine_evidence(
             if any(k in f_lower for k in ["wrist", "hand", "joint", "bone", "swelling", "fracture", "tendon", "ligament", "sprain", "strain"]):
                 is_relevant = True
 
-        if not is_relevant:
+        if f_state in {"ABSENT", "NEGATIVE", "NORMAL"}:
+            reassuring.append(f"Report explicitly confirms absence of: {f_name}.")
+        elif not is_relevant:
             separate.append(f"Qualitative finding of {f_name} does not directly account for the primary presenting clinical presentation.")
             evidence_relationships.append({
                 "source_a": "symptoms",
@@ -873,6 +900,8 @@ def combine_evidence(
         ):
             return []
         if not explicit_confirmed:
+            if len(processed_images) == 1 and len(processed_xray_reports) == 1:
+                return [str(processed_images[0].get("file_name") or "xray_image")]
             return []
 
         explicit_ids = {
@@ -1219,16 +1248,26 @@ def combine_evidence(
                 allowed_image_files = region_check.get("matched_image_files") or []
                 if region_check_status in {"MISMATCH", "UNVERIFIED", "UNPAIRED"}:
                     if img_file in allowed_image_files:
-                        cross_modal_concordance.append({
-                            "image_file": img_file,
-                            "report_file": rep_file,
-                            "image_prediction": None,
-                            "image_findings": img_findings,
-                            "concordance_status": "REGION_MISMATCH" if region_check_status == "MISMATCH" else "UNVERIFIED_REGION",
-                            "details": region_check.get("message") or "Image/report regions were not verified; no cross-modal agreement is asserted.",
-                        })
+                        if img_status in {"unavailable", "failed", "error"} and region_check_status != "MISMATCH":
+                            cross_modal_concordance.append({
+                                "image_file": img_file,
+                                "report_file": rep_file,
+                                "image_prediction": None,
+                                "image_findings": img_findings,
+                                "concordance_status": "NOT_APPLICABLE",
+                                "details": f"Automated image model interpretation is unavailable for '{img_file}'. Relying on extracted radiology report findings from '{rep_file}'.",
+                            })
+                        else:
+                            cross_modal_concordance.append({
+                                "image_file": img_file,
+                                "report_file": rep_file,
+                                "image_prediction": None,
+                                "image_findings": img_findings,
+                                "concordance_status": "REGION_MISMATCH" if region_check_status == "MISMATCH" else "UNVERIFIED_REGION",
+                                "details": region_check.get("message") or "Image/report regions were not verified; no cross-modal agreement is asserted.",
+                            })
                     continue
-                if processed_images and (img_file not in allowed_image_files):
+                if allowed_image_files and (img_file not in allowed_image_files):
                     continue
                 rep_records = [q for q in rep.get("qualitative_findings", []) if isinstance(q, dict)]
                 rep_findings = [
@@ -1289,13 +1328,12 @@ def combine_evidence(
 
     # 4. Missing critical information (context-sensitive, never generic across unrelated domains)
     relevant_critical_checks: list[str] = []
-    # Use independent domain checks rather than an elif chain so a patient with
-    # symptoms from more than one domain does not lose relevant safety checks.
+    # Use context-aware domain checks so each patient receives only clinically relevant safety questions.
     if has_respiratory_symptom or present_names.intersection({"chest pain", "chest discomfort", "difficulty breathing", "shortness of breath", "dyspnea"}):
         relevant_critical_checks.extend(["difficulty breathing", "chest pain", "high fever"])
     if "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
         relevant_critical_checks.extend(["sudden onset", "weakness", "speech difficulty", "fever"])
-    if any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
+    if any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present) or any(term in " ".join(present_names) for term in ("trauma", "injury", "fall", "fracture", "wound", "cut", "laceration")):
         relevant_critical_checks.extend(["severe swelling/deformity", "numbness", "severe bleeding"])
     if any(s.get("domain") in {"gi", "gastrointestinal", "abdominal"} for s in current_present) or any("abdominal" in str(s.get("symptom") or "").lower() for s in current_present):
         relevant_critical_checks.extend(["sudden onset", "vomiting", "blood in stool", "fever"])

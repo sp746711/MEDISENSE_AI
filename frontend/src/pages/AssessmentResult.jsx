@@ -154,7 +154,7 @@ export default function AssessmentResult() {
   const possibleConditions = rawPossibleConditions
     .filter((candidate) => candidate && typeof candidate === 'object' &&
       displayText(candidate.condition || candidate.name || candidate.label).trim())
-    .slice(0, 10);
+    .slice(0, 24);
   const conditionStatus = predictions.status || feedback.condition_prediction_status;
   const conditionMessage = predictions.message || feedback.condition_prediction_message;
 
@@ -166,6 +166,18 @@ export default function AssessmentResult() {
   const symptomsWereProvided = hasInputType('symptom');
   const medicalReportWasProvided = hasInputType('medical_report', 'medical report', 'lab', 'blood report');
   const xrayWasProvided = hasInputType('xray', 'x-ray', 'radiology', 'image');
+
+  const hasSymptomsInput = symptomsWereProvided || symptomsPresent.length > 0 || symptomsAbsent.length > 0 || symptomsUnknown.length > 0 || historicalSymptoms.length > 0;
+  const hasMedicalReportInput = medicalReportWasProvided || reportFindings.length > 0 || medicalReportsList.length > 0;
+  const hasXrayImageInput = Boolean(
+    xrayImagesList.length > 0 ||
+    (xrayData?.images_received && xrayData?.status !== 'NOT_PROVIDED') ||
+    (hasInputType('xray', 'image') && !hasInputType('radiology_report'))
+  );
+  const hasRadiologyReportInput = Boolean(
+    xrayReportsList.length > 0 ||
+    hasInputType('radiology', 'radiology_report')
+  );
 
   return (
     <div className="page">
@@ -196,48 +208,50 @@ export default function AssessmentResult() {
 
       <div className="evidence-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 420px), 1fr))', alignItems: 'start', gap: '1rem', width: '100%' }}>
         {/* 1. SYMPTOMS */}
-        <EvidenceCard title="SYMPTOMS EVIDENCE">
-          {symptomsPresent.length === 0 && symptomsAbsent.length === 0 && symptomsUnknown.length === 0 ? (
-            <p className="muted">{symptomsWereProvided ? (feedback.symptom_message || 'Symptoms were submitted, but no structured symptom findings are available in this result. Check processing status or assessment details.') : 'No symptoms were provided for this assessment.'}</p>
-          ) : (
-            <div className="symptoms-list">
-              {symptomsPresent.map((s, idx) => (
-                <div key={idx} className="evidence-pill present">
-                  <span className="badge badge-present">PRESENT</span>
-                  <strong>{s.symptom || s.finding || 'Unnamed symptom'}</strong>
-                  {s.duration ? <span className="pill-detail">({s.duration})</span> : null}
-                  {s.severity ? <span className="pill-detail severity">[{s.severity}]</span> : null}
-                  {s.laterality ? <span className="pill-detail">[{s.laterality}-sided]</span> : null}
-                  {s.quality ? <span className="pill-detail">[{s.quality}]</span> : null}
-                  {s.trigger ? <span className="pill-detail">Trigger: {s.trigger}</span> : null}
-                  {s.onset ? <span className="pill-detail">Onset: {s.onset}</span> : null}
-                  {s.character && !['CURRENT', 'PRESENT'].includes(s.character) ? (
-                    <span className="pill-detail">{s.character}</span>
-                  ) : s.type && !['CURRENT', 'PRESENT', 'NEGATIVE'].includes(s.type) ? (
-                    <span className="pill-detail">{s.type}</span>
-                  ) : null}
-                  {s.mucus ? <span className="pill-detail">{s.mucus}</span> : null}
-                  {s.context && s.context !== s.trigger && !s.mucus && s.context.length < 80 ? (
-                    <span className="pill-detail">{s.context}</span>
-                  ) : null}
-                </div>
-              ))}
-              {symptomsAbsent.map((s, idx) => (
-                <div key={idx} className="evidence-pill absent">
-                  <span className="badge badge-absent">ABSENT</span>
-                  <span>{s.symptom || s.finding || 'Unnamed symptom'}</span>
-                </div>
-              ))}
-              {symptomsUnknown.map((s, idx) => (
-                <div key={`unknown-${idx}`} className="evidence-pill" style={{ background: '#fffbeb', borderColor: '#f59e0b' }}>
-                  <span className="badge" style={{ background: '#b45309', color: '#fff' }}>UNKNOWN</span>
-                  <span>{s.symptom || s.finding || 'Unanswered symptom'}</span>
-                  {s.context ? <span className="pill-detail">{s.context}</span> : null}
-                </div>
-              ))}
-            </div>
-          )}
-        </EvidenceCard>
+        {hasSymptomsInput ? (
+          <EvidenceCard title="SYMPTOMS EVIDENCE">
+            {symptomsPresent.length === 0 && symptomsAbsent.length === 0 && symptomsUnknown.length === 0 ? (
+              <p className="muted">{symptomsWereProvided ? (feedback.symptom_message || 'Symptoms were submitted, but no structured symptom findings are available in this result. Check processing status or assessment details.') : 'No symptoms were provided for this assessment.'}</p>
+            ) : (
+              <div className="symptoms-list">
+                {symptomsPresent.map((s, idx) => (
+                  <div key={idx} className="evidence-pill present">
+                    <span className="badge badge-present">PRESENT</span>
+                    <strong>{s.symptom || s.finding || 'Unnamed symptom'}</strong>
+                    {s.duration ? <span className="pill-detail">({s.duration})</span> : null}
+                    {s.severity ? <span className="pill-detail severity">[{s.severity}]</span> : null}
+                    {s.laterality ? <span className="pill-detail">[{s.laterality}-sided]</span> : null}
+                    {s.quality ? <span className="pill-detail">[{s.quality}]</span> : null}
+                    {s.trigger ? <span className="pill-detail">Trigger: {s.trigger}</span> : null}
+                    {s.onset ? <span className="pill-detail">Onset: {s.onset}</span> : null}
+                    {s.character && !['CURRENT', 'PRESENT'].includes(s.character) ? (
+                      <span className="pill-detail">{s.character}</span>
+                    ) : s.type && !['CURRENT', 'PRESENT', 'NEGATIVE'].includes(s.type) ? (
+                      <span className="pill-detail">{s.type}</span>
+                    ) : null}
+                    {s.mucus ? <span className="pill-detail">{s.mucus}</span> : null}
+                    {s.context && s.context !== s.trigger && !s.mucus && s.context.length < 80 ? (
+                      <span className="pill-detail">{s.context}</span>
+                    ) : null}
+                  </div>
+                ))}
+                {symptomsAbsent.map((s, idx) => (
+                  <div key={idx} className="evidence-pill absent">
+                    <span className="badge badge-absent">ABSENT</span>
+                    <span>{s.symptom || s.finding || 'Unnamed symptom'}</span>
+                  </div>
+                ))}
+                {symptomsUnknown.map((s, idx) => (
+                  <div key={`unknown-${idx}`} className="evidence-pill" style={{ background: '#fffbeb', borderColor: '#f59e0b' }}>
+                    <span className="badge" style={{ background: '#b45309', color: '#fff' }}>UNKNOWN</span>
+                    <span>{s.symptom || s.finding || 'Unanswered symptom'}</span>
+                    {s.context ? <span className="pill-detail">{s.context}</span> : null}
+                  </div>
+                ))}
+              </div>
+            )}
+          </EvidenceCard>
+        ) : null}
 
         {/* 1b. HISTORICAL CONTEXT */}
         {historicalSymptoms.length > 0 ? (
@@ -258,169 +272,168 @@ export default function AssessmentResult() {
         ) : null}
 
         {/* 2. MEDICAL REPORT */}
-        <EvidenceCard title="MEDICAL REPORT FINDINGS">
-          {reportFindings.length === 0 && medicalReportsList.length === 0 ? (
-            <p className="muted">{feedback.medical_report_message || (medicalReportWasProvided ? 'A medical/laboratory report was submitted, but no structured findings are available in this result. Check the upload and extraction status.' : 'No medical/laboratory report was provided for this assessment.')}</p>
-          ) : (
-            <div>
-              {medicalReportsList.length > 0 ? (
-                <div style={{ marginBottom: '0.75rem' }}>
-                  <p style={{ margin: '0 0 0.35rem 0', fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
-                    Uploaded Reports ({medicalReportsList.length}):
-                  </p>
-                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
-                    {medicalReportsList.map((mr, idx) => (
-                      <li key={idx} style={{ marginBottom: '0.2rem' }}>
-                        <strong>{mr.file_name}</strong>
-                        {mr.is_historical ? ' (Historical / Contextual)' : ''}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : null}
-
-              {reportFindings.length > 0 ? (
-                <table className="mini-table">
-                  <thead>
-                    <tr>
-                      <th>Test Name</th>
-                      <th>Value</th>
-                      <th>Reference</th>
-                      <th>Source</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reportFindings.map((f, idx) => (
-                      <tr key={idx}>
-                        <td>{f.test_name}</td>
-                        <td>{f.value} {f.unit || ''}</td>
-                        <td>{f.reference_range || '—'}</td>
-                        <td style={{ fontSize: '0.75rem', color: '#64748b' }}>{f.source_file || 'Report'}</td>
-                        <td>
-                          <span className={`badge badge-${(f.interpretation || f.status || '').toLowerCase()}`}>
-                            {f.interpretation || f.status || 'RECORDED'}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              ) : null}
-            </div>
-          )}
-        </EvidenceCard>
-
-        {/* 3. X-RAY & RADIOLOGY EVIDENCE */}
-        <EvidenceCard title="X-RAY & RADIOLOGY EVIDENCE">
-          {(!xrayData || !xrayData.received) && xrayImagesList.length === 0 && xrayReportsList.length === 0 ? (
-            <p className="muted">{feedback.xray_message || (xrayWasProvided ? 'An X-ray image or radiology report was submitted, but its detailed evidence is not available in this result. Check processing status and assessment details.' : 'No X-ray image or radiology report was provided for this assessment.')}</p>
-          ) : (
-            <div>
-              {/* Images */}
-              {xrayImagesList.length > 0 ? (
-                <div style={{ marginBottom: '1rem' }}>
-                  <h4 style={{ margin: '0 0 0.4rem 0', fontSize: '0.92rem', color: '#0369a1' }}>Images:</h4>
-                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.88rem' }}>
-                    {xrayImagesList.map((img, idx) => (
-                      <li key={idx} style={{ marginBottom: '0.45rem' }}>
-                        <strong>{img.file_name}</strong> ({img.region?.toUpperCase()})
-                        <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
-                          Status: <span className={`badge badge-${(img.status || '').toLowerCase()}`}>{(img.status || '').toUpperCase()}</span>
-                          {img.prediction ? (
-                            <span style={{ marginLeft: '0.5rem' }}>
-                              Finding: <span className="highlight">{img.prediction}</span>
-                            </span>
-                          ) : (
-                            <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>
-                              Reason: {img.message || img.description || 'Automated interpretation unavailable'}
-                            </span>
-                          )}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : xrayData?.images_received && xrayData?.status !== 'NOT_PROVIDED' ? (
-                <div style={{ marginBottom: '1rem' }}>
-                  <p><strong>Region:</strong> {(xrayData.region || 'Not declared').toUpperCase()}</p>
-                  <p><strong>Status:</strong> {(xrayData.status || '').toUpperCase()}</p>
-                  {xrayData.prediction ? (
-                    <p><strong>Finding:</strong> <span className="highlight">{xrayData.prediction}</span></p>
-                  ) : (
-                    <p className="muted">{xrayData.description || xrayData.message || 'Automated interpretation for this X-ray type is currently unavailable.'}</p>
-                  )}
-                </div>
-              ) : (
-                <div style={{ marginBottom: '0.8rem' }}>
-                  <p className="muted" style={{ margin: 0, fontSize: '0.86rem', fontStyle: 'italic' }}>
-                    Radiographic Images: None uploaded (no image file submitted for automated inference).
-                  </p>
-                </div>
-              )}
-
-              {/* Radiology Reports */}
-              {xrayReportsList.length > 0 ? (
-                <div>
-                  <h4 style={{ margin: '0 0 0.4rem 0', fontSize: '0.92rem', color: '#0369a1' }}>Radiology Reports:</h4>
-                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.88rem' }}>
-                    {xrayReportsList.map((rep, idx) => {
-                      const qualFindings = rep.qualitative_findings || rep.structured_findings?.qualitative_findings || [];
-                      const narrFindings = rep.narrative_findings || rep.structured_findings?.narrative_findings || [];
-                      return (
-                        <li key={idx} style={{ marginBottom: '0.65rem' }}>
-                          <strong>{rep.file_name}</strong>
-                          <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
-                            OCR / NLP: <span className="badge badge-extracted">{rep.status || 'EXTRACTED'}</span>
-                            {rep.is_historical ? <span style={{ marginLeft: '0.4rem', color: '#64748b' }}>(Historical report)</span> : null}
-                          </div>
-                          {qualFindings.length > 0 && (
-                            <div style={{ marginTop: '0.3rem', fontSize: '0.84rem' }}>
-                              <strong>Extracted Findings:</strong>{' '}
-                              {qualFindings.map((q, qIdx) => (
-                                <span key={qIdx} style={{ marginRight: '0.4rem', color: q.state === 'ABSENT' ? '#059669' : '#0284c7' }}>
-                                  • {q.finding} ({q.state || 'PRESENT'})
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          {narrFindings.length > 0 && (
-                            <div style={{ marginTop: '0.2rem', fontSize: '0.82rem', color: '#475569' }}>
-                              {narrFindings.map((n, nIdx) => (
-                                <div key={nIdx}>
-                                  <em>{n.section || 'Impression'}:</em> {n.content}
-                                </div>
-                              ))}
-                            </div>
-                          )}
+        {hasMedicalReportInput ? (
+          <EvidenceCard title="MEDICAL REPORT FINDINGS">
+            {reportFindings.length === 0 && medicalReportsList.length === 0 ? (
+              <p className="muted">{feedback.medical_report_message || (medicalReportWasProvided ? 'A medical/laboratory report was submitted, but no structured findings are available in this result. Check the upload and extraction status.' : 'No medical/laboratory report was provided for this assessment.')}</p>
+            ) : (
+              <div>
+                {medicalReportsList.length > 0 ? (
+                  <div style={{ marginBottom: '0.75rem' }}>
+                    <p style={{ margin: '0 0 0.35rem 0', fontSize: '0.85rem', fontWeight: 600, color: '#334155' }}>
+                      Uploaded Reports ({medicalReportsList.length}):
+                    </p>
+                    <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
+                      {medicalReportsList.map((mr, idx) => (
+                        <li key={idx} style={{ marginBottom: '0.2rem' }}>
+                          <strong>{mr.file_name}</strong>
+                          {mr.is_historical ? ' (Historical / Contextual)' : ''}
                         </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ) : null}
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
 
-              {/* Cross-Modal Concordance */}
-              {asArray(xrayData.cross_modal_concordance).length > 0 && (
-                <div style={{ marginTop: '0.8rem', padding: '0.6rem', background: '#f8fafc', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
-                  <h5 style={{ margin: '0 0 0.3rem 0', fontSize: '0.85rem', color: '#334155' }}>
-                    Cross-Modal Comparison (Image Model vs. Radiology Report):
-                  </h5>
-                  <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
-                    {asArray(xrayData.cross_modal_concordance).map((c, cIdx) => (
-                      <li key={cIdx} style={{ marginBottom: '0.25rem' }}>
-                        <span style={{ fontWeight: 600, color: c.concordance_status === 'CONCORDANT' ? '#059669' : c.concordance_status === 'DISCORDANT' ? '#dc2626' : '#64748b' }}>
-                          [{c.concordance_status}]
-                        </span>{' '}
-                        {c.details}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+                {reportFindings.length > 0 ? (
+                  <table className="mini-table">
+                    <thead>
+                      <tr>
+                        <th>Test Name</th>
+                        <th>Value</th>
+                        <th>Reference</th>
+                        <th>Source</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {reportFindings.map((f, idx) => (
+                        <tr key={idx}>
+                          <td>{f.test_name}</td>
+                          <td>{f.value} {f.unit || ''}</td>
+                          <td>{f.reference_range || '—'}</td>
+                          <td style={{ fontSize: '0.75rem', color: '#64748b' }}>{f.source_file || 'Report'}</td>
+                          <td>
+                            <span className={`badge badge-${(f.interpretation || f.status || '').toLowerCase()}`}>
+                              {f.interpretation || f.status || 'RECORDED'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : null}
+              </div>
+            )}
+          </EvidenceCard>
+        ) : null}
+
+        {/* 3a. RADIOLOGY REPORT FINDINGS */}
+        {hasRadiologyReportInput && xrayReportsList.length > 0 ? (
+          <EvidenceCard title="RADIOLOGY REPORT FINDINGS">
+            <div>
+              <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.88rem' }}>
+                {xrayReportsList.map((rep, idx) => {
+                  const qualFindings = rep.qualitative_findings || rep.structured_findings?.qualitative_findings || [];
+                  const narrFindings = rep.narrative_findings || rep.structured_findings?.narrative_findings || [];
+                  return (
+                    <li key={idx} style={{ marginBottom: '0.65rem' }}>
+                      <strong>{rep.file_name}</strong>
+                      <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
+                        OCR / NLP: <span className="badge badge-extracted">{rep.status || 'EXTRACTED'}</span>
+                        {rep.is_historical ? <span style={{ marginLeft: '0.4rem', color: '#64748b' }}>(Historical report)</span> : null}
+                      </div>
+                      {qualFindings.length > 0 && (
+                        <div style={{ marginTop: '0.3rem', fontSize: '0.84rem' }}>
+                          <strong>Extracted Findings:</strong>{' '}
+                          {qualFindings.map((q, qIdx) => (
+                            <span key={qIdx} style={{ marginRight: '0.4rem', color: q.state === 'ABSENT' ? '#059669' : '#0284c7' }}>
+                              • {q.finding} ({q.state || 'PRESENT'})
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {narrFindings.length > 0 && (
+                        <div style={{ marginTop: '0.2rem', fontSize: '0.82rem', color: '#475569' }}>
+                          {narrFindings.map((n, nIdx) => (
+                            <div key={nIdx}>
+                              <em>{n.section || 'Impression'}:</em> {n.content}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-          )}
-        </EvidenceCard>
+          </EvidenceCard>
+        ) : null}
+
+        {/* 3b. X-RAY IMAGE ANALYSIS */}
+        {hasXrayImageInput ? (
+          <EvidenceCard title="X-RAY IMAGE ANALYSIS">
+            {(!xrayData || !xrayData.received) && xrayImagesList.length === 0 ? (
+              <p className="muted">{feedback.xray_message || 'An X-ray image was submitted, but detailed image analysis is not available in this result.'}</p>
+            ) : (
+              <div>
+                {xrayImagesList.length > 0 ? (
+                  <div>
+                    <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.88rem' }}>
+                      {xrayImagesList.map((img, idx) => (
+                        <li key={idx} style={{ marginBottom: '0.45rem' }}>
+                          <strong>{img.file_name}</strong> ({img.region?.toUpperCase()})
+                          <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
+                            Status: <span className={`badge badge-${(img.status || '').toLowerCase()}`}>{(img.status || '').toUpperCase()}</span>
+                            {img.prediction ? (
+                              <span style={{ marginLeft: '0.5rem' }}>
+                                Finding: <span className="highlight">{img.prediction}</span>
+                              </span>
+                            ) : (
+                              <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>
+                                Reason: {img.message || img.description || 'Automated interpretation unavailable'}
+                              </span>
+                            )}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <div>
+                    <p><strong>Region:</strong> {(xrayData.region || 'Not declared').toUpperCase()}</p>
+                    <p><strong>Status:</strong> {(xrayData.status || '').toUpperCase()}</p>
+                    {xrayData.prediction ? (
+                      <p><strong>Finding:</strong> <span className="highlight">{xrayData.prediction}</span></p>
+                    ) : (
+                      <p className="muted">{xrayData.description || xrayData.message || 'Automated interpretation for this X-ray type is currently unavailable.'}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </EvidenceCard>
+        ) : null}
+
+        {/* 3c. RADIOLOGY REPORT & X-RAY COMPARISON */}
+        {hasXrayImageInput && hasRadiologyReportInput && asArray(xrayData.cross_modal_concordance).length > 0 ? (
+          <EvidenceCard title="RADIOLOGY REPORT & X-RAY COMPARISON">
+            <div style={{ padding: '0.6rem', background: '#f8fafc', borderRadius: '4px', border: '1px solid #e2e8f0' }}>
+              <h5 style={{ margin: '0 0 0.3rem 0', fontSize: '0.85rem', color: '#334155' }}>
+                Cross-Modal Comparison (Image Model vs. Radiology Report):
+              </h5>
+              <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem' }}>
+                {asArray(xrayData.cross_modal_concordance).map((c, cIdx) => (
+                  <li key={cIdx} style={{ marginBottom: '0.25rem' }}>
+                    <span style={{ fontWeight: 600, color: c.concordance_status === 'CONCORDANT' ? '#059669' : c.concordance_status === 'DISCORDANT' ? '#dc2626' : '#64748b' }}>
+                      [{c.concordance_status}]
+                    </span>{' '}
+                    {c.details}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </EvidenceCard>
+        ) : null}
 
         {/* 4. WHY THIS PATHWAY */}
         <EvidenceCard title="WHY THIS PATHWAY?">
@@ -587,7 +600,7 @@ export default function AssessmentResult() {
               className="btn btn-danger"
               onClick={() => navigate(`/facilities?emergency_only=true&assessment_id=${encodeURIComponent(id)}`)}
             >
-              Find Emergency Facilities
+              Find Nearest Hospital
             </button>
             <button type="button" className="btn btn-secondary" onClick={() => navigate('/assistant')}>
               Ask AI Assistant
@@ -610,12 +623,20 @@ export default function AssessmentResult() {
             >
               Find Doctors
             </button>
+            <button type="button" className="btn btn-secondary" onClick={() => navigate('/assistant')}>
+              Ask AI Assistant
+            </button>
+          </>
+        ) : null}
+
+        {upper === 'ROUTINE_CLINIC' || upper === 'ROUTINE' ? (
+          <>
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-primary"
               onClick={() => navigate(`/facilities?assessment_id=${encodeURIComponent(id)}`)}
             >
-              Find Facilities
+              Find Clinic / Routine Evaluation
             </button>
             <button type="button" className="btn btn-secondary" onClick={() => navigate('/assistant')}>
               Ask AI Assistant
@@ -626,7 +647,7 @@ export default function AssessmentResult() {
         {upper === 'MILD' ? (
           <>
             <button type="button" className="btn btn-primary" onClick={() => navigate(`/assessment/${id}/details`)}>
-              General Guidance
+              Self-Care Guidance
             </button>
             <button
               type="button"
@@ -641,10 +662,15 @@ export default function AssessmentResult() {
           </>
         ) : null}
 
-        {!upper || !['EMERGENCY', 'CONSULTATION', 'MILD'].includes(upper) ? (
-          <button type="button" className="btn btn-secondary" onClick={() => navigate('/assistant')}>
-            Ask AI Assistant
-          </button>
+        {!upper || !['EMERGENCY', 'CONSULTATION', 'ROUTINE_CLINIC', 'ROUTINE', 'MILD'].includes(upper) ? (
+          <>
+            <button type="button" className="btn btn-primary" onClick={() => navigate(`/assessment`)}>
+              Review Missing Information
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={() => navigate('/assistant')}>
+              Ask AI Assistant
+            </button>
+          </>
         ) : null}
 
         <button type="button" className="btn btn-secondary" onClick={() => navigate(`/assessment/${id}/details`)}>

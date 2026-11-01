@@ -387,6 +387,11 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "systemic",
         "body_area": "whole body",
     },
+    "reduced appetite": {
+        "canonical": "loss of appetite",
+        "domain": "systemic",
+        "body_area": "whole body",
+    },
     "anorexia": {
         "canonical": "loss of appetite",
         "domain": "systemic",
@@ -937,6 +942,21 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "respiratory",
         "body_area": "lungs/chest",
     },
+    "coughing up blood": {
+        "canonical": "hemoptysis",
+        "domain": "respiratory",
+        "body_area": "lungs/chest",
+    },
+    "cough up blood": {
+        "canonical": "hemoptysis",
+        "domain": "respiratory",
+        "body_area": "lungs/chest",
+    },
+    "coughs up blood": {
+        "canonical": "hemoptysis",
+        "domain": "respiratory",
+        "body_area": "lungs/chest",
+    },
     "hemoptysis": {
         "canonical": "hemoptysis",
         "domain": "respiratory",
@@ -1300,6 +1320,13 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                                 break
                             if is_negated:
                                 break
+                        if not is_negated:
+                            if re.match(
+                                r"^\s*(?:[:\-]|is\s+|was\s+|are\s+|were\s+)?\s*(?:explicitly\s+)?(?:absent|none|negative|not\s+present|denied|ruled\s+out|no\s+longer\s+present)\b",
+                                post_text,
+                                re.IGNORECASE,
+                            ):
+                                is_negated = True
                         if meta.get("explicit_state") == "ABSENT":
                             state = "PRESENT" if is_negated else "ABSENT"
                         else:

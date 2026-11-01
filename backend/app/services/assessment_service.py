@@ -1118,7 +1118,8 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             if m_exam:
                 exam_desc = m_exam.group(1).strip()
 
-        ext_status = struct.get("status") or ocr_meta.get("extraction_status") or ("structured" if (qual_findings or struct.get("lab_parameters")) else "unstructured")
+        lab_findings = struct.get("lab_parameters") or struct.get("findings") or []
+        ext_status = struct.get("status") or ocr_meta.get("extraction_status") or ("structured" if (qual_findings or lab_findings) else "unstructured")
 
         r_entry = {
             "id": str(r.report_id),
@@ -1152,12 +1153,14 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         if cat != "xray_report":
             struct = r.structured_findings or {}
             if isinstance(struct, dict):
-                for l in struct.get("lab_parameters", []):
-                    l_copy = dict(l)
-                    l_copy["source_file"] = r.file_name
-                    l_copy["source_id"] = str(r.report_id)
-                    l_copy["source_type"] = "MEDICAL_REPORT"
-                    raw_lab_list.append(l_copy)
+                lab_params = struct.get("lab_parameters") or struct.get("findings") or []
+                for l in lab_params:
+                    if isinstance(l, dict):
+                        l_copy = dict(l)
+                        l_copy["source_file"] = r.file_name
+                        l_copy["source_id"] = str(r.report_id)
+                        l_copy["source_type"] = "MEDICAL_REPORT"
+                        raw_lab_list.append(l_copy)
 
                 for q in struct.get("qualitative_findings", []):
                     q_copy = dict(q)
@@ -1353,30 +1356,64 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
     specialty_result = map_evidence_to_specialty(evidence)
     suggested_specialty = specialty_result.get("suggested_specialty")
 
-    # 6b. Predict possible conditions using the currently configured predictor.
-    # 6b. Predict possible conditions using the currently configured predictor.
-    # IMPORTANT: condition_prediction.py accepts symptom features for the ML model;
-    # laboratory values, radiology-report text, and image pixels are not direct inputs
-    # to this classifier. Other modalities are integrated through the separate and
-    # traceable candidate-specific evidence reconciliation layer below.
+    # 6b. Genuine Multimodal / Baseline Condition Differential Prediction
     try:
-        condition_svc = get_condition_prediction_service()
-        condition_predictions = condition_svc.predict_conditions(
+        from app.ai.multimodal_condition_model import get_multimodal_inference_service
+        multimodal_svc = get_multimodal_inference_service()
+
+        # Build structured multimodal patient record and feature bundle from all submitted modalities
+        patient_record, tensor_bundle = multimodal_svc.build_record_from_inputs(
+            subject_id=str(assessment_id),
             symptoms_present=evidence.get("symptoms", {}).get("present", []),
             symptoms_absent=evidence.get("symptoms", {}).get("absent", []),
             symptoms_unknown=evidence.get("symptoms", {}).get("unknown", []),
+            medical_reports=medical_reports_list,
+            xray_reports=xray_reports_list,
+            xray_images=xray_results_for_evidence,
             raw_text=evidence.get("raw_text"),
         )
-        if not isinstance(condition_predictions, dict):
-            condition_predictions = {
-                "status": "unavailable",
-                "model_version": None,
-                "conditions": [],
-                "message": "The condition predictor returned an invalid response.",
-                "is_experimental": True,
-            }
+
+        multimodal_result = multimodal_svc.predict(patient_record)
+
+        if multimodal_svc.is_trained and multimodal_result.get("status") == "completed":
+            # Genuine multimodal neural prediction executed across available modalities
+            condition_predictions = dict(multimodal_result)
+            condition_predictions["prediction_model_scope"] = "multimodal_gmu"
+            condition_predictions["is_multimodal_ml_active"] = True
+            condition_predictions["multimodal_training_status"] = "trained_multimodal_gmu"
+            condition_predictions["active_model_name"] = multimodal_svc.model_version
         else:
-            condition_predictions = dict(condition_predictions)
+            # Baseline unimodal symptom model with transparent multimodal status
+            condition_svc = get_condition_prediction_service()
+            baseline_result = condition_svc.predict_conditions(
+                symptoms_present=evidence.get("symptoms", {}).get("present", []),
+                symptoms_absent=evidence.get("symptoms", {}).get("absent", []),
+                symptoms_unknown=evidence.get("symptoms", {}).get("unknown", []),
+                raw_text=evidence.get("raw_text"),
+            )
+            condition_predictions = dict(baseline_result) if isinstance(baseline_result, dict) else {}
+            condition_predictions["prediction_model_scope"] = "symptoms_only_baseline"
+            condition_predictions["is_multimodal_ml_active"] = False
+            condition_predictions["active_model_name"] = "condition_pred_v2.0-calibrated_logistic"
+            condition_predictions["multimodal_architecture"] = "MultimodalConditionPredictor_GMU_v2.0"
+            condition_predictions["multimodal_training_status"] = multimodal_result.get("status", "blocked_untrained")
+            condition_predictions["multimodal_blocker_reason"] = multimodal_result.get("message")
+
+        # Record modalities submitted vs processed vs reconciled
+        condition_predictions["modalities_submitted"] = [
+            m for m, active in [
+                ("symptoms", bool(patient_record.symptoms or evidence.get("symptoms", {}).get("present"))),
+                ("laboratory", bool(patient_record.laboratory)),
+                ("radiology_reports", bool(patient_record.radiology)),
+                ("xray_images", bool(patient_record.xray and patient_record.xray.is_pathology_eligible)),
+            ] if active
+        ]
+        condition_predictions["multimodal_record_summary"] = {
+            "symptom_count": len(patient_record.symptoms),
+            "lab_parameter_count": len(patient_record.laboratory),
+            "radiology_finding_count": len(patient_record.radiology),
+            "xray_pathology_eligible": bool(patient_record.xray and patient_record.xray.is_pathology_eligible),
+        }
 
         # Candidate-specific evidence reconciliation:
         # Cross-reference genuine ML candidates against actual multimodal assessment evidence
@@ -1396,17 +1433,18 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             reconciled_candidates if isinstance(reconciled_candidates, list) else []
         )
 
-        # Clear provenance and scope metadata
-        condition_predictions["prediction_model_scope"] = "symptoms_only"
-        condition_predictions["multimodal_training_status"] = (
-            "unimodal_symptom_ml_with_multimodal_evidence_reconciliation"
-        )
         condition_predictions["uses_symptom_features"] = bool(
             symptoms_list or evidence.get("symptoms", {}).get("present")
         )
-        condition_predictions["uses_medical_report_features"] = False
-        condition_predictions["uses_radiology_report_text"] = False
-        condition_predictions["uses_xray_image_features"] = False
+        condition_predictions["uses_medical_report_features"] = bool(
+            condition_predictions.get("is_multimodal_ml_active") and patient_record.laboratory
+        )
+        condition_predictions["uses_radiology_report_text"] = bool(
+            condition_predictions.get("is_multimodal_ml_active") and patient_record.radiology
+        )
+        condition_predictions["uses_xray_image_features"] = bool(
+            condition_predictions.get("is_multimodal_ml_active") and patient_record.xray and patient_record.xray.is_pathology_eligible
+        )
         condition_predictions["input_scope"] = [
             "symptoms_present", "symptoms_absent", "symptoms_unknown"
         ]
@@ -1422,10 +1460,18 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             reconciliation_sources.append("xray_images")
         condition_predictions["evidence_reconciliation_sources"] = reconciliation_sources
 
-        condition_predictions.setdefault(
-            "scope_notice",
-            "This configured condition classifier uses symptom features only. Medical/laboratory and X-ray evidence are processed in the assessment and linked via candidate evidence reconciliation, but are not direct features of this classifier.",
-        )
+        if not condition_predictions.get("is_multimodal_ml_active"):
+            condition_predictions["scope_notice"] = (
+                "Candidate conditions are generated by the validated unimodal symptom baseline classifier. "
+                "Laboratory reports, radiology reports, and X-ray evidence are linked via candidate evidence "
+                "reconciliation. Multimodal ML neural prediction will activate once authentic credentialed EHR "
+                "training data (MIMIC-IV / MIMIC-CXR) is integrated."
+            )
+        else:
+            condition_predictions["scope_notice"] = (
+                "Candidate conditions are generated by the genuine Multimodal Gated Multimodal Unit (GMU) model "
+                "combining representations from symptoms, laboratory panels, radiology reports, and eligible X-ray features."
+            )
     except Exception as exc:
         logger.error("Condition prediction pipeline execution failed: %s", exc)
         condition_predictions = {
@@ -1434,7 +1480,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "conditions": [],
             "message": "Assistive condition prediction is currently unavailable. The safety triage result is independent and remains in effect.",
             "is_experimental": True,
-            "prediction_model_scope": "symptoms_only",
+            "prediction_model_scope": "symptoms_only_baseline",
             "multimodal_training_status": "unimodal_symptom_ml_with_multimodal_evidence_reconciliation",
             "evidence_reconciliation_sources": [],
             "input_scope": ["symptoms_present", "symptoms_absent", "symptoms_unknown"],

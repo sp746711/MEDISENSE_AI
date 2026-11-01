@@ -1,0 +1,17 @@
+{
+  "backend/app/ai/xray_router.py": "f333ea7421a97474c1adb26678f2134819bfd62ef23cdca049df4790bdfe2a13",
+  "backend/app/ai/xray_anatomy_classifier.py": "1bd025e61071bfa36d0aeddd9db5b13c246ecb9deef34a40933bbaf767de027e",
+  "backend/app/ai/xray_model.py": "869d5869339193de8e8ebb1e71da54e7aec06600b754ba864f96b4233b8536c4",
+  "backend/app/ai/gradcam.py": "844852a86d1431c6e6c6943e3f16fd9d9a219683c255572479274b8b5ed706af",
+  "backend/app/ai/xray_catalogue.py": "5f82c802f07106970148f7f197c9206605d1206ba81bd570cf1d1623ed162a15",
+  "backend/models/xray/bodypart/best_model.pth": "3968a82c40e3991a32b965537a33b3f363182e9d0616b5e1a603db1b25e1e7cd",
+  "backend/models/xray/bodypart_full/classes.txt": "bc5bf21e2dcfdd235d5df4cc1973f437ce701e3d60c3b20545e684e3301c20af",
+  "backend/models/xray/bodypart_full/model.onnx": "768943d6d79cd90e6cf33d16a9268bccc5a41e0a2353539b74005870de811dad",
+  "backend/models/xray/mura_regions/XR_ELBOW_FINAL_best.pt": "86f8f8279667f34197ef1330919e07ff4fac3ade355d113c334faaca57b82287",
+  "backend/models/xray/mura_regions/XR_FINGER_FINAL_best.pt": "9c9b9f7726b9ae3adc8d4ba2de5ef6bde26429932ccb79f0628b6bf2c8e93bf4",
+  "backend/models/xray/mura_regions/XR_FOREARM_FINAL_best.pt": "855a7bf372f9d620f110e8e0b30547d267740429f7d66463fb1173f0bd246fb1",
+  "backend/models/xray/mura_regions/XR_HAND_FINAL_best.pt": "c88854b7cdb552fee04e34caf242e346c31e5e10cbd7a8e1c2ecf51c310a621f",
+  "backend/models/xray/mura_regions/XR_HUMERUS_FINAL_best.pt": "6188c137f88f53c8c7c6dbab9cc6f96c51267211612ab329f117e341e3039620",
+  "backend/models/xray/mura_regions/XR_SHOULDER_FINAL_best.pt": "f547e0c434714607a0cef46b3664949c3ab9fe1dd8e2ca70913b3717525e86fe",
+  "backend/models/xray/mura_regions/XR_WRIST_FINAL_best.pt": "46ed6c2fce1da2852d687f174ec89a560c760f28479e9a28bcd89734fe9d156f"
+}

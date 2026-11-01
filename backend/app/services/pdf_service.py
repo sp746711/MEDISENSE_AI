@@ -301,7 +301,6 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             story.append(Paragraph("<br/>".join(hist_items), body_style))
         story.append(Spacer(1, 8))
 
-    # 3. Medical Report Findings (render only if provided/selected)
     report_findings = _safe_list(feedback.get("medical_report_findings"))
     if not report_findings and evidence_info:
         rep_meta = _safe_dict(evidence_info.get("report"))
@@ -309,6 +308,8 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             rep_meta.get("abnormal_findings", [])
             + rep_meta.get("normal_findings", [])
             + rep_meta.get("unknown_range_findings", [])
+            or rep_meta.get("findings", [])
+            or rep_meta.get("lab_parameters", [])
         )
     report_status = feedback.get("medical_report_status", "NOT_PROVIDED")
     qualitative_rep = feedback.get("qualitative_findings", []) or _safe_dict(evidence_info.get("report")).get("qualitative_findings", [])
@@ -400,9 +401,19 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                 for img in x_images:
                     istat = (img.get("status") or "UNAVAILABLE").upper()
                     ireg = (img.get("region") or "Not declared").title()
-                    ipred = img.get("prediction") or "None"
-                    ifistat = f"<font color='#059669'><b>{ipred}</b></font>" if istat == "COMPLETED" and ipred != "None" else f"<font color='#d97706'><b>{istat}</b> (Automated interpretation unavailable)</font>"
-                    story.append(Paragraph(f"• <b>{img.get('file_name', 'X-ray image')}</b> ({ireg}): {ifistat}", body_style))
+                    ipred = str(img.get("prediction") or "").strip()
+                    is_verified = bool(img.get("anatomy_independently_verified"))
+                    has_mismatch = bool(img.get("has_region_mismatch")) or istat == "MISMATCH"
+
+                    if istat == "COMPLETED" and ipred and ipred not in {"None", "UNAVAILABLE", ""}:
+                        status_label = f"<font color='#059669'><b>Model Prediction: {_esc(ipred)}</b></font>"
+                    elif has_mismatch:
+                        status_label = "<font color='#dc2626'><b>REGION MISMATCH</b> (Image anatomy does not match study request)</font>"
+                    elif not is_verified:
+                        status_label = "<font color='#d97706'><b>PENDING CLINICAL VERIFICATION</b> (Automated specialist interpretation deferred)</font>"
+                    else:
+                        status_label = "<font color='#64748b'><b>Automated interpretation unavailable</b> (Excluded from candidate support; not a negative/normal finding)</font>"
+                    story.append(Paragraph(f"• <b>{_esc(img.get('file_name', 'X-ray image'))}</b> ({ireg}): {status_label}", body_style))
             else:
                 x_status = xray_info.get("status", "UNAVAILABLE")
                 x_desc = xray_info.get("description") or xray_info.get("message") or "Automated interpretation unavailable."
@@ -498,10 +509,30 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         for c in possible_conditions:
             evidence_lines: list[str] = []
 
-            # 1. Supporting Evidence
+            # 1. Supporting Evidence (multimodal balance to avoid symptom dominance)
             supp_evidence_list = c.get("supporting_evidence", [])
             if supp_evidence_list:
-                for item in supp_evidence_list[:4]:
+                selected_supp: list[dict[str, Any]] = []
+                sym_items = [item for item in supp_evidence_list if item.get("source_type") == "symptom_nlp"]
+                rad_items = [item for item in supp_evidence_list if "radiology" in str(item.get("source_type") or "")]
+                lab_items = [item for item in supp_evidence_list if any(w in str(item.get("source_type") or "") for w in ["lab", "medical"])]
+                xray_items = [item for item in supp_evidence_list if "xray" in str(item.get("source_type") or "")]
+                other_items = [item for item in supp_evidence_list if item not in sym_items and item not in rad_items and item not in lab_items and item not in xray_items]
+
+                # Multimodality: prioritize non-symptom findings alongside key symptoms
+                selected_supp.extend(rad_items[:2])
+                selected_supp.extend(lab_items[:2])
+                selected_supp.extend(xray_items[:2])
+                selected_supp.extend(sym_items[:2])
+                selected_supp.extend(other_items[:1])
+
+                for item in supp_evidence_list:
+                    if len(selected_supp) >= 5:
+                        break
+                    if item not in selected_supp:
+                        selected_supp.append(item)
+
+                for item in selected_supp:
                     src_tag = str(item.get("source_type") or "")
                     src_file = f" <font color='#64748b' size='6'>({_esc(item.get('source_file'))})</font>" if item.get('source_file') else ""
                     prefix = (
@@ -541,11 +572,23 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
                     ctx_preview += f" +{len(contextual_list) - 2} more"
                 evidence_lines.append(f"<font color='#64748b' size='6'><b>[Context]</b> {ctx_preview}</font>")
 
-            # 5. Missing / Unassessed
+            # 5. Missing Information
             missing_list = c.get("missing_information", []) or c.get("unknown_or_missing_information", [])
             if missing_list:
                 miss_esc = ", ".join([_esc(str(m)) for m in missing_list[:2]])
                 evidence_lines.append(f"<font color='#94a3b8' size='6'><b>[Missing]</b> {miss_esc}</font>")
+
+            # 6. Unassessed Information
+            unassessed_list = c.get("unassessed_information", [])
+            if unassessed_list:
+                unass_esc = ", ".join([_esc(str(u)) for u in unassessed_list[:2]])
+                evidence_lines.append(f"<font color='#94a3b8' size='6'><b>[Unassessed]</b> {unass_esc}</font>")
+
+            # 7. Unavailable or Unverified Information
+            unavail_list = c.get("unavailable_or_unverified_information", [])
+            if unavail_list:
+                unavail_preview = ", ".join([_esc(u.get("finding") if isinstance(u, dict) else str(u)) for u in unavail_list[:2]])
+                evidence_lines.append(f"<font color='#d97706' size='6'><b>[Unverified]</b> {unavail_preview}</font>")
 
             evidence_cell = "<br/>".join(evidence_lines) if evidence_lines else "—"
 

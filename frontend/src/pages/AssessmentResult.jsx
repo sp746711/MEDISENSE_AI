@@ -601,15 +601,36 @@ export default function AssessmentResult() {
                     </div>
                   ) : null}
 
-                  {/* Unassessed / Missing Factors */}
+                  {/* Missing Modalities / Key Information */}
                   {asArray(c.missing_information).length ? (
-                    <p style={{ margin: '0.2rem 0 0.25rem 0', fontSize: '0.82rem', color: '#64748b' }}>
-                      <strong>Missing / Unassessed Factors:</strong> {c.missing_information.join(' • ')}
+                    <p style={{ margin: '0.2rem 0 0.15rem 0', fontSize: '0.82rem', color: '#64748b' }}>
+                      <strong>Missing Key Modalities:</strong> {c.missing_information.join(' • ')}
+                    </p>
+                  ) : null}
+
+                  {/* Unassessed Clinical Factors */}
+                  {asArray(c.unassessed_information).length ? (
+                    <p style={{ margin: '0.15rem 0 0.15rem 0', fontSize: '0.82rem', color: '#64748b' }}>
+                      <strong>Unassessed Factors:</strong> {c.unassessed_information.join(' • ')}
                     </p>
                   ) : c.unknown_or_missing_information?.length ? (
-                    <p style={{ margin: '0.2rem 0 0.25rem 0', fontSize: '0.82rem', color: '#64748b' }}>
+                    <p style={{ margin: '0.15rem 0 0.15rem 0', fontSize: '0.82rem', color: '#64748b' }}>
                       <strong>Unassessed Factors:</strong> {formatCandidateList(c.unknown_or_missing_information).join(', ')}
                     </p>
+                  ) : null}
+
+                  {/* Unavailable or Excluded / Unverified Information */}
+                  {asArray(c.unavailable_or_unverified_information).length ? (
+                    <div style={{ margin: '0.2rem 0', fontSize: '0.8rem', color: '#d97706' }}>
+                      <strong>Excluded / Unverified Parameters:</strong>
+                      <ul style={{ margin: '0.1rem 0 0.2rem 1.1rem', padding: 0 }}>
+                        {c.unavailable_or_unverified_information.map((item, uIdx) => (
+                          <li key={uIdx} style={{ marginBottom: '0.15rem' }}>
+                            {item.finding || item} {item.reason ? `— ${item.reason}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   ) : null}
 
                   {/* Suggested Specialty */}

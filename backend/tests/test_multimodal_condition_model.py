@@ -1,11 +1,12 @@
 """Unit Tests for Multimodal Condition Prediction Architecture and Data Integrity.
 
 Verifies:
-1. Multimodal forward pass across full modalities.
-2. Missing-modality forward pass with explicit masks (e.g. symptoms-only).
-3. Non-leakage: perturbations in missing modalities (mask=0) do not affect outputs.
-4. Authentic data availability check correctly guards against unvalidated training.
-5. Baseline unimodal symptom model remains intact and separate.
+1. 5-modality forward pass across symptoms, labs, radiology, X-ray, and clinical examination.
+2. Missing-modality forward pass with explicit masks.
+3. Non-leakage: perturbations in missing modalities (mask=0) do not alter predictions.
+4. Clinical examination encoder: changes in physical exam change model inputs.
+5. Authentic data availability check correctly guards against unvalidated training.
+6. Baseline unimodal symptom model remains intact and separate.
 """
 
 from pathlib import Path
@@ -14,15 +15,18 @@ import pytest
 import torch
 
 from app.ai.multimodal_condition_model import (
+    CANONICAL_CLINICAL_EXAM_FINDINGS,
+    CANONICAL_LAB_TESTS,
     CANONICAL_RAD_FINDINGS,
+    CANONICAL_XRAY_PATHOLOGIES,
     CONDITION_CLASSES,
     MultimodalConditionPredictor,
 )
 from scripts.train_multimodal_model import check_authentic_data_availability
 
 
-def test_multimodal_model_full_modalities_forward():
-    """Verify forward pass when all 4 modalities are provided."""
+def test_multimodal_model_full_5_modalities_forward():
+    """Verify forward pass when all 5 modalities (symptoms, labs, rad, xray, exam) are active."""
     model = MultimodalConditionPredictor(num_classes=24, hidden_dim=64)
     model.eval()
 
@@ -30,12 +34,14 @@ def test_multimodal_model_full_modalities_forward():
     max_symptoms = 8
 
     symptom_tokens = torch.randint(1, 100, (batch_size, max_symptoms))
-    symptom_features = torch.randn(batch_size, max_symptoms, 3)
-    lab_features = torch.randn(batch_size, 21 * 5)
-    rad_features = torch.randn(batch_size, len(CANONICAL_RAD_FINDINGS) * 3)
-    xray_features = torch.randn(batch_size, 11 * 3)
+    symptom_features = torch.randn(batch_size, max_symptoms, 6)
+    lab_features = torch.randn(batch_size, len(CANONICAL_LAB_TESTS) * 5)
+    rad_features = torch.randn(batch_size, len(CANONICAL_RAD_FINDINGS) * 4)
+    exam_features = torch.randn(batch_size, len(CANONICAL_CLINICAL_EXAM_FINDINGS) * 3)
+    xray_features = torch.randn(batch_size, len(CANONICAL_XRAY_PATHOLOGIES) * 3)
+    xray_anatomy = torch.randn(batch_size, 33)
     xray_eligibility = torch.ones(batch_size, 1)
-    modality_mask = torch.ones(batch_size, 4)  # All 4 active
+    modality_mask = torch.ones(batch_size, 5)  # All 5 active
 
     with torch.no_grad():
         logits, is_ev = model(
@@ -44,6 +50,8 @@ def test_multimodal_model_full_modalities_forward():
             lab_features,
             rad_features,
             xray_features,
+            exam_features,
+            xray_anatomy,
             xray_eligibility,
             modality_mask,
         )
@@ -55,7 +63,7 @@ def test_multimodal_model_full_modalities_forward():
 
 
 def test_multimodal_model_symptoms_only_forward():
-    """Verify forward pass when patient only provides symptoms (labs/rad/xray omitted)."""
+    """Verify forward pass when patient only provides symptoms (labs/rad/xray/exam omitted)."""
     model = MultimodalConditionPredictor(num_classes=24, hidden_dim=64)
     model.eval()
 
@@ -63,14 +71,16 @@ def test_multimodal_model_symptoms_only_forward():
     max_symptoms = 6
 
     symptom_tokens = torch.randint(1, 100, (batch_size, max_symptoms))
-    symptom_features = torch.randn(batch_size, max_symptoms, 3)
+    symptom_features = torch.randn(batch_size, max_symptoms, 6)
     # Empty/zeroed placeholders for missing modalities
-    lab_features = torch.zeros(batch_size, 21 * 5)
-    rad_features = torch.zeros(batch_size, len(CANONICAL_RAD_FINDINGS) * 3)
-    xray_features = torch.zeros(batch_size, 11 * 3)
+    lab_features = torch.zeros(batch_size, len(CANONICAL_LAB_TESTS) * 5)
+    rad_features = torch.zeros(batch_size, len(CANONICAL_RAD_FINDINGS) * 4)
+    exam_features = torch.zeros(batch_size, len(CANONICAL_CLINICAL_EXAM_FINDINGS) * 3)
+    xray_features = torch.zeros(batch_size, len(CANONICAL_XRAY_PATHOLOGIES) * 3)
+    xray_anatomy = torch.zeros(batch_size, 33)
     xray_eligibility = torch.zeros(batch_size, 1)
-    # Mask indicates only symptom modality is present: [1, 0, 0, 0]
-    modality_mask = torch.tensor([[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
+    # Mask indicates only symptom modality is present: [1, 0, 0, 0, 0]
+    modality_mask = torch.tensor([[1.0, 0.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0, 0.0]])
 
     with torch.no_grad():
         logits, is_ev = model(
@@ -79,6 +89,8 @@ def test_multimodal_model_symptoms_only_forward():
             lab_features,
             rad_features,
             xray_features,
+            exam_features,
+            xray_anatomy,
             xray_eligibility,
             modality_mask,
         )
@@ -97,25 +109,58 @@ def test_missing_modality_non_leakage():
     max_symptoms = 5
 
     symptom_tokens = torch.randint(1, 100, (batch_size, max_symptoms))
-    symptom_features = torch.randn(batch_size, max_symptoms, 3)
+    symptom_features = torch.randn(batch_size, max_symptoms, 6)
 
-    # Labs are missing (mask = [1, 0, 0, 0])
-    modality_mask = torch.tensor([[1.0, 0.0, 0.0, 0.0]])
+    # Labs and Clinical Exam are missing (mask = [1, 0, 0, 0, 0])
+    modality_mask = torch.tensor([[1.0, 0.0, 0.0, 0.0, 0.0]])
 
-    lab_1 = torch.zeros(batch_size, 21 * 5)
-    rad_1 = torch.zeros(batch_size, len(CANONICAL_RAD_FINDINGS) * 3)
-    xray_1 = torch.zeros(batch_size, 11 * 3)
+    lab_1 = torch.zeros(batch_size, len(CANONICAL_LAB_TESTS) * 5)
+    rad_1 = torch.zeros(batch_size, len(CANONICAL_RAD_FINDINGS) * 4)
+    exam_1 = torch.zeros(batch_size, len(CANONICAL_CLINICAL_EXAM_FINDINGS) * 3)
+    xray_1 = torch.zeros(batch_size, len(CANONICAL_XRAY_PATHOLOGIES) * 3)
+    xray_anat = torch.zeros(batch_size, 33)
     elig_1 = torch.zeros(batch_size, 1)
 
-    # Alter missing lab features drastically
-    lab_2 = torch.randn(batch_size, 21 * 5) * 10.0
+    # Alter missing lab features and exam features drastically
+    lab_2 = torch.randn(batch_size, len(CANONICAL_LAB_TESTS) * 5) * 10.0
+    exam_2 = torch.randn(batch_size, len(CANONICAL_CLINICAL_EXAM_FINDINGS) * 3) * 5.0
 
     with torch.no_grad():
-        out1, _ = model(symptom_tokens, symptom_features, lab_1, rad_1, xray_1, elig_1, modality_mask)
-        out2, _ = model(symptom_tokens, symptom_features, lab_2, rad_1, xray_1, elig_1, modality_mask)
+        out1, _ = model(symptom_tokens, symptom_features, lab_1, rad_1, xray_1, exam_1, xray_anat, elig_1, modality_mask)
+        out2, _ = model(symptom_tokens, symptom_features, lab_2, rad_1, xray_1, exam_2, xray_anat, elig_1, modality_mask)
 
-    # Because lab modality was masked out (mask=0), gate zeroed it out. Predictions must match exactly!
+    # Because lab and exam modalities were masked out (mask=0), gates zeroed them out. Predictions match exactly!
     assert torch.allclose(out1, out2, atol=1e-5)
+
+
+def test_clinical_examination_influences_model_when_active():
+    """Verify that when clinical examination mask is active, changing exam findings alters model outputs (Problem A)."""
+    model = MultimodalConditionPredictor(num_classes=24, hidden_dim=64)
+    model.eval()
+
+    batch_size = 1
+    max_symptoms = 4
+
+    symptom_tokens = torch.randint(1, 100, (batch_size, max_symptoms))
+    symptom_features = torch.randn(batch_size, max_symptoms, 6)
+    lab_features = torch.randn(batch_size, len(CANONICAL_LAB_TESTS) * 5)
+    rad_features = torch.randn(batch_size, len(CANONICAL_RAD_FINDINGS) * 4)
+    xray_features = torch.randn(batch_size, len(CANONICAL_XRAY_PATHOLOGIES) * 3)
+    xray_anat = torch.zeros(batch_size, 33)
+    xray_elig = torch.ones(batch_size, 1)
+
+    # Mask with active clinical exam: [1, 1, 1, 1, 1]
+    modality_mask = torch.tensor([[1.0, 1.0, 1.0, 1.0, 1.0]])
+
+    exam_tender = torch.tensor([[1.0, 1.0, 1.0, 0.0, 0.0, 0.0]])  # Tenderness present
+    exam_rom = torch.tensor([[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]])     # Reduced ROM present
+
+    with torch.no_grad():
+        out_tender, _ = model(symptom_tokens, symptom_features, lab_features, rad_features, xray_features, exam_tender, xray_anat, xray_elig, modality_mask)
+        out_rom, _ = model(symptom_tokens, symptom_features, lab_features, rad_features, xray_features, exam_rom, xray_anat, xray_elig, modality_mask)
+
+    # Active clinical examination must alter the fused representation and logits
+    assert not torch.allclose(out_tender, out_rom, atol=1e-4)
 
 
 def test_authentic_data_guard_blocks_unvalidated_training():
@@ -136,5 +181,4 @@ def test_baseline_unimodal_symptom_model_intact():
     pipeline = joblib.load(baseline_path)
     assert hasattr(pipeline, "predict")
     assert hasattr(pipeline, "predict_proba")
-    # Verify baseline classes match authentic 24 conditions
     assert len(pipeline.classes_) == 24

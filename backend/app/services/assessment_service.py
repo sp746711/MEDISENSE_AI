@@ -1405,14 +1405,19 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
                 ("symptoms", bool(patient_record.symptoms or evidence.get("symptoms", {}).get("present"))),
                 ("laboratory", bool(patient_record.laboratory)),
                 ("radiology_reports", bool(patient_record.radiology)),
-                ("xray_images", bool(patient_record.xray and patient_record.xray.is_pathology_eligible)),
+                ("clinical_examination", bool(patient_record.clinical_examination)),
+                ("xray_images", bool(any(s.is_pathology_eligible for s in patient_record.xray_studies) or (patient_record.xray and patient_record.xray.is_pathology_eligible))),
             ] if active
         ]
         condition_predictions["multimodal_record_summary"] = {
             "symptom_count": len(patient_record.symptoms),
             "lab_parameter_count": len(patient_record.laboratory),
             "radiology_finding_count": len(patient_record.radiology),
-            "xray_pathology_eligible": bool(patient_record.xray and patient_record.xray.is_pathology_eligible),
+            "clinical_examination_count": len(patient_record.clinical_examination),
+            "xray_study_count": len(patient_record.xray_studies),
+            "xray_pathology_eligible": bool(any(s.is_pathology_eligible for s in patient_record.xray_studies) or (patient_record.xray and patient_record.xray.is_pathology_eligible)),
+            "unverified_xray_studies": patient_record.provenance.get("unverified_studies", []),
+            "mismatched_xray_studies": patient_record.provenance.get("mismatched_studies", []),
         }
 
         # Candidate-specific evidence reconciliation:
@@ -1442,8 +1447,11 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         condition_predictions["uses_radiology_report_text"] = bool(
             condition_predictions.get("is_multimodal_ml_active") and patient_record.radiology
         )
+        condition_predictions["uses_clinical_examination_features"] = bool(
+            condition_predictions.get("is_multimodal_ml_active") and patient_record.clinical_examination
+        )
         condition_predictions["uses_xray_image_features"] = bool(
-            condition_predictions.get("is_multimodal_ml_active") and patient_record.xray and patient_record.xray.is_pathology_eligible
+            condition_predictions.get("is_multimodal_ml_active") and (any(s.is_pathology_eligible for s in patient_record.xray_studies) or (patient_record.xray and patient_record.xray.is_pathology_eligible))
         )
         condition_predictions["input_scope"] = [
             "symptoms_present", "symptoms_absent", "symptoms_unknown"
@@ -1458,6 +1466,8 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             reconciliation_sources.append("xray_reports")
         if xray_results_for_evidence:
             reconciliation_sources.append("xray_images")
+        if patient_record.clinical_examination:
+            reconciliation_sources.append("clinical_examination")
         condition_predictions["evidence_reconciliation_sources"] = reconciliation_sources
 
         if not condition_predictions.get("is_multimodal_ml_active"):

@@ -109,7 +109,7 @@ def test_case_b_wrist_injury():
     # X-ray wrist routing
     routing = route_xray("dummy.jpg", declared_region="wrist")
     assert routing["region"] == "wrist"
-    assert routing["supported"] is False
+    assert routing["supported"] is True
 
     model_service = XRayModelService()
     xray_result = model_service.analyze("dummy.jpg", region="wrist")
@@ -226,10 +226,10 @@ def test_case_d_report_only_narrative():
 
 def test_case_e_xray_region_routing():
     """TEST CASE E — X-RAY REGION ROUTING AND PRESERVATION."""
-    # 1. Wrist
+    # 1. Wrist (configured regional model)
     wrist_route = route_xray("dummy.jpg", declared_region="wrist")
     assert wrist_route["region"] == "wrist"
-    assert wrist_route["supported"] is False
+    assert wrist_route["supported"] is True
 
     service = XRayModelService()
     wrist_ana = service.analyze("dummy.jpg", region="wrist")

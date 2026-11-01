@@ -77,33 +77,69 @@ def _records(value: Any) -> list[dict[str, Any]]:
 
 
 def _anatomy_is_independently_verified(record: dict[str, Any]) -> bool:
-    """Return True when anatomy verification is complete or valid model output exists without region mismatch."""
-    if not isinstance(record, dict):
+    """Return True only when anatomy is independently verified or explicitly confirmed by user.
+
+    Fail-closed safety contract:
+    - Generic processing status of COMPLETED alone does NOT verify anatomy.
+    - Missing metadata returns False.
+    - Excluded evidence or region mismatches return False.
+    - Generic status: COMPLETED or status: VERIFIED does NOT establish anatomy acceptance.
+    - Returns True ONLY on explicit anatomy user confirmation OR explicit classifier acceptance
+      where user confirmation is not required.
+    """
+    if not isinstance(record, dict) or not record:
         return False
-    if record.get("anatomy_independently_verified") is True:
-        return True
-    if record.get("anatomy_classifier_accepted") is True or record.get("classifier_gate_passed") is True:
-        return True
-    if record.get("anatomy_user_confirmed") is True:
-        return True
+    if record.get("evidence_excluded") is True or record.get("has_region_mismatch") is True:
+        return False
+
     meta = record.get("anatomy_metadata")
-    if isinstance(meta, dict):
-        if (
-            meta.get("anatomy_independently_verified") is True
-            or meta.get("anatomy_classifier_accepted") is True
-            or meta.get("classifier_gate_passed") is True
-            or meta.get("anatomy_user_confirmed") is True
-        ):
-            return True
-        st = _text(meta.get("status") or meta.get("anatomy_verification_status")).upper()
-        if st in {"COMPLETED", "VERIFIED"}:
-            return True
-    verification_status = _text(record.get("anatomy_verification_status")).upper()
-    if verification_status in {"COMPLETED", "VERIFIED"}:
+    if not isinstance(meta, dict):
+        meta = {}
+
+    nested = meta.get("anatomy_detection") if isinstance(meta.get("anatomy_detection"), dict) else {}
+
+    # 1. Explicit user confirmation
+    if (
+        record.get("anatomy_user_confirmed") is True
+        or meta.get("anatomy_user_confirmed") is True
+        or nested.get("anatomy_user_confirmed") is True
+        or str(meta.get("user_confirmation_status") or "").strip().lower() == "confirmed"
+        or str(nested.get("user_confirmation_status") or "").strip().lower() == "confirmed"
+        or str(meta.get("verification_source") or "").strip().lower() == "explicit_user_region_confirmation"
+        or str(meta.get("source") or "").strip().lower() == "user_confirmed_region"
+    ):
         return True
-    record_status = _text(record.get("status") or record.get("inference_status")).upper()
-    if record_status == "COMPLETED" and not record.get("has_region_mismatch") and not record.get("evidence_excluded"):
+
+    # 2. Explicit independent clinical verification
+    if (
+        record.get("anatomy_independently_verified") is True
+        or meta.get("anatomy_independently_verified") is True
+        or nested.get("anatomy_independently_verified") is True
+    ):
         return True
+
+    # 3. Explicit classifier gate passed without confirmation required
+    gate_passed = bool(
+        record.get("classifier_gate_passed") is True
+        or record.get("anatomy_classifier_accepted") is True
+        or meta.get("classifier_gate_passed") is True
+        or meta.get("anatomy_classifier_accepted") is True
+        or nested.get("classifier_gate_passed") is True
+        or nested.get("anatomy_classifier_accepted") is True
+    )
+    requires_confirmation = bool(
+        record.get("requires_user_confirmation") is True
+        or meta.get("requires_user_confirmation") is True
+        or nested.get("requires_user_confirmation") is True
+        or meta.get("routing_requires_independent_verification") is True
+        or nested.get("routing_requires_independent_verification") is True
+        or str(meta.get("prediction_status") or "").strip().lower() == "needs_confirmation"
+        or str(nested.get("prediction_status") or "").strip().lower() == "needs_confirmation"
+    )
+
+    if gate_passed and not requires_confirmation:
+        return True
+
     return False
 
 

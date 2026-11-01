@@ -269,33 +269,69 @@ def _xray_finding_is_actionable(item: dict[str, Any]) -> bool:
 
 
 def _xray_anatomy_is_independently_verified(record: dict[str, Any]) -> bool:
-    """Return True when anatomy verification is complete or valid model output exists without region mismatch."""
-    if not isinstance(record, dict):
+    """Return True only when anatomy is independently verified or explicitly confirmed by user.
+
+    Fail-closed safety contract:
+    - Generic processing status of COMPLETED alone does NOT verify anatomy.
+    - Missing metadata returns False.
+    - Excluded evidence or region mismatches return False.
+    - Generic status: COMPLETED or status: VERIFIED does NOT establish anatomy acceptance.
+    - Returns True ONLY on explicit anatomy user confirmation OR explicit classifier acceptance
+      where user confirmation is not required.
+    """
+    if not isinstance(record, dict) or not record:
         return False
-    if record.get("anatomy_independently_verified") is True:
-        return True
-    if record.get("anatomy_classifier_accepted") is True or record.get("classifier_gate_passed") is True:
-        return True
-    if record.get("anatomy_user_confirmed") is True:
-        return True
+    if record.get("evidence_excluded") is True or record.get("has_region_mismatch") is True:
+        return False
+
     meta = record.get("anatomy_metadata")
-    if isinstance(meta, dict):
-        if (
-            meta.get("anatomy_independently_verified") is True
-            or meta.get("anatomy_classifier_accepted") is True
-            or meta.get("classifier_gate_passed") is True
-            or meta.get("anatomy_user_confirmed") is True
-        ):
-            return True
-        st = str(meta.get("status") or meta.get("anatomy_verification_status") or "").strip().upper()
-        if st in {"COMPLETED", "VERIFIED"}:
-            return True
-    record_status = str(record.get("status") or record.get("inference_status") or "").strip().lower()
-    verification_status = str(record.get("anatomy_verification_status") or "").strip().lower()
-    if verification_status in {"completed", "verified"}:
+    if not isinstance(meta, dict):
+        meta = {}
+
+    nested = meta.get("anatomy_detection") if isinstance(meta.get("anatomy_detection"), dict) else {}
+
+    # 1. Explicit user confirmation
+    if (
+        record.get("anatomy_user_confirmed") is True
+        or meta.get("anatomy_user_confirmed") is True
+        or nested.get("anatomy_user_confirmed") is True
+        or str(meta.get("user_confirmation_status") or "").strip().lower() == "confirmed"
+        or str(nested.get("user_confirmation_status") or "").strip().lower() == "confirmed"
+        or str(meta.get("verification_source") or "").strip().lower() == "explicit_user_region_confirmation"
+        or str(meta.get("source") or "").strip().lower() == "user_confirmed_region"
+    ):
         return True
-    if record_status == "completed" and not record.get("has_region_mismatch") and not record.get("evidence_excluded"):
+
+    # 2. Explicit independent clinical verification
+    if (
+        record.get("anatomy_independently_verified") is True
+        or meta.get("anatomy_independently_verified") is True
+        or nested.get("anatomy_independently_verified") is True
+    ):
         return True
+
+    # 3. Explicit classifier gate passed without confirmation required
+    gate_passed = bool(
+        record.get("classifier_gate_passed") is True
+        or record.get("anatomy_classifier_accepted") is True
+        or meta.get("classifier_gate_passed") is True
+        or meta.get("anatomy_classifier_accepted") is True
+        or nested.get("classifier_gate_passed") is True
+        or nested.get("anatomy_classifier_accepted") is True
+    )
+    requires_confirmation = bool(
+        record.get("requires_user_confirmation") is True
+        or meta.get("requires_user_confirmation") is True
+        or nested.get("requires_user_confirmation") is True
+        or meta.get("routing_requires_independent_verification") is True
+        or nested.get("routing_requires_independent_verification") is True
+        or str(meta.get("prediction_status") or "").strip().lower() == "needs_confirmation"
+        or str(nested.get("prediction_status") or "").strip().lower() == "needs_confirmation"
+    )
+
+    if gate_passed and not requires_confirmation:
+        return True
+
     return False
 
 
@@ -354,6 +390,7 @@ def combine_evidence(
     medical_report_provided: bool | None = None,
     radiology_report_provided: bool | None = None,
     selected_input_types: list[str] | None = None,
+    report_image_associations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Combine multimodal inputs into structured clinical evidence."""
     # Normalize inputs at the boundary so malformed records do not crash the
@@ -419,16 +456,20 @@ def combine_evidence(
         for item in {"xray", "x_ray", "radiology", "xray_report", "radiology_report"}
     )
 
+    historical = [
+        s for s in symptoms
+        if (
+            str(s.get("state") or s.get("status") or "").strip().upper() == "HISTORICAL"
+            or str(s.get("type") or "").strip().upper() == "HISTORICAL"
+            or str(s.get("symptom") or "").strip().lower() == "previous similar headache"
+        )
+    ]
     current_present = [
         s for s in symptoms
         if _state(s) == "PRESENT"
+        and s not in historical
         and str(s.get("type") or "").strip().upper() != "HISTORICAL"
         and str(s.get("symptom") or "").strip().lower() not in {"previous similar headache", "gradual onset", "sudden onset"}
-    ]
-    historical = [
-        s for s in symptoms
-        if _state(s) == "PRESENT"
-        and (str(s.get("type") or "").strip().upper() == "HISTORICAL" or str(s.get("symptom") or "").strip().lower() == "previous similar headache")
     ]
     # Propagate onset attribute from gradual onset / sudden onset pseudo-symptoms if not already set
     has_gradual = any(s.get("symptom") == "gradual onset" for s in symptoms)
@@ -443,7 +484,7 @@ def combine_evidence(
 
     symptoms_present = current_present
     symptoms_absent = [s for s in symptoms if _state(s) == "ABSENT"]
-    symptoms_unknown = [s for s in symptoms if _state(s) == "UNKNOWN"]
+    symptoms_unknown = [s for s in symptoms if _state(s) == "UNKNOWN" and s not in historical]
 
     report_abnormal = [f for f in report_findings if _status(f) in {"HIGH", "LOW", "ABNORMAL"}]
     report_normal = [f for f in report_findings if _status(f) == "NORMAL"]
@@ -761,6 +802,19 @@ def combine_evidence(
                     )
             elif img_status == "completed" and has_model_output and not anatomy_verified:
                 any_unavailable = True
+                if not is_anatomically_aligned:
+                    pred_label = str(pred or "").strip()
+                    desc = f" ({pred_label})" if pred_label else ""
+                    separate.append(
+                        f"{img_label} model output{desc} is not used as supporting evidence because it is anatomically separate from the primary complaint or its report pairing is mismatched."
+                    )
+                    evidence_relationships.append({
+                        "source_a": "symptoms",
+                        "source_b": "xray_image",
+                        "finding": f"{img_label}{desc}",
+                        "relationship": "SEPARATE",
+                        "reason": f"Image region ({img_reg}) is separate from the complaint or is involved in a region-mismatched image/report pair.",
+                    })
                 unassessed.append(
                     f"{img_label} has stored model output, but anatomy is not independently verified. "
                     "The raw output is retained for review and is excluded from supporting, reassuring, diagnostic, and triage evidence."
@@ -870,7 +924,12 @@ def combine_evidence(
         one-image/one-report batch are not user confirmation. Keep those sources
         separate until the pairing workflow persists an explicit confirmation.
         """
-        import re
+        # Collect explicit associations from parameter and report dictionary
+        associations = list(report_image_associations or [])
+        if isinstance(report.get("associations"), list):
+            associations.extend(report.get("associations"))
+
+        report_id = str(report.get("id") or report.get("report_id") or "").strip()
 
         status_candidates = (
             report.get("association_status"),
@@ -881,6 +940,33 @@ def combine_evidence(
         )
         status_values = {str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
                          for value in status_candidates}
+
+        # A rejected association must never be revived by another field.
+        if any(value in {"REJECTED", "DECLINED", "DISMISSED", "CANCELLED"}
+               for value in status_values) or any(
+            report.get(key) is True
+            for key in ("association_rejected", "pairing_rejected", "user_rejected_pair")
+        ):
+            return []
+
+        # Find confirmed and rejected image IDs from explicit association rows
+        confirmed_image_ids: set[str] = set()
+        rejected_image_ids: set[str] = set()
+        for assoc in associations:
+            if not isinstance(assoc, dict):
+                continue
+            a_rep_id = str(assoc.get("report_id") or "").strip()
+            if report_id and a_rep_id and a_rep_id != report_id:
+                continue
+            a_status = str(assoc.get("status") or "").strip().lower()
+            a_img_id = str(assoc.get("xray_result_id") or "").strip()
+            if a_status in {"rejected", "declined", "dismissed", "cancelled"}:
+                if a_img_id:
+                    rejected_image_ids.add(a_img_id)
+            elif a_status in {"confirmed", "user_confirmed", "accepted"}:
+                if a_img_id:
+                    confirmed_image_ids.add(a_img_id)
+
         explicit_confirmed = any(value in {
             "CONFIRMED", "USER_CONFIRMED", "EXPLICITLY_CONFIRMED",
             "CONFIRMED_MATCH", "ACCEPTED", "APPROVED",
@@ -891,17 +977,10 @@ def combine_evidence(
                 "user_confirmed_pair", "explicitly_confirmed",
                 "report_image_confirmed",
             )
-        )
-        # A rejected association must never be revived by another field.
-        if any(value in {"REJECTED", "DECLINED", "DISMISSED", "CANCELLED"}
-               for value in status_values) or any(
-            report.get(key) is True
-            for key in ("association_rejected", "pairing_rejected", "user_rejected_pair")
-        ):
-            return []
+        ) or bool(confirmed_image_ids)
+
         if not explicit_confirmed:
-            if len(processed_images) == 1 and len(processed_xray_reports) == 1:
-                return [str(processed_images[0].get("file_name") or "xray_image")]
+            # Under NO circumstance should a single image and single report be auto-paired!
             return []
 
         explicit_ids = {
@@ -913,11 +992,15 @@ def combine_evidence(
             )
             if report.get(key) not in (None, "")
         }
+        explicit_ids.update(confirmed_image_ids)
+        explicit_ids.difference_update(rejected_image_ids)
+
         explicit_names = {
             str(report.get(key)).strip()
             for key in ("confirmed_image_file", "linked_image_file", "xray_image_file")
             if isinstance(report.get(key), str) and report.get(key).strip()
         }
+
         matches = []
         for img in processed_images:
             image_ids = {
@@ -925,6 +1008,8 @@ def combine_evidence(
                 for key in ("id", "xray_result_id", "image_id")
                 if img.get(key) not in (None, "")
             }
+            if image_ids.intersection(rejected_image_ids):
+                continue
             image_name = str(img.get("file_name") or "xray_image")
             if (explicit_ids and explicit_ids.intersection(image_ids)) or image_name in explicit_names:
                 matches.append(image_name)

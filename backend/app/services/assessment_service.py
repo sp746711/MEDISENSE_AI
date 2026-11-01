@@ -20,12 +20,12 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.ai.condition_prediction import get_condition_prediction_service
+from app.ai.condition_prediction import get_condition_prediction_service, reconcile_candidate_evidence
 from app.ai.evidence_engine import combine_evidence
 from app.ai.specialty_mapper import map_evidence_to_specialty
 from app.ai.triage_engine import apply_triage
 from app.core.config import get_settings
-from app.database.models import AiAuditLog, Assessment, MedicalReport, Symptom, XrayResult
+from app.database.models import AiAuditLog, Assessment, MedicalReport, Symptom, XrayReportAssociation, XrayResult
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -57,39 +57,64 @@ def _has_xray_result(item: Any) -> bool:
 def _anatomy_verification_fields(metadata: Any, record_status: str | None = None) -> tuple[str, bool]:
     """Return verification status and explicit independent-verification flag.
 
-    Recognizes upstream automated anatomy detection and verification flags without
-    blocking valid model findings from entering combined clinical evidence.
+    Fail-closed safety contract:
+    - A generic processing status of COMPLETED alone does NOT verify anatomy.
+    - Missing anatomy metadata returns ('unverified', False).
+    - A generic status: COMPLETED or status: VERIFIED does NOT establish anatomy acceptance.
+    - Returns verified (True) ONLY on explicit anatomy-classifier acceptance without confirmation required,
+      or explicit user confirmation.
+    - Preserves unverified status if confirmation is required or if evidence is excluded / region-mismatched.
     """
-    if isinstance(metadata, dict):
-        status_value = metadata.get("anatomy_verification_status") or metadata.get("verification_status") or metadata.get("status")
-        independently_verified = bool(
-            metadata.get("anatomy_independently_verified") is True
-            or metadata.get("anatomy_classifier_accepted") is True
-            or metadata.get("classifier_gate_passed") is True
-            or metadata.get("anatomy_user_confirmed") is True
-            or str(status_value or "").strip().upper() in {"COMPLETED", "VERIFIED"}
-        )
+    if not isinstance(metadata, dict) or not metadata:
+        return "unverified", False
 
-        nested = metadata.get("anatomy_detection")
-        if isinstance(nested, dict):
-            if not status_value:
-                status_value = nested.get("anatomy_verification_status") or nested.get("verification_status") or nested.get("status")
-            independently_verified = independently_verified or bool(
-                nested.get("anatomy_independently_verified") is True
-                or nested.get("anatomy_classifier_accepted") is True
-                or nested.get("classifier_gate_passed") is True
-                or nested.get("anatomy_user_confirmed") is True
-                or str(status_value or "").strip().upper() in {"COMPLETED", "VERIFIED"}
-            )
+    # Region mismatch or evidence exclusion must immediately fail verification
+    if (
+        metadata.get("region_mismatch") is True
+        or metadata.get("has_region_mismatch") is True
+        or metadata.get("evidence_excluded") is True
+    ):
+        return "mismatch" if (metadata.get("region_mismatch") or metadata.get("has_region_mismatch")) else "excluded", False
 
-        status = str(status_value or ("completed" if independently_verified else "unverified")).strip().lower()
-        if independently_verified or status in {"completed", "verified"}:
-            return "completed", True
-        return status if status else "unverified", False
+    nested = metadata.get("anatomy_detection") if isinstance(metadata.get("anatomy_detection"), dict) else {}
 
-    # For legacy or test records without metadata dict, if status is completed, preserve verification
-    if record_status and str(record_status).strip().lower() == "completed":
-        return "completed", True
+    # 1. Explicit user confirmation
+    user_confirmed = bool(
+        metadata.get("anatomy_user_confirmed") is True
+        or nested.get("anatomy_user_confirmed") is True
+        or str(metadata.get("user_confirmation_status") or "").strip().lower() == "confirmed"
+        or str(nested.get("user_confirmation_status") or "").strip().lower() == "confirmed"
+        or str(metadata.get("verification_source") or "").strip().lower() == "explicit_user_region_confirmation"
+        or str(metadata.get("source") or "").strip().lower() == "user_confirmed_region"
+    )
+    if user_confirmed:
+        return "confirmed", True
+
+    # 2. Explicit independent clinical verification
+    if metadata.get("anatomy_independently_verified") is True or nested.get("anatomy_independently_verified") is True:
+        return "verified", True
+
+    # 3. Explicit classifier gate passed
+    gate_passed = bool(
+        metadata.get("classifier_gate_passed") is True
+        or nested.get("classifier_gate_passed") is True
+        or metadata.get("anatomy_classifier_accepted") is True
+        or nested.get("anatomy_classifier_accepted") is True
+    )
+    requires_confirmation = bool(
+        metadata.get("requires_user_confirmation") is True
+        or nested.get("requires_user_confirmation") is True
+        or metadata.get("routing_requires_independent_verification") is True
+        or nested.get("routing_requires_independent_verification") is True
+        or str(metadata.get("prediction_status") or "").strip().lower() == "needs_confirmation"
+        or str(nested.get("prediction_status") or "").strip().lower() == "needs_confirmation"
+    )
+
+    if gate_passed and not requires_confirmation:
+        return "accepted", True
+
+    if requires_confirmation or gate_passed:
+        return "confirmation_required", False
 
     return "unverified", False
 
@@ -424,7 +449,12 @@ def generate_assessment_feedback(
                 img for img in xray_images_list
                 if str(img.get("status") or "").strip().upper() in {"UNAVAILABLE", "FAILED", "ERROR", "INVALID", "REJECTED"}
             ]
-            handled_ids = {id(item) for item in completed_imgs + mismatched_imgs + unavailable_imgs}
+            unverified_imgs = [
+                img for img in xray_images_list
+                if str(img.get("status") or "").strip().upper() in {"ANATOMY_UNVERIFIED", "ANATOMY_CONFIRMATION_REQUIRED"}
+                or (not img.get("anatomy_independently_verified") and bool(img.get("raw_model_prediction") or img.get("raw_prediction_for_review") or img.get("prediction")))
+            ]
+            handled_ids = {id(item) for item in completed_imgs + mismatched_imgs + unavailable_imgs + unverified_imgs}
             pending_imgs = [img for img in xray_images_list if id(img) not in handled_ids]
 
             messages: list[str] = []
@@ -461,6 +491,24 @@ def generate_assessment_feedback(
                     "are not calibrated diagnostic probabilities and must not be interpreted as disease evidence. "
                     "Clinical correlation and radiologist review are required."
                 )
+            if unverified_imgs:
+                unverified_labels = []
+                for img in unverified_imgs:
+                    raw_pred = str(img.get("prediction") or img.get("raw_model_prediction") or img.get("raw_prediction_for_review") or "").strip()
+                    region = str(img.get("region") or "").strip()
+                    reg_str = f" ({region.capitalize()})" if region and region.lower() not in {"not declared", "unknown"} else ""
+                    if raw_pred:
+                        unverified_labels.append(f"{raw_pred}{reg_str}")
+                if unverified_labels:
+                    messages.append(
+                        f"Image inference candidate(s) for review: {', '.join(unverified_labels)}. "
+                        "Anatomy has not been independently verified; output is retained for clinical review but excluded from diagnostic evidence."
+                    )
+                else:
+                    messages.append(
+                        f"Image processing completed for {len(unverified_imgs)} image(s), but anatomy has not been independently verified. "
+                        "Output is excluded from clinical evidence until anatomy is confirmed."
+                    )
             if mismatched_imgs:
                 mismatch_descriptions = []
                 for img in mismatched_imgs:
@@ -1143,12 +1191,61 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         }
         for xr in xray_rows
     ]
+    # 3b. Fetch persisted report-image associations strictly isolated to this assessment's records
+    report_id_objs = [r.report_id for r in report_rows if getattr(r, "report_id", None)]
+    xray_id_objs = [xr.xray_result_id for xr in xray_rows if getattr(xr, "xray_result_id", None)]
+    assoc_rows = []
+    if report_id_objs and xray_id_objs:
+        assoc_rows = (
+            db.query(XrayReportAssociation)
+            .filter(
+                XrayReportAssociation.report_id.in_(report_id_objs),
+                XrayReportAssociation.xray_result_id.in_(xray_id_objs),
+            )
+            .order_by(XrayReportAssociation.created_at.asc())
+            .all()
+        )
+
+    associations_list: list[dict[str, Any]] = [
+        {
+            "association_id": str(a.association_id),
+            "report_id": str(a.report_id),
+            "xray_result_id": str(a.xray_result_id),
+            "status": str(a.status).strip().lower(),
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+            "confirmed_at": a.confirmed_at.isoformat() if a.confirmed_at else None,
+        }
+        for a in assoc_rows
+    ]
+
+    # Map association info onto xray_reports_list
+    for r_entry in xray_reports_list:
+        rep_id = str(r_entry.get("id") or r_entry.get("report_id") or "")
+        rep_assocs = [a for a in associations_list if a["report_id"] == rep_id]
+        r_entry["associations"] = rep_assocs
+        confirmed_assocs = [a for a in rep_assocs if a["status"] == "confirmed"]
+        rejected_assocs = [a for a in rep_assocs if a["status"] == "rejected"]
+        pending_assocs = [a for a in rep_assocs if a["status"] == "pending"]
+        if confirmed_assocs:
+            r_entry["association_status"] = "CONFIRMED"
+            r_entry["confirmed_image_ids"] = [a["xray_result_id"] for a in confirmed_assocs]
+        elif rejected_assocs and not pending_assocs:
+            r_entry["association_status"] = "REJECTED"
+        elif pending_assocs:
+            r_entry["association_status"] = "PENDING"
+        else:
+            r_entry["association_status"] = "UNPAIRED"
+
     # Keep the stored/original X-ray result available for audit, but create a
     # separate evidence-safe view. A legacy COMPLETED status, prediction string,
     # or classifier confidence cannot bypass independent anatomy verification.
     xray_results_for_evidence: list[dict[str, Any]] = []
     for stored_result in xray_results_list:
         evidence_result = dict(stored_result)
+        xr_id = str(stored_result.get("id") or stored_result.get("xray_result_id") or "")
+        xr_assocs = [a for a in associations_list if a["xray_result_id"] == xr_id]
+        stored_result["associations"] = xr_assocs
+        evidence_result["associations"] = xr_assocs
         verified_status, independently_verified = _anatomy_verification_fields(
             stored_result.get("anatomy_metadata"),
             record_status=stored_result.get("status"),
@@ -1189,6 +1286,7 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         qualitative_report_findings=qualitative_findings_list,
         narrative_report_findings=narrative_findings_list,
         selected_input_types=selected_input_types,
+        report_image_associations=associations_list,
     )
 
     # 5. Apply deterministic rule-based triage
@@ -1199,10 +1297,11 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
     suggested_specialty = specialty_result.get("suggested_specialty")
 
     # 6b. Predict possible conditions using the currently configured predictor.
-    # IMPORTANT: condition_prediction.py presently accepts symptom features only;
-    # laboratory values, radiology-report text, and image pixels are not direct
-    # inputs to this classifier. Keep this limitation explicit in the result until
-    # a separately trained/validated multimodal predictor is integrated.
+    # 6b. Predict possible conditions using the currently configured predictor.
+    # IMPORTANT: condition_prediction.py accepts symptom features for the ML model;
+    # laboratory values, radiology-report text, and image pixels are not direct inputs
+    # to this classifier. Other modalities are integrated through the separate and
+    # traceable candidate-specific evidence reconciliation layer below.
     try:
         condition_svc = get_condition_prediction_service()
         condition_predictions = condition_svc.predict_conditions(
@@ -1221,13 +1320,54 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             }
         else:
             condition_predictions = dict(condition_predictions)
-        condition_predictions.setdefault("input_scope", ["symptoms_present", "symptoms_absent", "symptoms_unknown"])
-        condition_predictions.setdefault("uses_medical_report_features", False)
-        condition_predictions.setdefault("uses_radiology_report_text", False)
-        condition_predictions.setdefault("uses_xray_image_features", False)
+
+        # Candidate-specific evidence reconciliation:
+        # Cross-reference genuine ML candidates against actual multimodal assessment evidence
+        # (symptoms, lab/medical reports, radiology reports, eligible X-rays).
+        source_records_dict = {
+            "medical_reports": medical_reports_list,
+            "xray_reports": xray_reports_list,
+            "xray_images": xray_results_for_evidence,
+            "symptoms": symptoms_list,
+        }
+        reconciled_candidates = reconcile_candidate_evidence(
+            conditions=condition_predictions.get("conditions", []),
+            evidence=evidence,
+            source_records=source_records_dict,
+        )
+        condition_predictions["conditions"] = (
+            reconciled_candidates if isinstance(reconciled_candidates, list) else []
+        )
+
+        # Clear provenance and scope metadata
+        condition_predictions["prediction_model_scope"] = "symptoms_only"
+        condition_predictions["multimodal_training_status"] = (
+            "unimodal_symptom_ml_with_multimodal_evidence_reconciliation"
+        )
+        condition_predictions["uses_symptom_features"] = bool(
+            symptoms_list or evidence.get("symptoms", {}).get("present")
+        )
+        condition_predictions["uses_medical_report_features"] = False
+        condition_predictions["uses_radiology_report_text"] = False
+        condition_predictions["uses_xray_image_features"] = False
+        condition_predictions["input_scope"] = [
+            "symptoms_present", "symptoms_absent", "symptoms_unknown"
+        ]
+
+        reconciliation_sources: list[str] = []
+        if symptoms_list or evidence.get("symptoms", {}).get("present"):
+            reconciliation_sources.append("symptoms")
+        if medical_reports_list:
+            reconciliation_sources.append("medical_reports")
+        if xray_reports_list:
+            reconciliation_sources.append("xray_reports")
+        if xray_results_for_evidence:
+            reconciliation_sources.append("xray_images")
+        condition_predictions["evidence_reconciliation_sources"] = reconciliation_sources
+
         condition_predictions.setdefault(
             "scope_notice",
-            "This configured condition classifier uses symptom features only. Medical/laboratory and X-ray evidence are processed in the assessment, but are not direct features of this classifier.",
+            "This configured condition classifier uses symptom features only. Medical/laboratory and X-ray evidence are processed in the assessment and linked via candidate evidence reconciliation, but are not direct features of this classifier.",
         )
     except Exception as exc:
         logger.error("Condition prediction pipeline execution failed: %s", exc)
@@ -1237,7 +1377,11 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "conditions": [],
             "message": "Assistive condition prediction is currently unavailable. The safety triage result is independent and remains in effect.",
             "is_experimental": True,
+            "prediction_model_scope": "symptoms_only",
+            "multimodal_training_status": "unimodal_symptom_ml_with_multimodal_evidence_reconciliation",
+            "evidence_reconciliation_sources": [],
             "input_scope": ["symptoms_present", "symptoms_absent", "symptoms_unknown"],
+            "uses_symptom_features": False,
             "uses_medical_report_features": False,
             "uses_radiology_report_text": False,
             "uses_xray_image_features": False,

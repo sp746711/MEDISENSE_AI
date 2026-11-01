@@ -46,6 +46,16 @@ function formatCandidateList(value) {
     .filter(Boolean);
 }
 
+function getSourceBadgeStyle(badgeText) {
+  const t = String(badgeText || '').toLowerCase();
+  if (t.includes('symptom')) return { background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' };
+  if (t.includes('laboratory') || t.includes('lab')) return { background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' };
+  if (t.includes('radiology')) return { background: '#f3e8ff', color: '#6b21a8', border: '1px solid #e9d5ff' };
+  if (t.includes('x-ray') || t.includes('xray')) return { background: '#ecfdf5', color: '#065f46', border: '1px solid #a7f3d0' };
+  if (t.includes('contradictory')) return { background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' };
+  return { background: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1' };
+}
+
 
 export default function AssessmentResult() {
   const { id } = useParams();
@@ -145,7 +155,7 @@ export default function AssessmentResult() {
   );
 
   // Display only actual candidate records; do not fabricate missing matches.
-  // The current Task 1 candidate display cap is 10, matching the backend change.
+  // The system displays up to 24 genuine candidate conditions returned by the backend.
   const feedbackCandidates = asArray(feedback.possible_conditions);
   const predictionCandidates = asArray(predictions.conditions);
   const rawPossibleConditions = feedbackCandidates.length
@@ -335,13 +345,29 @@ export default function AssessmentResult() {
                 {xrayReportsList.map((rep, idx) => {
                   const qualFindings = rep.qualitative_findings || rep.structured_findings?.qualitative_findings || [];
                   const narrFindings = rep.narrative_findings || rep.structured_findings?.narrative_findings || [];
+                  const isUnreadable = rep.status === 'UNREADABLE';
+                  const assocStatus = rep.region_verification?.association_status || rep.association_status;
                   return (
                     <li key={idx} style={{ marginBottom: '0.65rem' }}>
                       <strong>{rep.file_name}</strong>
                       <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
-                        OCR / NLP: <span className="badge badge-extracted">{rep.status || 'EXTRACTED'}</span>
+                        OCR / NLP: <span className={`badge badge-${isUnreadable ? 'rejected' : 'extracted'}`}>{rep.status || 'EXTRACTED'}</span>
+                        {assocStatus ? (
+                          <span style={{ marginLeft: '0.5rem' }}>
+                            Report/Image Link: <span className={`badge badge-${assocStatus.toLowerCase()}`}>{assocStatus}</span>
+                          </span>
+                        ) : null}
                         {rep.is_historical ? <span style={{ marginLeft: '0.4rem', color: '#64748b' }}>(Historical report)</span> : null}
                       </div>
+                      {isUnreadable ? (
+                        <div style={{ marginTop: '0.3rem', fontSize: '0.82rem', color: '#dc2626' }}>
+                          Report text could not be extracted or read. Upload record preserved for clinical review.
+                        </div>
+                      ) : qualFindings.length === 0 && narrFindings.length === 0 ? (
+                        <div style={{ marginTop: '0.3rem', fontSize: '0.82rem', color: '#64748b' }}>
+                          No discrete abnormal findings extracted from text; document preserved for clinical review.
+                        </div>
+                      ) : null}
                       {qualFindings.length > 0 && (
                         <div style={{ marginTop: '0.3rem', fontSize: '0.84rem' }}>
                           <strong>Extracted Findings:</strong>{' '}
@@ -379,23 +405,34 @@ export default function AssessmentResult() {
                 {xrayImagesList.length > 0 ? (
                   <div>
                     <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.88rem' }}>
-                      {xrayImagesList.map((img, idx) => (
-                        <li key={idx} style={{ marginBottom: '0.45rem' }}>
-                          <strong>{img.file_name}</strong> ({img.region?.toUpperCase()})
-                          <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
-                            Status: <span className={`badge badge-${(img.status || '').toLowerCase()}`}>{(img.status || '').toUpperCase()}</span>
-                            {img.prediction ? (
+                      {xrayImagesList.map((img, idx) => {
+                        const isVerified = img.anatomy_independently_verified === true;
+                        const rawOutput = img.raw_prediction_for_review || img.raw_model_prediction;
+                        return (
+                          <li key={idx} style={{ marginBottom: '0.55rem' }}>
+                            <strong>{img.file_name}</strong> ({img.region?.toUpperCase()})
+                            <div style={{ fontSize: '0.82rem', marginTop: '0.15rem' }}>
+                              Status: <span className={`badge badge-${(img.status || '').toLowerCase()}`}>{(img.status || '').toUpperCase()}</span>
                               <span style={{ marginLeft: '0.5rem' }}>
-                                Finding: <span className="highlight">{img.prediction}</span>
+                                Anatomy Verification: <span className={`badge badge-${isVerified ? 'confirmed' : 'unverified'}`}>{isVerified ? 'VERIFIED' : 'UNVERIFIED / PENDING CONFIRMATION'}</span>
                               </span>
+                            </div>
+                            {img.prediction ? (
+                              <div style={{ marginTop: '0.2rem', fontSize: '0.84rem' }}>
+                                Accepted Finding: <span className="highlight">{img.prediction}</span>
+                              </div>
+                            ) : rawOutput ? (
+                              <div style={{ marginTop: '0.2rem', fontSize: '0.82rem', color: '#64748b' }}>
+                                <em>Raw model candidate (unverified, for audit only):</em> {rawOutput} — <em>excluded from clinical evidence until anatomy is independently verified.</em>
+                              </div>
                             ) : (
-                              <span style={{ marginLeft: '0.5rem', color: '#64748b' }}>
+                              <div style={{ marginTop: '0.2rem', fontSize: '0.82rem', color: '#64748b' }}>
                                 Reason: {img.message || img.description || 'Automated interpretation unavailable'}
-                              </span>
+                              </div>
                             )}
-                          </div>
-                        </li>
-                      ))}
+                          </li>
+                        );
+                      })}
                     </ul>
                   </div>
                 ) : (
@@ -447,14 +484,14 @@ export default function AssessmentResult() {
         {possibleConditions.length > 0 ? (
           <EvidenceCard title="POSSIBLE CONDITIONS (ASSISTIVE ML DIFFERENTIAL)">
             <p className="small muted" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-              These are statistical model candidates for discussion with a qualified clinician, not confirmed diagnoses or clinically validated probabilities. Review the supporting, contradictory, and unknown evidence for each candidate. The safety pathway is determined separately and is not overridden by these candidates.
+              These are statistical model candidates for discussion with a qualified clinician, not confirmed diagnoses or clinically validated probabilities. Review the candidate-specific evidence below. The deterministic safety triage is independent and is not overridden by these candidates.
             </p>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
               {possibleConditions.map((c, idx) => (
                 <div
                   key={idx}
                   style={{
-                    padding: '0.75rem',
+                    padding: '0.85rem',
                     borderRadius: '8px',
                     border: '1px solid #cbd5e1',
                     background: idx === 0 ? '#eff6ff' : '#ffffff',
@@ -469,26 +506,115 @@ export default function AssessmentResult() {
                       {c.confidence_tier || 'Possible candidate'}
                     </span>
                   </div>
-                  {c.supporting_symptoms?.length ? (
+
+                  {/* Badges strip */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', margin: '0.35rem 0' }}>
+                    <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem', borderRadius: '4px', background: '#f8fafc', color: '#475569', border: '1px solid #e2e8f0', fontWeight: '500' }}>
+                      Model Score: {c.model_score || c.probability_score ? Number(c.model_score || c.probability_score).toFixed(4) : 'N/A'} (Assistive statistical score)
+                    </span>
+                    {asArray(c.evidence_badges).map((badge, bIdx) => (
+                      <span key={bIdx} style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem', borderRadius: '4px', fontWeight: '500', ...getSourceBadgeStyle(badge) }}>
+                        {badge}
+                      </span>
+                    ))}
+                  </div>
+
+                  {/* Evidence Summary */}
+                  {c.evidence_summary ? (
+                    <p style={{ margin: '0.35rem 0 0.5rem 0', fontSize: '0.84rem', color: '#334155', fontStyle: 'italic' }}>
+                      {c.evidence_summary}
+                    </p>
+                  ) : null}
+
+                  {/* Supporting Evidence Breakdown */}
+                  {asArray(c.supporting_evidence).length ? (
+                    <div style={{ margin: '0.3rem 0', fontSize: '0.84rem' }}>
+                      <strong style={{ color: '#166534' }}>Supporting Evidence:</strong>
+                      <ul style={{ margin: '0.15rem 0 0.35rem 1.1rem', padding: 0 }}>
+                        {c.supporting_evidence.map((item, sIdx) => (
+                          <li key={sIdx} style={{ marginBottom: '0.2rem', color: '#15803d' }}>
+                            <span style={{ fontWeight: '600' }}>
+                              {item.source_type === 'symptom_nlp' ? '[Symptom] ' :
+                               item.source_type === 'laboratory_report' ? '[Lab Report] ' :
+                               item.source_type === 'radiology_report' ? '[Radiology Report] ' :
+                               item.source_type === 'xray_image' ? '[Verified X-ray] ' : ''}
+                            </span>
+                            {item.finding}
+                            {item.source_file ? <span style={{ color: '#64748b', fontSize: '0.78rem' }}> (Source: {item.source_file})</span> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : c.supporting_symptoms?.length ? (
                     <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.85rem', color: '#334155' }}>
                       <strong>Supporting Symptoms:</strong> {formatCandidateList(c.supporting_symptoms).join(', ')}
                     </p>
                   ) : null}
-                  {c.contradictory_findings?.length ? (
+
+                  {/* Contradictory Evidence Breakdown */}
+                  {asArray(c.contradictory_evidence).length ? (
+                    <div style={{ margin: '0.3rem 0', fontSize: '0.84rem' }}>
+                      <strong style={{ color: '#b91c1c' }}>Contradictory / Denied Findings:</strong>
+                      <ul style={{ margin: '0.15rem 0 0.35rem 1.1rem', padding: 0 }}>
+                        {c.contradictory_evidence.map((item, cIdx) => (
+                          <li key={cIdx} style={{ marginBottom: '0.2rem', color: '#dc2626' }}>
+                            <span style={{ fontWeight: '600' }}>
+                              {item.source_type === 'symptom_nlp' ? '[Denied Symptom] ' : '[Lab Finding] '}
+                            </span>
+                            {item.finding} {item.reason ? `— ${item.reason}` : ''}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : c.contradictory_findings?.length ? (
                     <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.85rem', color: '#b91c1c' }}>
                       <strong>Contradictory / Denied:</strong> {formatCandidateList(c.contradictory_findings).join(', ')}
                     </p>
                   ) : null}
-                  {c.unknown_or_missing_information?.length ? (
-                    <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.82rem', color: '#64748b' }}>
+
+                  {/* Reassuring Evidence */}
+                  {asArray(c.reassuring_evidence).length ? (
+                    <div style={{ margin: '0.3rem 0', fontSize: '0.84rem' }}>
+                      <strong style={{ color: '#047857' }}>Reassuring Parameters:</strong>
+                      <ul style={{ margin: '0.15rem 0 0.35rem 1.1rem', padding: 0 }}>
+                        {c.reassuring_evidence.map((item, rIdx) => (
+                          <li key={rIdx} style={{ marginBottom: '0.2rem', color: '#059669' }}>
+                            {item.finding} <span style={{ color: '#64748b', fontSize: '0.78rem' }}>({item.reason})</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  {/* Contextual Findings */}
+                  {asArray(c.contextual_evidence).length ? (
+                    <p style={{ margin: '0.2rem 0', fontSize: '0.78rem', color: '#64748b' }}>
+                      <strong>Contextual assessment evidence:</strong> {c.contextual_evidence.length} general finding(s) evaluated (not directly corroborating {c.condition}).
+                    </p>
+                  ) : null}
+
+                  {/* Unassessed / Missing Factors */}
+                  {asArray(c.missing_information).length ? (
+                    <p style={{ margin: '0.2rem 0 0.25rem 0', fontSize: '0.82rem', color: '#64748b' }}>
+                      <strong>Missing / Unassessed Factors:</strong> {c.missing_information.join(' • ')}
+                    </p>
+                  ) : c.unknown_or_missing_information?.length ? (
+                    <p style={{ margin: '0.2rem 0 0.25rem 0', fontSize: '0.82rem', color: '#64748b' }}>
                       <strong>Unassessed Factors:</strong> {formatCandidateList(c.unknown_or_missing_information).join(', ')}
                     </p>
                   ) : null}
+
+                  {/* Suggested Specialty */}
                   {c.suggested_specialty ? (
                     <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.8rem', color: '#0369a1' }}>
                       Relevant Specialty: <em>{c.suggested_specialty}</em>
                     </p>
                   ) : null}
+
+                  {/* Clinical Disclaimer */}
+                  <p style={{ margin: '0.25rem 0 0 0', fontSize: '0.75rem', color: '#94a3b8', fontStyle: 'italic' }}>
+                    {c.disclaimer || 'Assistive statistical candidate for clinical consultation; not a confirmed medical diagnosis.'}
+                  </p>
                 </div>
               ))}
             </div>

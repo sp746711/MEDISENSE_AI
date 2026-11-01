@@ -226,6 +226,7 @@ def _build_anatomy_metadata(
         "model_output_shape": _safe_json_value(detection.get("model_output_shape")),
         "output_score_semantics": _safe_json_value(detection.get("output_score_semantics")),
         "classifier_version": _safe_json_value(classifier_version),
+        "top_candidates": _safe_json_value(top_candidates),
         # Keep the source classifier payload so later diagnostics can inspect the
         # actual candidate labels and scores rather than reconstructing them.
         "classifier_output": _safe_json_value(detection),

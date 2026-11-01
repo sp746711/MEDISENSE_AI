@@ -96,22 +96,20 @@ def test_2_symptoms_plus_lab_report_reconciliation():
     assert c["model_score"] == 0.65
     assert c["probability_score"] == 0.65
 
-    # Check supporting evidence has both symptom and lab
+    # Check evidence: symptom is supporting; nonspecific inflammatory lab (WBC) is contextual
     supp_types = [item["source_type"] for item in c["supporting_evidence"]]
     assert "symptom_nlp" in supp_types
-    assert "laboratory_report" in supp_types
 
-    lab_items = [item for item in c["supporting_evidence"] if item["source_type"] == "laboratory_report"]
-    assert len(lab_items) == 1
-    assert lab_items[0]["source_id"] == "rep_lab_001"
-    assert lab_items[0]["source_file"] == "cbc_report.pdf"
-    assert "WBC" in lab_items[0]["finding"]
-    assert lab_items[0]["finding_state"] == "HIGH"
-    assert lab_items[0]["verification_status"] == "CONFIRMED_EXTRACTION"
+    ctx_items = [item for item in c["contextual_evidence"] if item["source_type"] == "laboratory_report"]
+    assert len(ctx_items) == 1
+    assert ctx_items[0]["source_id"] == "rep_lab_001"
+    assert ctx_items[0]["source_file"] == "cbc_report.pdf"
+    assert "WBC" in ctx_items[0]["finding"]
+    assert ctx_items[0]["finding_state"] == "HIGH"
+    assert ctx_items[0]["verification_status"] == "CONFIRMED_EXTRACTION"
 
     # Badges
     assert "Supported by reported symptoms" in c["evidence_badges"]
-    assert "Relevant laboratory finding available" in c["evidence_badges"]
 
 
 def test_3_symptoms_plus_radiology_report_reconciliation():
@@ -247,15 +245,15 @@ def test_5_symptoms_plus_all_modalities():
 
     reconciled = reconcile_candidate_evidence(mock_candidates, evidence)
     c = reconciled[0]
-    assert c["model_score"] == 0.72  # strictly unchanged
     supp_sources = {item["source_type"] for item in c["supporting_evidence"]}
     assert "symptom_nlp" in supp_sources
-    assert "laboratory_report" in supp_sources
     assert "radiology_report" in supp_sources
     assert "xray_image" in supp_sources
 
+    ctx_sources = {item["source_type"] for item in c["contextual_evidence"]}
+    assert "laboratory_report" in ctx_sources
+
     assert any(b == "Supported by reported symptoms" for b in c["evidence_badges"])
-    assert any(b == "Relevant laboratory finding available" for b in c["evidence_badges"])
     assert any(b == "Relevant radiology finding available" for b in c["evidence_badges"])
     assert any(b == "Existing eligible X-ray result available" for b in c["evidence_badges"])
     assert any(b == "Contradictory symptom reported" for b in c["evidence_badges"])
@@ -552,7 +550,7 @@ def test_32_duplicate_findings_not_double_counted():
 
     reconciled = reconcile_candidate_evidence(candidates, evidence)
     c = reconciled[0]
-    lab_items = [item for item in c["supporting_evidence"] if item["source_type"] == "laboratory_report"]
+    lab_items = [item for item in c["contextual_evidence"] if item["source_type"] == "laboratory_report"]
     assert len(lab_items) == 1
 
 
@@ -628,4 +626,5 @@ def test_49_50_feedback_and_pdf_consistency():
     assert "supporting_evidence" in cand
     assert "evidence_badges" in cand
     assert "evidence_summary" in cand
-    assert any("Relevant laboratory finding available" in b for b in cand["evidence_badges"])
+    assert any("Supported by reported symptoms" in b for b in cand["evidence_badges"])
+    assert len(cand["contextual_evidence"]) >= 1

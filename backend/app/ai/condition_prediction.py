@@ -847,13 +847,13 @@ CONDITION_MODALITY_PROFILES: dict[str, dict[str, Any]] = {
         "relevant_regions": ["chest", "thorax", "lungs", "pulmonary"],
         "relevant_lab_tests": [
             "wbc", "white blood cell", "white blood cells", "leukocyte", "leukocytes",
-            "crp", "c reactive protein", "c-reactive protein", "procalcitonin",
+            "crp", "c reactive protein", "c-reactive protein", "procalcitonin", "pct",
             "esr", "neutrophil", "neutrophils", "sputum", "blood culture",
         ],
         "relevant_imaging_findings": [
             "consolidation", "infiltrate", "infiltrates", "opacity", "opacities",
-            "air bronchogram", "pleural effusion", "effusion", "pneumonia",
-            "patchy opacity", "lobar consolidation",
+            "air-space opacity", "air bronchogram", "pleural effusion", "effusion", "pneumonia",
+            "patchy opacity", "patchy air-space opacity", "lobar consolidation", "pneumothorax",
         ],
         "lab_interpretation_support": {"HIGH", "ABNORMAL", "POSITIVE", "ELEVATED"},
         "key_missing_modalities": ["Chest X-ray (CXR)", "Complete Blood Count / Inflammatory markers"],
@@ -1122,6 +1122,37 @@ def _get_modality_profile(condition_name: str) -> dict[str, Any]:
     }
 
 
+NONSPECIFIC_INFLAMMATORY_LABS: dict[str, str] = {
+    "wbc": "WBC",
+    "white blood cell": "WBC",
+    "white blood cells": "WBC",
+    "leukocyte": "WBC",
+    "leukocytes": "WBC",
+    "crp": "CRP",
+    "c reactive protein": "CRP",
+    "c-reactive protein": "CRP",
+    "procalcitonin": "Procalcitonin",
+    "pct": "Procalcitonin",
+    "neutrophil": "Neutrophils",
+    "neutrophils": "Neutrophils",
+    "lymphocyte": "Lymphocytes",
+    "lymphocytes": "Lymphocytes",
+    "esr": "ESR",
+}
+
+DISEASE_SPECIFIC_LABS: dict[str, list[str]] = {
+    "Diabetes": ["glucose", "fasting blood sugar", "random blood sugar", "postprandial blood sugar", "hba1c"],
+    "Arthritis": ["rf", "rheumatoid factor", "anti ccp", "anti-ccp", "uric acid"],
+    "Jaundice": ["bilirubin", "total bilirubin", "direct bilirubin", "indirect bilirubin"],
+    "Dengue": ["platelet", "platelets", "dengue ns1", "ns1", "igm"],
+    "urinary tract infection": ["urine routine", "urine microscopy", "pus cells", "leukocyte esterase", "nitrite", "nitrites", "bacteria", "urine culture"],
+    "Typhoid": ["widal", "blood culture", "salmonella"],
+    "Malaria": ["smear", "rapid diagnostic test", "malaria antigen", "plasmodium"],
+    "peptic ulcer disease": ["h pylori", "helicobacter pylori", "stool occult blood", "fecal occult blood"],
+    "Dimorphic Hemorrhoids": ["stool occult blood", "fecal occult blood"],
+}
+
+
 def _reconcile_single_candidate(
     candidate: dict[str, Any],
     evidence: dict[str, Any],
@@ -1158,6 +1189,7 @@ def _reconcile_single_candidate(
                 "source_file": None,
                 "finding": sym_name,
                 "value": sym_name,
+                "original_value": sym_name,
                 "unit": None,
                 "reference_range": None,
                 "finding_state": "PRESENT",
@@ -1176,6 +1208,7 @@ def _reconcile_single_candidate(
                 "source_file": None,
                 "finding": contra_name,
                 "value": contra_name,
+                "original_value": contra_name,
                 "unit": None,
                 "reference_range": None,
                 "finding_state": "ABSENT",
@@ -1191,20 +1224,38 @@ def _reconcile_single_candidate(
         lab_findings.extend(report_meta.get("abnormal_findings", []) or [])
         lab_findings.extend(report_meta.get("normal_findings", []) or [])
         lab_findings.extend(report_meta.get("unknown_range_findings", []) or [])
+        lab_findings.extend(report_meta.get("findings", []) or [])
 
     # Also check source_records for directly passed report findings
     if isinstance(source_records, dict):
         for med_rep in source_records.get("medical_reports", []) or []:
             if isinstance(med_rep, dict):
                 structured = med_rep.get("structured_findings")
+                rep_file = med_rep.get("file_name") or med_rep.get("source_file")
+                rep_id = med_rep.get("report_id") or med_rep.get("id")
+                direct_findings = list(med_rep.get("findings", []) or [])
                 if isinstance(structured, dict):
-                    lab_findings.extend(structured.get("abnormal_findings", []) or [])
-                    lab_findings.extend(structured.get("normal_findings", []) or [])
+                    struct_findings = (
+                        (structured.get("abnormal_findings", []) or [])
+                        + (structured.get("normal_findings", []) or [])
+                        + (structured.get("findings", []) or [])
+                    )
+                    direct_findings.extend(struct_findings)
+                for df in direct_findings:
+                    if isinstance(df, dict):
+                        f_copy = dict(df)
+                        if rep_file and not f_copy.get("source_file"):
+                            f_copy["source_file"] = rep_file
+                        if rep_id and not f_copy.get("report_id"):
+                            f_copy["report_id"] = rep_id
+                        lab_findings.append(f_copy)
 
     relevant_lab_keywords = profile.get("relevant_lab_tests", [])
     lab_support_set = profile.get("lab_interpretation_support", {"HIGH", "ABNORMAL", "POSITIVE", "ELEVATED"})
 
     matched_relevant_labs = False
+    specific_lab_tests = DISEASE_SPECIFIC_LABS.get(condition_name, [])
+
     for lab in lab_findings:
         if not isinstance(lab, dict):
             continue
@@ -1217,9 +1268,13 @@ def _reconcile_single_candidate(
         src_file = lab.get("source_file") or lab.get("file_name")
         unit = lab.get("unit")
         ref_range = lab.get("reference_range")
+        raw_val = lab.get("value")
 
-        is_relevant = _matches_any_keyword(test_name, relevant_lab_keywords)
-        if is_relevant:
+        is_specific = _matches_any_keyword(test_name, specific_lab_tests) if specific_lab_tests else False
+        is_nonspecific_inflam = _matches_any_keyword(test_name, list(NONSPECIFIC_INFLAMMATORY_LABS.keys()))
+        is_profile_relevant = _matches_any_keyword(test_name, relevant_lab_keywords)
+
+        if is_specific:
             matched_relevant_labs = True
             if status_raw in lab_support_set or "ABNORMAL" in status_raw or "HIGH" in status_raw:
                 key = ("laboratory_report", "support", rep_id + "_" + test_name)
@@ -1230,13 +1285,14 @@ def _reconcile_single_candidate(
                         "source_id": rep_id,
                         "source_file": src_file,
                         "finding": f"{test_name}: {val_str}",
-                        "value": str(lab.get("value") or ""),
+                        "value": str(raw_val or ""),
+                        "original_value": raw_val,
                         "unit": unit,
                         "reference_range": ref_range,
                         "finding_state": status_raw,
-                        "reason": f"Out-of-range laboratory finding ({status_raw}) corroborating {condition_name} pathophysiology.",
+                        "reason": f"Disease-specific laboratory parameter ({status_raw}) corroborating {condition_name} pathophysiology.",
                         "verification_status": "CONFIRMED_EXTRACTION",
-                        "rule_identifier": "relevant_lab_elevation_support",
+                        "rule_identifier": f"{_normalize(condition_name)}_specific_lab_support",
                     })
             elif status_raw in {"NORMAL", "NEGATIVE", "WITHIN_RANGE"}:
                 key = ("laboratory_report", "reassuring", rep_id + "_" + test_name)
@@ -1247,7 +1303,62 @@ def _reconcile_single_candidate(
                         "source_id": rep_id,
                         "source_file": src_file,
                         "finding": f"{test_name}: {val_str}",
-                        "value": str(lab.get("value") or ""),
+                        "value": str(raw_val or ""),
+                        "original_value": raw_val,
+                        "unit": unit,
+                        "reference_range": ref_range,
+                        "finding_state": "NORMAL",
+                        "reason": f"Laboratory parameter within standard reference limits for {condition_name}.",
+                        "verification_status": "CONFIRMED_EXTRACTION",
+                        "rule_identifier": "relevant_lab_normal_reassuring",
+                    })
+        elif is_nonspecific_inflam and is_profile_relevant:
+            # Nonspecific inflammatory markers (WBC, CRP, PCT, etc.) for infectious/inflammatory candidates:
+            # Per clinical decision support standards, nonspecific inflammatory markers reflect host response
+            # but do NOT independently establish disease proof. Preserve in contextual_evidence.
+            key = ("laboratory_report", "contextual_inflam", rep_id + "_" + test_name)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                norm_test = _normalize(test_name)
+                if "procalcitonin" in norm_test or "pct" in norm_test:
+                    inflam_reason = f"Elevated Procalcitonin ({val_str}) supports acute inflammatory/bacterial host response, but is nonspecific and cannot independently establish a bacterial diagnosis of {condition_name}."
+                elif "crp" in norm_test or "c reactive" in norm_test:
+                    inflam_reason = f"Elevated CRP ({val_str}) is a sensitive but nonspecific acute-phase reactant; indicates systemic inflammation without confirming {condition_name} as specific etiology."
+                elif "wbc" in norm_test or "white blood" in norm_test or "leukocyte" in norm_test:
+                    inflam_reason = f"Elevated WBC ({val_str}) indicates systemic inflammatory or infectious response; nonspecific acute marker requiring clinical correlation to establish {condition_name}."
+                elif "neutrophil" in norm_test:
+                    inflam_reason = f"Elevated Neutrophils ({val_str}) reflects neutrophilic leukocytosis common in acute inflammatory response; nonspecific for {condition_name}."
+                elif "lymphocyte" in norm_test:
+                    inflam_reason = f"Abnormal Lymphocytes ({val_str}) reflects systemic immune response; nonspecific and does not confirm {condition_name}."
+                else:
+                    inflam_reason = f"Elevated {test_name} ({val_str}) is a nonspecific inflammatory marker; requires clinical correlation and does not uniquely confirm {condition_name}."
+
+                contextual_evidence.append({
+                    "source_type": "laboratory_report",
+                    "source_id": rep_id,
+                    "source_file": src_file,
+                    "finding": f"{test_name}: {val_str}",
+                    "value": str(raw_val or ""),
+                    "original_value": raw_val,
+                    "unit": unit,
+                    "reference_range": ref_range,
+                    "finding_state": status_raw,
+                    "reason": inflam_reason,
+                    "verification_status": "CONFIRMED_EXTRACTION",
+                    "rule_identifier": f"nonspecific_inflammatory_{norm_test}_contextual",
+                })
+        elif is_profile_relevant:
+            if status_raw in {"NORMAL", "NEGATIVE", "WITHIN_RANGE"}:
+                key = ("laboratory_report", "reassuring", rep_id + "_" + test_name)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    reassuring_evidence.append({
+                        "source_type": "laboratory_report",
+                        "source_id": rep_id,
+                        "source_file": src_file,
+                        "finding": f"{test_name}: {val_str}",
+                        "value": str(raw_val or ""),
+                        "original_value": raw_val,
                         "unit": unit,
                         "reference_range": ref_range,
                         "finding_state": "NORMAL",
@@ -1264,7 +1375,8 @@ def _reconcile_single_candidate(
                         "source_id": rep_id,
                         "source_file": src_file,
                         "finding": f"{test_name}: {val_str}",
-                        "value": str(lab.get("value") or ""),
+                        "value": str(raw_val or ""),
+                        "original_value": raw_val,
                         "unit": unit,
                         "reference_range": ref_range,
                         "finding_state": status_raw,
@@ -1282,7 +1394,8 @@ def _reconcile_single_candidate(
                     "source_id": rep_id,
                     "source_file": src_file,
                     "finding": f"{test_name}: {val_str}",
-                    "value": str(lab.get("value") or ""),
+                    "value": str(raw_val or ""),
+                    "original_value": raw_val,
                     "unit": unit,
                     "reference_range": ref_range,
                     "finding_state": status_raw,
@@ -1309,42 +1422,101 @@ def _reconcile_single_candidate(
         rep_id = str(rep.get("id") or rep.get("report_id") or "radiology_report")
         src_file = rep.get("file_name") or rep.get("source_file")
         rep_region = str(rep.get("region") or rep.get("body_region") or rep.get("exam_region") or "").strip().lower()
+        if not rep_region and isinstance(rep.get("structured_findings"), dict):
+            rep_region = str(rep["structured_findings"].get("region") or rep["structured_findings"].get("body_region") or rep["structured_findings"].get("exam_region") or "").strip().lower()
 
         is_region_relevant = bool(relevant_regions) and any(
             _matches_any_keyword(rep_region, [r]) or _phrase_matches(r, rep_region)
             for r in relevant_regions
         )
 
-        # Collect narrative and qualitative statements
+        # Collect narrative and structured qualitative statements
         qual_findings = rep.get("qualitative_findings", []) or []
+        if not qual_findings and isinstance(rep.get("structured_findings"), dict):
+            qual_findings = rep["structured_findings"].get("qualitative_findings", []) or []
+
         narr_findings = rep.get("narrative_findings", []) or []
-        finding_texts = [
-            str(f.get("finding") or f.get("text") or f) if isinstance(f, dict) else str(f)
-            for f in qual_findings + narr_findings
-        ]
+        if not narr_findings and isinstance(rep.get("structured_findings"), dict):
+            narr_findings = rep["structured_findings"].get("narrative_findings", []) or []
+
+        finding_matched = False
 
         if is_region_relevant:
             matched_relevant_rad = True
-            finding_matched = False
-            for ft in finding_texts:
+            for qf in qual_findings:
+                if not isinstance(qf, dict):
+                    continue
+                ft = str(qf.get("finding") or "").strip()
+                f_state = str(qf.get("state") or qf.get("status") or "PRESENT").strip().upper()
+                if not ft:
+                    continue
+
                 if relevant_imaging_kw and _matches_any_keyword(ft, relevant_imaging_kw):
-                    finding_matched = True
-                    key = ("radiology_report", "support", rep_id + "_" + ft)
-                    if key not in seen_keys:
-                        seen_keys.add(key)
-                        supporting_evidence.append({
-                            "source_type": "radiology_report",
-                            "source_id": rep_id,
-                            "source_file": src_file,
-                            "finding": f"Radiology report ({rep_region.title()}): {ft}",
-                            "value": ft,
-                            "unit": None,
-                            "reference_range": None,
-                            "finding_state": "PRESENT",
-                            "reason": f"Radiology report documents radiographic findings consistent with {condition_name}.",
-                            "verification_status": "CONFIRMED_REPORT",
-                            "rule_identifier": "relevant_radiology_concordance",
-                        })
+                    if f_state == "PRESENT":
+                        finding_matched = True
+                        key = ("radiology_report", "support", rep_id + "_" + ft)
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            supporting_evidence.append({
+                                "source_type": "radiology_report",
+                                "source_id": rep_id,
+                                "source_file": src_file,
+                                "finding": f"Radiology report ({rep_region.title()}): {ft}",
+                                "value": ft,
+                                "original_value": ft,
+                                "unit": None,
+                                "reference_range": None,
+                                "finding_state": "PRESENT",
+                                "reason": f"Radiology report documents {ft} consistent with {condition_name}.",
+                                "verification_status": "CONFIRMED_REPORT",
+                                "rule_identifier": "relevant_radiology_concordance",
+                            })
+                    elif f_state in {"ABSENT", "NEGATIVE"}:
+                        key = ("radiology_report", "reassuring", rep_id + "_" + ft)
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            reassuring_evidence.append({
+                                "source_type": "radiology_report",
+                                "source_id": rep_id,
+                                "source_file": src_file,
+                                "finding": f"Radiology report ({rep_region.title()}): No {ft}",
+                                "value": f"Absence of {ft}",
+                                "original_value": ft,
+                                "unit": None,
+                                "reference_range": None,
+                                "finding_state": "ABSENT",
+                                "reason": f"Radiology report explicitly notes absence of {ft} (excludes complication; does not exclude {condition_name}).",
+                                "verification_status": "CONFIRMED_REPORT",
+                                "rule_identifier": "relevant_radiology_negative_finding",
+                            })
+
+            # Check narrative findings for impression
+            for nf in narr_findings:
+                if not isinstance(nf, dict):
+                    continue
+                sec = str(nf.get("section") or "").strip()
+                cnt = str(nf.get("content") or "").strip()
+                if cnt and relevant_imaging_kw and _matches_any_keyword(cnt, relevant_imaging_kw):
+                    if not finding_matched:
+                        finding_matched = True
+                        key = ("radiology_report", "support_narr", rep_id + "_" + sec)
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            supporting_evidence.append({
+                                "source_type": "radiology_report",
+                                "source_id": rep_id,
+                                "source_file": src_file,
+                                "finding": f"Radiology report ({sec}): {cnt}",
+                                "value": cnt,
+                                "original_value": cnt,
+                                "unit": None,
+                                "reference_range": None,
+                                "finding_state": "PRESENT",
+                                "reason": f"Radiology report narrative documents findings consistent with {condition_name}.",
+                                "verification_status": "CONFIRMED_REPORT",
+                                "rule_identifier": "relevant_radiology_narrative_concordance",
+                            })
+
             if not finding_matched:
                 key = ("radiology_report", "contextual", rep_id)
                 if key not in seen_keys:
@@ -1355,6 +1527,7 @@ def _reconcile_single_candidate(
                         "source_file": src_file,
                         "finding": f"Radiology report ({rep_region.title()})",
                         "value": "Documented examination without focal findings of " + condition_name,
+                        "original_value": None,
                         "unit": None,
                         "reference_range": None,
                         "finding_state": "REPORTED",
@@ -1374,6 +1547,7 @@ def _reconcile_single_candidate(
                     "source_file": src_file,
                     "finding": f"Radiology report ({reg_display})",
                     "value": None,
+                    "original_value": None,
                     "unit": None,
                     "reference_range": None,
                     "finding_state": "CONTEXTUAL",

@@ -580,6 +580,7 @@ export default function AssessmentResult() {
                         {c.reassuring_evidence.map((item, rIdx) => (
                           <li key={rIdx} style={{ marginBottom: '0.2rem', color: '#059669' }}>
                             {item.finding} <span style={{ color: '#64748b', fontSize: '0.78rem' }}>({item.reason})</span>
+                            {item.source_file ? <span style={{ color: '#64748b', fontSize: '0.75rem' }}> [Source: {item.source_file}]</span> : null}
                           </li>
                         ))}
                       </ul>
@@ -588,9 +589,16 @@ export default function AssessmentResult() {
 
                   {/* Contextual Findings */}
                   {asArray(c.contextual_evidence).length ? (
-                    <p style={{ margin: '0.2rem 0', fontSize: '0.78rem', color: '#64748b' }}>
-                      <strong>Contextual assessment evidence:</strong> {c.contextual_evidence.length} general finding(s) evaluated (not directly corroborating {c.condition}).
-                    </p>
+                    <div style={{ margin: '0.25rem 0', fontSize: '0.78rem', color: '#64748b' }}>
+                      <strong>Contextual assessment evidence:</strong>{' '}
+                      {c.contextual_evidence.map((item, idx) => (
+                        <span key={idx}>
+                          {idx > 0 ? '; ' : ''}
+                          {item.finding || item}
+                          {item.source_file ? ` (${item.source_file})` : ''}
+                        </span>
+                      ))}
+                    </div>
                   ) : null}
 
                   {/* Unassessed / Missing Factors */}

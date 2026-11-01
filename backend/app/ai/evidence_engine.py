@@ -634,14 +634,36 @@ def combine_evidence(
         f_lower = str(f_name or "").lower()
 
         is_relevant = False
+        qf_domain = str(qf.get("domain") or "").lower()
+        qf_cat = str(qf.get("category") or "").lower()
+
         if has_respiratory_symptom:
-            if any(k in f_lower for k in ["lung", "breath", "cough", "throat", "chest", "wheez", "rales", "rhonchi", "bronch", "pharynx"]):
+            if (
+                qf_domain in {"respiratory", "pulmonary"}
+                or any(k in f_lower for k in [
+                    "pneumonia", "consolidation", "infiltrate", "opacity", "air-space opacity",
+                    "air bronchogram", "pleural effusion", "effusion", "pneumothorax",
+                    "atelectasis", "lung", "breath", "cough", "throat", "chest", "wheez",
+                    "rales", "rhonchi", "bronch", "pharynx"
+                ])
+            ):
                 is_relevant = True
         elif "headache" in present_names or any(s.get("domain") == "neurological" for s in current_present):
-            if any(k in f_lower for k in ["head", "neuro", "pupil", "cranial", "mening", "vision", "speech", "reflex"]):
+            if (
+                qf_domain in {"neurological", "neuro"}
+                or any(k in f_lower for k in ["head", "neuro", "pupil", "cranial", "mening", "vision", "speech", "reflex"])
+            ):
                 is_relevant = True
         elif any(s.get("domain") in {"musculoskeletal", "injury/trauma"} for s in current_present):
-            if any(k in f_lower for k in ["wrist", "hand", "joint", "bone", "swelling", "fracture", "tendon", "ligament", "sprain", "strain"]):
+            if (
+                qf_domain in {"musculoskeletal"}
+                or "bone" in qf_cat
+                or any(k in f_lower for k in [
+                    "wrist", "hand", "joint", "bone", "swelling", "fracture", "tendon",
+                    "ligament", "sprain", "strain", "effusion", "knee", "ankle", "elbow",
+                    "shoulder", "tibia", "fibula", "radius", "ulna"
+                ])
+            ):
                 is_relevant = True
 
         if f_state in {"ABSENT", "NEGATIVE", "NORMAL"}:
@@ -1193,12 +1215,9 @@ def combine_evidence(
 
     for rep in processed_xray_reports:
         region_status = str((rep.get("region_verification") or {}).get("status") or "").upper()
-        if processed_images and region_status in {"MISMATCH", "UNVERIFIED", "UNPAIRED"}:
+        if processed_images and region_status == "MISMATCH":
             # Preserve report text in xray.reports for display/audit, but do not
-            # merge unverified sources into image evidence.
-            continue
-        if processed_images and not bool((rep.get("region_verification") or {}).get("association_confirmed")):
-            # Matching anatomy is not explicit user confirmation of the pairing.
+            # merge mismatched sources into confirmed evidence.
             continue
         for qf in rep.get("qualitative_findings", []):
             if not isinstance(qf, dict):
@@ -1279,10 +1298,16 @@ def combine_evidence(
             ).upper()
             for statement in statements
         }
-        has_unverified_image_pair = bool(processed_images) and bool(
-            report_region_statuses.intersection({"UNVERIFIED", "UNPAIRED"})
+        has_active_image = any(
+            str(img.get("status") or "").upper() in {"COMPLETED", "PARTIAL", "AVAILABLE"}
+            and (img.get("prediction") or img.get("findings"))
+            for img in processed_images
         )
-        if has_unverified_image_pair:
+        has_unverified_image_pair = (
+            bool(has_active_image)
+            and bool(report_region_statuses.intersection({"UNVERIFIED", "UNPAIRED"}))
+        )
+        if has_unverified_image_pair and states != {"ABSENT"}:
             # Keep the radiologist's extracted statement visible, but do not
             # claim it corroborates the uploaded image until pairing is verified.
             separate.append(
@@ -1332,25 +1357,24 @@ def combine_evidence(
                 region_check_status = str(region_check.get("status") or "").upper()
                 allowed_image_files = region_check.get("matched_image_files") or []
                 if region_check_status in {"MISMATCH", "UNVERIFIED", "UNPAIRED"}:
-                    if img_file in allowed_image_files:
-                        if img_status in {"unavailable", "failed", "error"} and region_check_status != "MISMATCH":
-                            cross_modal_concordance.append({
-                                "image_file": img_file,
-                                "report_file": rep_file,
-                                "image_prediction": None,
-                                "image_findings": img_findings,
-                                "concordance_status": "NOT_APPLICABLE",
-                                "details": f"Automated image model interpretation is unavailable for '{img_file}'. Relying on extracted radiology report findings from '{rep_file}'.",
-                            })
-                        else:
-                            cross_modal_concordance.append({
-                                "image_file": img_file,
-                                "report_file": rep_file,
-                                "image_prediction": None,
-                                "image_findings": img_findings,
-                                "concordance_status": "REGION_MISMATCH" if region_check_status == "MISMATCH" else "UNVERIFIED_REGION",
-                                "details": region_check.get("message") or "Image/report regions were not verified; no cross-modal agreement is asserted.",
-                            })
+                    if img_status in {"unavailable", "failed", "error"} and region_check_status != "MISMATCH":
+                        cross_modal_concordance.append({
+                            "image_file": img_file,
+                            "report_file": rep_file,
+                            "image_prediction": None,
+                            "image_findings": img_findings,
+                            "concordance_status": "NOT_APPLICABLE",
+                            "details": f"Automated image model interpretation is unavailable for '{img_file}'. Relying on extracted radiology report findings from '{rep_file}'.",
+                        })
+                    elif img_file in allowed_image_files:
+                        cross_modal_concordance.append({
+                            "image_file": img_file,
+                            "report_file": rep_file,
+                            "image_prediction": None,
+                            "image_findings": img_findings,
+                            "concordance_status": "REGION_MISMATCH" if region_check_status == "MISMATCH" else "UNVERIFIED_REGION",
+                            "details": region_check.get("message") or "Image/report regions were not verified; no cross-modal agreement is asserted.",
+                        })
                     continue
                 if allowed_image_files and (img_file not in allowed_image_files):
                     continue

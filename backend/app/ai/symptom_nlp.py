@@ -372,6 +372,26 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "systemic",
         "body_area": "whole body",
     },
+    "loss of appetite": {
+        "canonical": "loss of appetite",
+        "domain": "systemic",
+        "body_area": "whole body",
+    },
+    "poor appetite": {
+        "canonical": "loss of appetite",
+        "domain": "systemic",
+        "body_area": "whole body",
+    },
+    "decreased appetite": {
+        "canonical": "loss of appetite",
+        "domain": "systemic",
+        "body_area": "whole body",
+    },
+    "anorexia": {
+        "canonical": "loss of appetite",
+        "domain": "systemic",
+        "body_area": "whole body",
+    },
 
     # ENT / Head / Neuro
     "sore throat": {
@@ -1198,13 +1218,42 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     if any(start < o_end and end > o_start for o_start, o_end in occupied_spans):
                         continue
 
-                    # Check duration scoping for this symptom match: duration before 'with' does not scope after 'with'
-                    sym_duration = clause_duration
-                    if clause_dur_m and with_m:
-                        dur_start = clause_dur_m.start()
-                        if dur_start < with_m.start() and start > with_m.end():
-                            sym_duration = None
-                        elif dur_start > with_m.end() and start < with_m.start():
+                    # Check duration scoping for this symptom match:
+                    # 1. Local duration immediately following this symptom (e.g. "cough for 7 days, fever for 3 days")
+                    post_sym = clause[end:min(end + 65, len(clause))]
+                    comma_idx = post_sym.find(",")
+                    if comma_idx != -1:
+                        post_sym = post_sym[:comma_idx]
+                    post_dur_m = DURATION_REGEX.search(post_sym)
+
+                    # 2. Local duration immediately preceding this symptom (e.g. "for 3 days fever")
+                    pre_sym = clause[max(0, start - 45):start]
+                    pre_comma_idx = pre_sym.rfind(",")
+                    if pre_comma_idx != -1:
+                        pre_sym = pre_sym[pre_comma_idx:]
+                    pre_dur_m = DURATION_REGEX.search(pre_sym)
+
+                    if post_dur_m:
+                        sym_duration = re.sub(r"^(?:for|since|past|last)\s+", "", post_dur_m.group(0).strip(), flags=re.IGNORECASE).strip()
+                    elif pre_dur_m:
+                        sym_duration = re.sub(r"^(?:for|since|past|last)\s+", "", pre_dur_m.group(0).strip(), flags=re.IGNORECASE).strip()
+                    else:
+                        all_durs = list(DURATION_REGEX.finditer(clause))
+                        if len(all_durs) == 1:
+                            sym_duration = clause_duration
+                            if clause_dur_m and with_m:
+                                dur_start = clause_dur_m.start()
+                                if dur_start < with_m.start() and start > with_m.end():
+                                    sym_duration = None
+                                elif dur_start > with_m.end() and start < with_m.start():
+                                    sym_duration = None
+                        elif all_durs:
+                            closest_dur = min(all_durs, key=lambda d: min(abs(d.start() - end), abs(d.end() - start)))
+                            if abs(closest_dur.start() - end) <= 70 or abs(start - closest_dur.end()) <= 70:
+                                sym_duration = re.sub(r"^(?:for|since|past|last)\s+", "", closest_dur.group(0).strip(), flags=re.IGNORECASE).strip()
+                            else:
+                                sym_duration = None
+                        else:
                             sym_duration = None
 
                     meta = SYMPTOM_LEXICON[kw]
@@ -1306,13 +1355,13 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     clause_lower = clause.lower()
 
                     # Trigger detection
-                    if "cough" in clause_lower and ("when coughing" in clause_lower or "on coughing" in clause_lower):
-                        if canonical == "chest discomfort":
+                    if "cough" in clause_lower and any(w in clause_lower for w in ["when coughing", "on coughing", "while coughing", "with coughing", "when i cough"]):
+                        if canonical in {"chest discomfort", "chest pain", "chest tightness"}:
                             item_trigger = "coughing"
-                            item_context = "when coughing"
+                            item_context = "while coughing" if "while coughing" in clause_lower else "when coughing"
                     if "sleep" in canonical and "cough" in clause_lower:
                         item_context = "because of the cough"
-                    if canonical == "fever" and temp_val:
+                    if canonical in {"fever", "high fever"} and temp_val:
                         item_context = f"temperature around {temp_val}"
 
                     item_body_area = meta["body_area"]
@@ -1631,7 +1680,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             if quals:
                 s["context"] = "; ".join(quals)
 
-    # Temperature objective finding
+    # Temperature objective finding: represent as measurement/qualifier on fever when present
     if temp_val:
         fever_symptom = next(
             (s for s in extracted if s.get("symptom") in {"fever", "high fever"}),
@@ -1641,8 +1690,8 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             existing_ctx = fever_symptom.get("context")
             fever_symptom["context"] = f"{existing_ctx}; {temp_val}" if existing_ctx else temp_val
             fever_symptom["measurement"] = temp_val
-
-        if "temperature" not in seen_canonicals:
+            fever_symptom["temperature"] = temp_val
+        elif "temperature" not in seen_canonicals:
             extracted.append({
                 "finding": "temperature",
                 "symptom": "temperature",
@@ -1657,6 +1706,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                 "domain": "systemic",
                 "context": temp_val,
                 "measurement": temp_val,
+                "temperature": temp_val,
                 "source": "user_input",
             })
             seen_canonicals.add("temperature")

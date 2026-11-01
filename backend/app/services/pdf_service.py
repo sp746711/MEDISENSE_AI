@@ -494,30 +494,60 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         sec_idx += 1
 
     if possible_conditions:
-        cond_data = [["Rank", "Possible Condition", "Model Score & Scope", "Supporting Evidence", "Specialty"]]
+        cond_data = [["Rank", "Possible Condition", "Model Score & Scope", "Candidate-Specific Evidence", "Specialty"]]
         for c in possible_conditions:
-            supp_parts: list[str] = []
+            evidence_lines: list[str] = []
+
+            # 1. Supporting Evidence
             supp_evidence_list = c.get("supporting_evidence", [])
             if supp_evidence_list:
                 for item in supp_evidence_list[:4]:
                     src_tag = str(item.get("source_type") or "")
+                    src_file = f" <font color='#64748b' size='6'>({_esc(item.get('source_file'))})</font>" if item.get('source_file') else ""
                     prefix = (
                         "[Sym]" if src_tag == "symptom_nlp"
                         else ("[Lab]" if "laboratory" in src_tag or "medical" in src_tag
                         else ("[Rad]" if "radiology" in src_tag else "[X-ray]"))
                     )
-                    supp_parts.append(f"{prefix} {_esc(item.get('finding') or '')}")
+                    evidence_lines.append(f"<font color='#166534'><b>{prefix}</b> {_esc(item.get('finding') or '')}</font>{src_file}")
             else:
                 supp_syms = c.get("supporting_symptoms", [])[:3]
                 if supp_syms:
-                    supp_parts.append(", ".join([_esc(s) for s in supp_syms]))
+                    evidence_lines.append(f"<font color='#166534'><b>[Sym]</b> {', '.join([_esc(s) for s in supp_syms])}</font>")
 
-            evidence_cell = "<br/>".join(supp_parts) if supp_parts else "—"
-
-            contra_list = c.get("contradictory_findings", [])
+            # 2. Contradictory / Denied Evidence
+            contra_list = c.get("contradictory_evidence", [])
             if contra_list:
-                contra_esc = ", ".join([_esc(x) for x in contra_list[:2]])
-                evidence_cell += f"<br/><font color='#dc2626' size='7'>Denied: {contra_esc}</font>"
+                for item in contra_list[:2]:
+                    f_name = item.get("finding") or item.get("symptom") or ""
+                    evidence_lines.append(f"<font color='#dc2626' size='7'><b>[Contra]</b> Denied: {_esc(f_name)}</font>")
+            elif c.get("contradictory_findings"):
+                contra_esc = ", ".join([_esc(str(x)) for x in c.get("contradictory_findings", [])[:2]])
+                evidence_lines.append(f"<font color='#dc2626' size='7'><b>[Contra]</b> Denied: {contra_esc}</font>")
+
+            # 3. Reassuring Evidence
+            reassuring_list = c.get("reassuring_evidence", [])
+            if reassuring_list:
+                for item in reassuring_list[:2]:
+                    r_finding = item.get("finding") or ""
+                    r_reason = f" ({item.get('reason')})" if item.get("reason") else ""
+                    evidence_lines.append(f"<font color='#059669' size='7'><b>[Reassuring]</b> {_esc(r_finding)}{_esc(r_reason)}</font>")
+
+            # 4. Contextual Findings
+            contextual_list = c.get("contextual_evidence", [])
+            if contextual_list:
+                ctx_preview = ", ".join([_esc(item.get("finding") or str(item)) for item in contextual_list[:2]])
+                if len(contextual_list) > 2:
+                    ctx_preview += f" +{len(contextual_list) - 2} more"
+                evidence_lines.append(f"<font color='#64748b' size='6'><b>[Context]</b> {ctx_preview}</font>")
+
+            # 5. Missing / Unassessed
+            missing_list = c.get("missing_information", []) or c.get("unknown_or_missing_information", [])
+            if missing_list:
+                miss_esc = ", ".join([_esc(str(m)) for m in missing_list[:2]])
+                evidence_lines.append(f"<font color='#94a3b8' size='6'><b>[Missing]</b> {miss_esc}</font>")
+
+            evidence_cell = "<br/>".join(evidence_lines) if evidence_lines else "—"
 
             score_value = _score(c.get("probability_score") or c.get("model_score"))
             score_text = f"Score: {score_value:.4f}" if score_value is not None else "Score not available"
@@ -528,11 +558,11 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             cond_data.append([
                 f"#{_esc(c.get('rank', 1))}",
                 f"<b>{_esc(c.get('condition', ''))}</b>{badge_line}",
-                f"{_esc(c.get('confidence_tier', 'Possible'))}<br/><font size='7' color='#64748b'>{score_text}</font>",
+                f"{_esc(c.get('confidence_tier', 'Possible'))}<br/><font size='7' color='#334155'><b>{score_text}</b></font><br/><font size='6' color='#64748b'>Scope: Symptom-based ML</font><br/><font size='5' color='#94a3b8'>Assistive pattern, not clinical prob.</font>",
                 evidence_cell,
                 _esc(c.get("suggested_specialty", "General Medicine")),
             ])
-        cond_table = Table([[Paragraph(cell, body_style) for cell in row] for row in cond_data], colWidths=[30, 140, 105, 145, 100])
+        cond_table = Table([[Paragraph(cell, body_style) for cell in row] for row in cond_data], colWidths=[25, 125, 115, 165, 90])
         cond_table.setStyle(
             TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e0e7ff")),

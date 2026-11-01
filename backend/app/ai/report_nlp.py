@@ -131,6 +131,15 @@ TARGET_TESTS: list[dict[str, Any]] = [
         "synonyms": [r"lymphocyte(?:s)?\b"],
         "domain": "hematology",
     },
+    {
+        "canonical": "Procalcitonin",
+        "synonyms": [
+            r"procalcitonin\s*\(pct\)",
+            r"procalcitonin",
+            r"\bpct\b",
+        ],
+        "domain": "inflammation",
+    },
 ]
 
 # Comprehensive clinical unit patterns ordered from most specific/compound to least specific
@@ -181,8 +190,8 @@ RANGE_REGEX = re.compile(
     r"(?:ref(?:erence)?\s*(?:range|interval)?\s*[:\s]*)?([<>]?\s*[\d,]+(?:\.\d+)?)\s*(?:-|to|[–—−\x96\u2013\u2014])\s*([\d,]+(?:\.\d+)?)",
     re.IGNORECASE,
 )
-LESS_THAN_RANGE_REGEX = re.compile(r"<\s*([\d,]+(?:\.\d+)?)")
-GREATER_THAN_RANGE_REGEX = re.compile(r">\s*([\d,]+(?:\.\d+)?)")
+LESS_THAN_RANGE_REGEX = re.compile(r"(?:<|less\s+than)\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+GREATER_THAN_RANGE_REGEX = re.compile(r"(?:>|greater\s+than|more\s+than)\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
 
 # Match explicit demo/test-data labels, not ordinary report wording such as
 # "sample collected" or a clinical sentence that happens to mention instructions.
@@ -826,6 +835,9 @@ def structure_report_text(
             ("pneumonia", "radiology", "respiratory"),
             ("consolidation", "radiology", "respiratory"),
             ("pleural effusion", "radiology", "respiratory"),
+            ("pneumothorax", "radiology", "respiratory"),
+            ("opacity", "radiology", "respiratory"),
+            ("air-space opacity", "radiology", "respiratory"),
             ("cardiomegaly", "radiology", "cardiovascular"),
             ("infiltrate", "radiology", "respiratory"),
             ("clear lungs", "radiology", "respiratory"),

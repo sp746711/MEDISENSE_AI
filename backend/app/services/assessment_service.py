@@ -1072,6 +1072,54 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
 
     for r in report_rows:
         cat = str(getattr(r, "report_category", "medical_report") or "medical_report").strip().lower()
+        struct = r.structured_findings or {}
+        if not isinstance(struct, dict):
+            struct = {}
+
+        ocr_meta = getattr(r, "ocr_metadata", None) or {}
+        if not isinstance(ocr_meta, dict):
+            ocr_meta = {}
+
+        qual_findings = struct.get("qualitative_findings") or []
+        narr_findings = struct.get("narrative_findings") or []
+
+        # Extract genuine region only when supported by source record (never fabricate)
+        rep_region = (
+            struct.get("region")
+            or struct.get("body_region")
+            or struct.get("exam_region")
+            or ocr_meta.get("report_region")
+        )
+        if not rep_region and r.extracted_text:
+            m_reg = re.search(r"(?:^|\n)\s*(?:region|body\s+region|site|anatomy)\s*[:\-]\s*([^\n\r]+)", r.extracted_text, re.IGNORECASE)
+            if m_reg:
+                cand = m_reg.group(1).lower()
+                for r_name in ["chest", "thorax", "lungs", "knee", "wrist", "spine", "cervical spine", "lumbar spine", "elbow", "ankle", "shoulder", "hip", "pelvis", "abdomen", "skull", "head"]:
+                    if r_name in cand:
+                        rep_region = r_name
+                        break
+                if not rep_region:
+                    rep_region = m_reg.group(1).strip()
+            if not rep_region:
+                m_exam = re.search(r"(?:^|\n)\s*(?:examination|exam|study|procedure)\s*[:\-]\s*([^\n\r]+)", r.extracted_text, re.IGNORECASE)
+                if m_exam:
+                    cand = m_exam.group(1).lower()
+                    for r_name in ["chest", "thorax", "lungs", "knee", "wrist", "spine", "cervical spine", "lumbar spine", "elbow", "ankle", "shoulder", "hip", "pelvis", "abdomen", "skull", "head"]:
+                        if r_name in cand:
+                            rep_region = r_name
+                            break
+
+        exam_desc = (
+            struct.get("examination")
+            or struct.get("examination_description")
+        )
+        if not exam_desc and r.extracted_text:
+            m_exam = re.search(r"(?:^|\n)\s*(?:examination|exam|study|procedure)\s*[:\-]\s*([^\n\r]+)", r.extracted_text, re.IGNORECASE)
+            if m_exam:
+                exam_desc = m_exam.group(1).strip()
+
+        ext_status = struct.get("status") or ocr_meta.get("extraction_status") or ("structured" if (qual_findings or struct.get("lab_parameters")) else "unstructured")
+
         r_entry = {
             "id": str(r.report_id),
             "report_id": str(r.report_id),
@@ -1079,7 +1127,16 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             "file_type": r.file_type,
             "report_category": cat,
             "extracted_text": r.extracted_text,
-            "structured_findings": r.structured_findings,
+            "structured_findings": struct,
+            "qualitative_findings": qual_findings,
+            "narrative_findings": narr_findings,
+            "region": rep_region,
+            "body_region": rep_region,
+            "exam_region": rep_region,
+            "examination": exam_desc,
+            "examination_description": exam_desc,
+            "extraction_status": ext_status,
+            "status": ext_status,
             "created_at": r.created_at.isoformat() if r.created_at else None,
             "source_type": "XRAY_REPORT" if cat == "xray_report" else "MEDICAL_REPORT",
             "source_file": r.file_name,

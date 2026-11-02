@@ -695,9 +695,16 @@ def generate_assessment_feedback(
     suggested_spec = (
         specialty.get("suggested_specialty") if isinstance(specialty, dict) else specialty
     ) or "General Physician / Internal Medicine"
+    has_headache_present = any(s.get("symptom") in {"headache", "migraine"} or s.get("body_area") in {"head", "brain"} for s in present)
     is_resp = any(s.get("domain") == "respiratory" or s.get("symptom") in {"cough", "sore throat", "chest discomfort", "shortness of breath"} for s in present)
-    is_neuro = any(s.get("domain") == "neurological" or s.get("symptom") in {"headache", "migraine", "photophobia", "phonophobia"} for s in present)
     is_msk = any(s.get("domain") in {"musculoskeletal", "injury/trauma"} or s.get("body_area") in {"wrist", "hand", "knee", "ankle"} for s in present)
+    is_ortho_or_msk = suggested_spec in {"Orthopedics", "Orthopedics / Sports Medicine"} or (is_msk and not has_headache_present)
+    is_neuro = has_headache_present or (
+        not is_ortho_or_msk and (
+            any(s.get("domain") == "neurological" or s.get("symptom") in {"headache", "migraine", "photophobia", "phonophobia", "dizziness"} for s in present)
+            or suggested_spec in {"Neurology", "Neurologist"}
+        )
+    )
 
     # Safety priority: specialty-specific wording must never replace an emergency
     # pathway or downgrade an unresolved triage result to MILD.
@@ -717,12 +724,12 @@ def generate_assessment_feedback(
     elif pathway_normalized in {"NOT_DETERMINED", "UNKNOWN", "INSUFFICIENT_EVIDENCE", "CONFLICTING_EVIDENCE"}:
         # Preserve any safety-question prompt from deterministic triage, while
         # adding the symptom domain so guidance remains specific to the case.
-        if is_resp:
+        if is_ortho_or_msk:
+            guidance_context = "Reported musculoskeletal symptoms need context-specific review. "
+        elif is_resp:
             guidance_context = "Reported respiratory symptoms need context-specific review. "
         elif is_neuro:
             guidance_context = "Reported neurological symptoms need context-specific review. "
-        elif is_msk:
-            guidance_context = "Reported musculoskeletal symptoms need context-specific review. "
         else:
             guidance_context = ""
         dynamic_guidance = guidance_context + (
@@ -733,6 +740,15 @@ def generate_assessment_feedback(
             triage_result.get("next_steps")
             or "Provide the requested missing information and contact a healthcare professional for assessment. If symptoms are severe or rapidly worsening, seek urgent medical care."
         )
+    elif is_ortho_or_msk:
+        dynamic_guidance = "Orthopedic evaluation is advised to assess joint mobility, localized swelling, and structural integrity following trauma or limb strain."
+        abn_text = ""
+        if abnormal_rep:
+            abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
+            abn_text = f" Discuss the recorded abnormal laboratory findings with your clinician: {abn_list}."
+        dynamic_action = f"Consult with an orthopedic specialist ({suggested_spec}). If imaging was obtained ({xray_region_label}), present direct radiographic images for clinical assessment.{abn_text}"
+        if xray_status == "UNAVAILABLE":
+            dynamic_action += f" Note: Automated interpretation for the selected {xray_region} X-ray was unavailable; bring physical films for physician review."
     elif is_resp:
         dynamic_guidance = "Clinical consultation is advised for professional evaluation of persistent respiratory symptoms. Provided laboratory and imaging reports should be reviewed by your clinician."
         if abnormal_rep:
@@ -745,17 +761,21 @@ def generate_assessment_feedback(
         if xray_status == "UNAVAILABLE":
             dynamic_action += f" Note: Automated interpretation for the selected {xray_region} X-ray was unavailable; bring physical films for physician review."
     elif is_neuro:
-        dynamic_guidance = f"Comprehensive clinical evaluation is recommended for the acute headache pattern with a specialist ({suggested_spec})."
-        if abnormal_rep:
-            abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
-            dynamic_action = f"Schedule an in-person consultation with a neurologist. Discuss the recorded abnormal laboratory findings with your clinician: {abn_list}."
-        elif normal_rep:
-            dynamic_action = "Schedule an in-person consultation with a neurologist. Available laboratory values are within the supplied reference ranges. Clinical evaluation should focus on the current headache pattern and associated symptoms."
+        if has_headache_present:
+            dynamic_guidance = f"Comprehensive clinical evaluation is recommended for the acute headache pattern with a specialist ({suggested_spec})."
+            if abnormal_rep:
+                abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
+                dynamic_action = f"Schedule an in-person consultation with a neurologist. Discuss the recorded abnormal laboratory findings with your clinician: {abn_list}."
+            elif normal_rep:
+                dynamic_action = "Schedule an in-person consultation with a neurologist. Available laboratory values are within the supplied reference ranges. Clinical evaluation should focus on the current headache pattern and associated symptoms."
+            else:
+                dynamic_action = "Schedule an in-person consultation with a neurologist. Clinical evaluation should focus on the current headache pattern and associated symptoms."
         else:
-            dynamic_action = "Schedule an in-person consultation with a neurologist. Clinical evaluation should focus on the current headache pattern and associated symptoms."
-    elif is_msk:
-        dynamic_guidance = "Orthopedic evaluation is advised to assess joint mobility, localized swelling, and structural integrity following trauma or limb strain."
-        dynamic_action = f"Consult with an orthopedic specialist ({suggested_spec}). If imaging was obtained ({xray_region_label}), present direct radiographic images for clinical assessment."
+            dynamic_guidance = f"Comprehensive clinical evaluation is recommended with a specialist ({suggested_spec})."
+            dynamic_action = f"Schedule an in-person consultation with a specialist ({suggested_spec})."
+            if abnormal_rep:
+                abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
+                dynamic_action += f" Discuss the recorded abnormal laboratory findings with your clinician: {abn_list}."
     else:
         dynamic_guidance = triage_result.get("guidance") or f"Consult with a specialist ({suggested_spec}) or general physician, and review your findings."
         dynamic_action = triage_result.get("next_steps") or "Schedule in-person medical evaluation and bring all available medical records."
@@ -1118,7 +1138,12 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             if m_exam:
                 exam_desc = m_exam.group(1).strip()
 
-        lab_findings = struct.get("lab_parameters") or struct.get("findings") or []
+        lab_findings = (
+            struct.get("lab_parameters")
+            or struct.get("findings")
+            or (struct.get("abnormal_findings", []) + struct.get("normal_findings", []))
+            or []
+        )
         ext_status = struct.get("status") or ocr_meta.get("extraction_status") or ("structured" if (qual_findings or lab_findings) else "unstructured")
 
         r_entry = {
@@ -1153,7 +1178,12 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
         if cat != "xray_report":
             struct = r.structured_findings or {}
             if isinstance(struct, dict):
-                lab_params = struct.get("lab_parameters") or struct.get("findings") or []
+                lab_params = (
+                    struct.get("lab_parameters")
+                    or struct.get("findings")
+                    or (struct.get("abnormal_findings", []) + struct.get("normal_findings", []))
+                    or []
+                )
                 for l in lab_params:
                     if isinstance(l, dict):
                         l_copy = dict(l)
@@ -1400,15 +1430,83 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
             condition_predictions["multimodal_blocker_reason"] = multimodal_result.get("message")
 
         # Record modalities submitted vs processed vs reconciled
-        condition_predictions["modalities_submitted"] = [
+        selected_mods = list(assessment.input_types or [])
+        processed_mods = [
             m for m, active in [
                 ("symptoms", bool(patient_record.symptoms or evidence.get("symptoms", {}).get("present"))),
                 ("laboratory", bool(patient_record.laboratory)),
                 ("radiology_reports", bool(patient_record.radiology)),
                 ("clinical_examination", bool(patient_record.clinical_examination)),
-                ("xray_images", bool(any(s.is_pathology_eligible for s in patient_record.xray_studies) or (patient_record.xray and patient_record.xray.is_pathology_eligible))),
+                ("xray_images", bool(patient_record.xray_studies or patient_record.xray)),
             ] if active
         ]
+        # Map modality mask directly from verified tensor bundle (Task 2)
+        mask_list = tensor_bundle["modality_mask"].squeeze(0).tolist()
+        mod_index_map = {
+            0: "symptoms",
+            1: "laboratory",
+            2: "radiology_reports",
+            3: "xray_images",
+            4: "clinical_examination",
+        }
+        eligible_mods = [mod_index_map[i] for i, m_val in enumerate(mask_list) if m_val > 0.0]
+
+        used_by_ml = (
+            eligible_mods
+            if condition_predictions.get("is_multimodal_ml_active")
+            else (["symptoms"] if "symptoms" in eligible_mods else [])
+        )
+
+        excluded_mods = []
+        exclusion_reasons = {}
+        for m in selected_mods:
+            if m not in processed_mods:
+                excluded_mods.append(m)
+                exclusion_reasons[m] = "Not provided or unreadable"
+        for s in patient_record.provenance.get("unverified_studies", []):
+            if "xray_images" not in excluded_mods and "xray_images" not in eligible_mods:
+                excluded_mods.append("xray_images")
+            exclusion_reasons["xray_unverified_anatomy"] = f"Study {s} excluded: anatomy unverified or confirmation pending."
+        for s in patient_record.provenance.get("mismatched_studies", []):
+            if "xray_images" not in excluded_mods and "xray_images" not in eligible_mods:
+                excluded_mods.append("xray_images")
+            exclusion_reasons["xray_region_mismatch"] = f"Study {s} excluded: body region conflicts with associated radiology report."
+
+        # Compute granular modality states (Task 2)
+        modality_states = {}
+        for mod in ["symptoms", "laboratory", "radiology_reports", "xray_images", "clinical_examination"]:
+            if mod in eligible_mods:
+                modality_states[mod] = "ELIGIBLE"
+            elif mod in processed_mods:
+                if mod == "xray_images":
+                    if patient_record.provenance.get("unverified_studies"):
+                        modality_states[mod] = "UNVERIFIED"
+                    elif patient_record.provenance.get("mismatched_studies"):
+                        modality_states[mod] = "EXCLUDED"
+                    else:
+                        modality_states[mod] = "UNSUPPORTED"
+                else:
+                    modality_states[mod] = "EXCLUDED"
+            elif mod in selected_mods:
+                modality_states[mod] = "FAILED"
+            else:
+                modality_states[mod] = "NOT_PROVIDED"
+
+        condition_predictions["selected_modalities"] = selected_mods
+        condition_predictions["modalities_submitted"] = processed_mods
+        condition_predictions["modalities_processed"] = processed_mods
+        condition_predictions["verified_eligible_modalities"] = eligible_mods
+        condition_predictions["actual_modalities_used_by_ml"] = used_by_ml
+        condition_predictions["modalities_used_by_ml"] = used_by_ml
+        condition_predictions["excluded_modalities"] = list(dict.fromkeys(excluded_mods))
+        condition_predictions["exclusion_reasons"] = exclusion_reasons
+        condition_predictions["modality_states"] = modality_states
+        condition_predictions["model_version"] = condition_predictions.get("active_model_name", "condition_pred_v2.0-calibrated_logistic")
+        condition_predictions["checkpoint_version"] = multimodal_svc.checkpoint_path.name if multimodal_svc.checkpoint_path else "none_unimodal_baseline"
+        condition_predictions["feature_schema_version"] = "2.2.0"
+        condition_predictions["prediction_status"] = condition_predictions.get("status", "completed")
+        condition_predictions["fallback_status"] = "none" if condition_predictions.get("is_multimodal_ml_active") else "active_unimodal_symptom_baseline"
+
         condition_predictions["multimodal_record_summary"] = {
             "symptom_count": len(patient_record.symptoms),
             "lab_parameter_count": len(patient_record.laboratory),

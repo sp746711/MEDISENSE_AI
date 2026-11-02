@@ -166,8 +166,8 @@ def test_12_medical_report_values_extracted_only_when_actually_present():
 
 def test_13_xray_unavailable_status_preserved_when_model_unavailable():
     srv = XRayModelService()
-    # No checkpoint is configured
-    analysis = srv.analyze("uploads/xrays/d493d20c2f484383bbfc263a5b180671.png")
+    # No checkpoint is configured for knee
+    analysis = srv.analyze("uploads/xrays/d493d20c2f484383bbfc263a5b180671.png", region="knee")
     assert analysis["status"] == "unavailable"
     assert analysis["prediction"] is None
     assert "unavailable" in analysis["message"].lower()

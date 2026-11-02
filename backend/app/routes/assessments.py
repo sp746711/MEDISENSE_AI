@@ -12,9 +12,11 @@ from app.schemas.assessment import AssessmentCreateRequest, AssessmentResponse
 router = APIRouter(prefix="/assessments", tags=["Assessments"])
 
 # Keep these values aligned with AssessmentCreateRequest and the frontend.
-# Lab/CBC and radiology-report PDFs are represented by medical_report;
-# image-based X-ray inference is represented by xray.
-ALLOWED_INPUT_TYPES = {"symptoms", "medical_report", "xray"}
+# Lab/CBC and general lab reports are represented by medical_report;
+# radiology-report PDFs are accepted as either radiology_report or medical_report;
+# image-based X-ray inference is represented by xray;
+# physical clinical examination is represented by clinical_examination.
+ALLOWED_INPUT_TYPES = {"symptoms", "medical_report", "xray", "radiology_report", "clinical_examination"}
 RESULT_READY_STATUSES = {
     "completed",
     "insufficient_evidence",
@@ -29,7 +31,7 @@ def _normalize_input_types(input_types: list[str] | None) -> list[str]:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=(
                 "input_types must be a non-empty subset of: "
-                "symptoms, medical_report, xray"
+                "symptoms, medical_report, xray, radiology_report, clinical_examination"
             ),
         )
 
@@ -49,7 +51,7 @@ def _normalize_input_types(input_types: list[str] | None) -> list[str]:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
                     "input_types must be a non-empty subset of: "
-                    "symptoms, medical_report, xray"
+                    "symptoms, medical_report, xray, radiology_report, clinical_examination"
                 ),
             )
 

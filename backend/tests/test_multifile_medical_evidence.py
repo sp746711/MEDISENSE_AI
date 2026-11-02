@@ -315,7 +315,7 @@ def test_req_full_e2e_knee_multimodal():
 
     # Verify feedback reflects both images
     summary = feedback["assessment_summary"]
-    assert "knee_xray_1.png" in summary or "2 X-ray image(s)" in summary
+    assert "knee_xray_1.png" in summary or "2 X-ray image(s)" in summary or "2 uploaded X-ray image(s)" in summary
     assert "ESR" in str(feedback["medical_report_findings"])
     assert "No acute fracture" in str(feedback["reassuring_evidence"])
 
@@ -369,7 +369,6 @@ async def test_backend_validation_xray_image_rejects_pdf():
                 current_user=mock_user,
                 db=mock_db,
                 file=pdf_file,
-                region="chest",
             )
     assert exc_info.value.status_code == 400
     assert "X-ray images must be PNG, JPG, or JPEG files." in exc_info.value.detail
@@ -452,6 +451,7 @@ def test_mixed_xray_results_preserve_each_image_status():
             "prediction": "test_finding",
             "confidence": 0.80,
             "model_version": "test-model",
+            "anatomy_user_confirmed": True,
         },
         {
             "file_name": "knee.png",

@@ -308,7 +308,7 @@ def test_case_comparisons_and_differing_feedback():
     assert "within standard reference ranges" in fb_norm["assessment_summary"]
 
     # 24. Unavailable X-ray vs valid X-ray
-    xray_valid = {"status": "COMPLETED", "region": "chest", "prediction": "Consolidation pattern"}
+    xray_valid = {"status": "COMPLETED", "region": "chest", "prediction": "Consolidation pattern", "anatomy_user_confirmed": True}
     xray_unavail = {"status": "UNAVAILABLE", "region": "chest", "prediction": None}
     ev_x_valid = combine_evidence(symptoms=sym_b, report_findings=[], xray_result=xray_valid)
     ev_x_unavail = combine_evidence(symptoms=sym_b, report_findings=[], xray_result=xray_unavail)

@@ -598,10 +598,14 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
             badges = c.get("evidence_badges", [])
             badge_line = f"<br/><font size='6' color='#475569'><i>{' • '.join([_esc(b) for b in badges[:2]])}</i></font>" if badges else ""
 
+            pred_meta = _safe_dict(res_payload.get("condition_predictions"))
+            is_mm_active = bool(pred_meta.get("is_multimodal_ml_active"))
+            scope_text = "Scope: Multimodal GMU ML" if is_mm_active else "Scope: Symptom-based ML"
+
             cond_data.append([
                 f"#{_esc(c.get('rank', 1))}",
                 f"<b>{_esc(c.get('condition', ''))}</b>{badge_line}",
-                f"{_esc(c.get('confidence_tier', 'Possible'))}<br/><font size='7' color='#334155'><b>{score_text}</b></font><br/><font size='6' color='#64748b'>Scope: Symptom-based ML</font><br/><font size='5' color='#94a3b8'>Assistive pattern, not clinical prob.</font>",
+                f"{_esc(c.get('confidence_tier', 'Possible'))}<br/><font size='7' color='#334155'><b>{score_text}</b></font><br/><font size='6' color='#64748b'>{scope_text}</font><br/><font size='5' color='#94a3b8'>Assistive pattern, not clinical prob.</font>",
                 evidence_cell,
                 _esc(c.get("suggested_specialty", "General Medicine")),
             ])
@@ -617,6 +621,12 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
         )
         story.append(cond_table)
         story.append(Spacer(1, 3))
+        if is_mm_active:
+            mods_used = ", ".join(pred_meta.get("actual_modalities_used_by_ml", []))
+            model_ver = pred_meta.get("model_version", "multimodal_gmu_v2.2")
+            story.append(Paragraph(f"<b>Prediction Pipeline:</b> Genuine 5-Modality GMU Neural Model ({_esc(model_ver)}) fusing active modalities: {_esc(mods_used)}.", subtitle_style))
+        else:
+            story.append(Paragraph("<b>Prediction Pipeline:</b> Calibrated Unimodal Symptom Baseline with Multimodal Evidence Reconciliation (Multimodal GMU model blocked_untrained pending credentialed PhysioNet DUA data).", subtitle_style))
         story.append(Paragraph("<i>Note: Machine learning condition predictions are assistive statistical patterns for physician consultation; they do NOT constitute a medical diagnosis.</i>", subtitle_style))
         story.append(Spacer(1, 8))
     elif cond_status == "unsupported_condition":

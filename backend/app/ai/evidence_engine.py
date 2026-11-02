@@ -1056,14 +1056,36 @@ def combine_evidence(
         if not processed_images:
             verification_status = "REPORT_ONLY"
             mismatch_regions: list[dict[str, str]] = []
-        elif not linked_images:
-            verification_status = "UNPAIRED" if report_region else "UNVERIFIED"
-            mismatch_regions = []
         elif not report_region or region_source in {"filename_fallback", "ambiguous_report_text", "ambiguous_filename"}:
-            # A filename can suggest a region, but it is not reliable enough to
-            # establish agreement or a mismatch between a report and an image.
             verification_status = "UNVERIFIED"
             mismatch_regions = []
+        elif not linked_images:
+            # When there are no explicit link records, check if processed images conflict with report region
+            unpaired_mismatches = [
+                {"image_file": str(img.get("file_name") or "xray_image"), "image_region": normalized_image_regions.get(str(img.get("file_name") or "xray_image")) or "unknown", "report_region": report_region}
+                for img in processed_images
+                if normalized_image_regions.get(str(img.get("file_name") or "xray_image")) and normalized_image_regions.get(str(img.get("file_name") or "xray_image")) != report_region
+            ]
+            if unpaired_mismatches:
+                verification_status = "MISMATCH"
+                mismatch_regions = unpaired_mismatches
+                has_region_mismatch = True
+                for item in mismatch_regions:
+                    mismatched_image_files.add(item["image_file"])
+                    contradictory.append(
+                        f"Conflicting evidence / body region mismatch: image '{item['image_file']}' is declared as '{item['image_region']}', "
+                        f"but report '{report.get('file_name')}' identifies '{report_region}'. Keep these sources separate and correct the region/report pairing."
+                    )
+                    evidence_relationships.append({
+                        "source_a": f"xray_image ({item['image_file']})",
+                        "source_b": f"xray_report ({report.get('file_name')})",
+                        "finding": "body_region_mismatch",
+                        "relationship": "CONFLICTING",
+                        "reason": f"Image declared region '{item['image_region']}' differs from report-identified region '{report_region}' (source: {region_source}).",
+                    })
+            else:
+                verification_status = "UNPAIRED"
+                mismatch_regions = []
         else:
             mismatch_regions = [
                 {"image_file": name, "image_region": normalized_image_regions.get(name) or "unknown", "report_region": report_region}

@@ -11,7 +11,7 @@ class AssessmentCreateRequest(BaseModel):
     input_types: List[str] = Field(
         ...,
         min_length=1,
-        description="Subset of: symptoms, medical_report, xray",
+        description="Subset of: symptoms, medical_report, xray, radiology_report, clinical_examination",
     )
 
 

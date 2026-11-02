@@ -283,7 +283,18 @@ class AuthenticMultimodalDatasetIngester:
             unique_encounters.add(hadm_id)
             class_dist[canonical_target] = class_dist.get(canonical_target, 0) + 1
 
-            # Build standardized linked record payload
+            raw_tokens = list(rec.get("symptom_tokens") or [])
+            if len(raw_tokens) < 128:
+                sym_tokens = raw_tokens + [0] * (128 - len(raw_tokens))
+            else:
+                sym_tokens = raw_tokens[:128]
+
+            raw_feats = list(rec.get("symptom_features") or [])
+            if len(raw_feats) < 128:
+                sym_feats = raw_feats + [[0.0] * 6 for _ in range(128 - len(raw_feats))]
+            else:
+                sym_feats = raw_feats[:128]
+
             standardized_rec = {
                 "subject_id": subject_id,
                 "hadm_id": hadm_id,
@@ -291,8 +302,8 @@ class AuthenticMultimodalDatasetIngester:
                 "target_condition": canonical_target,
                 "target_class_idx": target_class_idx,
                 "raw_target": raw_target,
-                "symptom_tokens": rec.get("symptom_tokens", [0] * 32),
-                "symptom_features": rec.get("symptom_features", [[0.0] * 6 for _ in range(32)]),
+                "symptom_tokens": sym_tokens,
+                "symptom_features": sym_feats,
                 "lab_features": rec.get("lab_features", [0.0] * (len(CANONICAL_LAB_TESTS) * 5)),
                 "rad_features": rec.get("rad_features", [0.0] * (len(CANONICAL_RAD_FINDINGS) * 4)),
                 "exam_features": rec.get("exam_features", [0.0] * (len(CANONICAL_CLINICAL_EXAM_FINDINGS) * 3)),

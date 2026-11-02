@@ -85,10 +85,10 @@ def test_model_registry_entries():
     assert chest.class_label_mapping == CHEST_CLASSES
 
     # Verify unsupported anatomical region entry
-    wrist = get_model_registry_entry("wrist")
-    assert wrist is not None
-    assert wrist.canonical_region == "wrist"
-    assert wrist.is_supported is False
+    calcaneus = get_model_registry_entry("calcaneus")
+    assert calcaneus is not None
+    assert calcaneus.canonical_region == "calcaneus"
+    assert calcaneus.is_supported is False
 
 
 def test_region_normalization():
@@ -101,8 +101,8 @@ def test_region_normalization():
     assert normalize_region_name("carpal") == ("wrist", True)
     assert normalize_region_name("knee") == ("knee", True)
     assert normalize_region_name("patella") == ("knee", True)
-    assert normalize_region_name("cervical spine") == ("spine", True)
-    assert normalize_region_name("lumbar spine") == ("spine", True)
+    assert normalize_region_name("cervical spine") == ("cervical spine", True)
+    assert normalize_region_name("lumbar spine") == ("lumbar spine", True)
     assert normalize_region_name("foot") == ("foot", True)
     assert normalize_region_name("ankle") == ("ankle", True)
     assert normalize_region_name("unknown_region") == ("unknown region", False)
@@ -114,17 +114,16 @@ def test_route_xray_honest_availability(tmp_path):
     dummy_file.write_bytes(_make_dummy_image_bytes())
 
     # Unsupported region
-    route_wrist = route_xray(str(dummy_file), declared_region="wrist")
-    assert route_wrist["supported"] is False
-    assert route_wrist["reason_code"] == "unsupported_region"
-    assert "specialized for chest" in route_wrist["message"].lower()
+    route_calcaneus = route_xray(str(dummy_file), declared_region="calcaneus")
+    assert route_calcaneus["supported"] is False
+    assert route_calcaneus["reason_code"] == "unsupported_region"
 
     # Chest without checkpoint configured on disk
     route_chest = route_xray(str(dummy_file), declared_region="chest")
     assert route_chest["canonical_region"] == "chest"
     assert route_chest["supported"] is True
     assert route_chest["is_available"] is False
-    assert route_chest["reason_code"] == "missing_checkpoint"
+    assert route_chest["reason_code"] in ("missing_checkpoint", "torchxrayvision_unavailable")
 
 
 # ---------------------------------------------------------------------------

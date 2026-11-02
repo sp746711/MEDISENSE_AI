@@ -498,12 +498,30 @@ def test_15_xray_images_separate_from_report_ocr(client, auth_user, auth_token, 
     assert "X-ray reports must be PDF files" in res_report_route.json()["detail"]
 
     # In contrast, the dedicated X-ray image endpoint accepts PNG/JPG image
-    res_xray_route = client.post(
-        f"/api/assessments/{ass.assessment_id}/xray",
-        headers={"Authorization": f"Bearer {auth_token}"},
-        files={"file": ("chest_xray.png", img_bytes, "image/png")},
-        data={"region": "chest"},
-    )
+    mock_routing = {
+        "status": "completed",
+        "region": "chest",
+        "canonical_region": "chest",
+        "region_source": "user_confirmed_region",
+        "supported": True,
+        "is_available": True,
+        "anatomy_user_confirmed": True,
+        "anatomy_independently_verified": True,
+        "anatomy_verification_status": "verified",
+        "anatomy_detection": {
+            "status": "verified",
+            "candidate_body_part": "chest",
+            "confidence": 0.98,
+        },
+    }
+    from unittest.mock import patch
+    with patch("app.routes.xray.route_xray", return_value=mock_routing):
+        res_xray_route = client.post(
+            f"/api/assessments/{ass.assessment_id}/xray",
+            headers={"Authorization": f"Bearer {auth_token}"},
+            files={"file": ("chest_xray.png", img_bytes, "image/png")},
+            data={"region": "chest"},
+        )
     assert res_xray_route.status_code in (200, 201)
     # Stored in xray_results, not medical_reports
     xray_recs = db_session.query(XrayResult).filter(XrayResult.assessment_id == ass.assessment_id).all()

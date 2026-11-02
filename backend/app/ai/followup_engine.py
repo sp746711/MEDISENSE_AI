@@ -452,27 +452,34 @@ def suggest_followups(
         or any(term in all_ctx for term in ["abdominal pain", "pain in my abdomen", "stomach pain", "belly pain", "lower right side of my abdomen", "lower-right abdominal"])
     )
 
+    has_headache = any(k in present_names for k in {"headache", "migraine"}) or any(area in {"head", "brain"} for area in present_areas)
+
+    is_msk = (
+        "musculoskeletal" in present_domains
+        or "injury/trauma" in present_domains
+        or any(area in {"wrist", "hand", "joints", "muscles", "back/spine", "knee", "ankle", "shoulder", "elbow"} for area in present_areas)
+        or any(k in present_names for k in {"knee pain", "medial knee pain", "wrist pain", "wrist injury", "fall/trauma", "swelling", "tenderness", "back pain", "arthralgia", "morning stiffness", "joint clicking/catching", "joint locking", "trauma/injury"})
+    )
+
     is_neuro = (
-        "neurological" in present_domains
-        or any(area in {"head", "brain"} for area in present_areas)
-        or any(k in present_names for k in {"headache", "migraine", "dizziness", "photophobia", "phonophobia"})
+        has_headache
+        or (
+            not is_msk and (
+                "neurological" in present_domains
+                or any(area in {"head", "brain"} for area in present_areas)
+                or any(k in present_names for k in {"headache", "migraine", "dizziness", "photophobia", "phonophobia", "confusion", "slurred speech"})
+            )
+        )
     )
 
     is_abdominal = has_abdominal_pain or (
-        not is_neuro and (
+        not is_neuro and not is_msk and (
             "gi" in present_domains
             or "gastrointestinal" in present_domains
             or "abdominal" in present_domains
             or any(area in {"abdomen", "digestive system", "stomach", "bowel"} for area in present_areas)
             or any(k in present_names for k in {"vomiting", "diarrhea", "cramps"})
         )
-    )
-
-    is_msk = (
-        "musculoskeletal" in present_domains
-        or "injury/trauma" in present_domains
-        or any(area in {"wrist", "hand", "joints", "muscles", "back/spine", "knee", "ankle", "shoulder", "elbow"} for area in present_areas)
-        or any(k in present_names for k in {"wrist pain", "wrist injury", "fall/trauma", "swelling", "tenderness", "back pain", "arthralgia"})
     )
 
     is_respiratory = (
@@ -535,9 +542,9 @@ def suggest_followups(
 
     # 4. Musculoskeletal presentation sufficiency:
     if is_msk and not is_abdominal and not is_respiratory:
-        has_numb = is_target_addressed("numbness", all_symptoms, raw_text=raw_text)
         has_mov = is_target_addressed("reduced movement", all_symptoms, raw_text=raw_text)
-        if has_numb and has_mov and has_duration:
+        has_mech = is_target_addressed("fall/trauma", all_symptoms, raw_text=raw_text)
+        if has_mov and has_mech and has_duration:
             return {
                 "needed": False,
                 "questions": [],
@@ -587,10 +594,45 @@ def suggest_followups(
         if not is_target_addressed("blood in stool", all_symptoms, raw_text=raw_text):
             add_candidate("q_gi_bleeding", 60)
 
+    elif is_msk and not has_headache:
+        # Musculoskeletal / Knee / Ankle candidates
+        if "knee" in present_areas or any("knee" in k for k in present_names):
+            msk_primary = "knee pain"
+            if not is_target_addressed("reduced movement", all_symptoms, raw_text=raw_text):
+                add_candidate("q_limb_movement", 95, custom_question="Are you able to bend and move your knee normally, or is movement reduced?")
+            if not is_target_addressed("fall/trauma", all_symptoms, raw_text=raw_text):
+                add_candidate("q_injury_mechanism", 90, custom_question="Did this knee injury occur from a twisting motion, sports collision, or sudden impact?")
+            if not is_target_addressed("severe swelling/deformity", all_symptoms, raw_text=raw_text):
+                add_candidate("q_severe_deformity", 85, custom_question="Is there severe visible deformity, rapid tense swelling, or inability to bear weight on the knee?")
+            if not has_duration:
+                add_candidate("q_duration", 80, target_symptom=msk_primary, custom_question="Approximately how long have you had this knee pain?")
+        elif "ankle" in present_areas or any("ankle" in k for k in present_names):
+            msk_primary = "ankle pain"
+            if not is_target_addressed("reduced movement", all_symptoms, raw_text=raw_text):
+                add_candidate("q_limb_movement", 95, custom_question="Are you able to bear weight and move your ankle normally, or is movement reduced?")
+            if not is_target_addressed("fall/trauma", all_symptoms, raw_text=raw_text):
+                add_candidate("q_injury_mechanism", 90, custom_question="Did this ankle injury occur from a twisting/rolling motion, sports collision, or direct impact?")
+            if not is_target_addressed("severe swelling/deformity", all_symptoms, raw_text=raw_text):
+                add_candidate("q_severe_deformity", 85, custom_question="Is there severe visible deformity, rapid swelling, or inability to take four steps?")
+            if not has_duration:
+                add_candidate("q_duration", 80, target_symptom=msk_primary, custom_question="Approximately how long have you had this ankle pain?")
+        else:
+            msk_primary = "wrist pain" if "wrist pain" in present_names else "joint pain"
+            if not is_target_addressed("numbness", all_symptoms, raw_text=raw_text):
+                add_candidate("q_numbness_tingling", 95)
+            if not is_target_addressed("reduced movement", all_symptoms, raw_text=raw_text):
+                add_candidate("q_limb_movement", 90)
+            if not is_target_addressed("fall/trauma", all_symptoms, raw_text=raw_text):
+                add_candidate("q_injury_mechanism", 85)
+            if not has_duration:
+                add_candidate("q_duration", 80, target_symptom=msk_primary)
+            if not is_target_addressed("severe swelling/deformity", all_symptoms, raw_text=raw_text):
+                add_candidate("q_severe_deformity", 70)
+
     elif is_neuro:
-        # Headache / Neurological candidates
+        # Headache / Neurological candidates - ONLY when headache or neurological presentation is active
         neuro_primary = "headache" if "headache" in present_names or "migraine" in present_names else "headache"
-        if not is_target_addressed("sudden onset", all_symptoms, raw_text=raw_text):
+        if has_headache and not is_target_addressed("sudden onset", all_symptoms, raw_text=raw_text):
             add_candidate("q_sudden_onset", 100, target_symptom=neuro_primary)
         if not is_target_addressed("numbness", all_symptoms, raw_text=raw_text):
             add_candidate("q_neuro_weakness", 95)
@@ -604,20 +646,6 @@ def suggest_followups(
             add_candidate("q_vomiting", 70)
         if not is_target_addressed("fever", all_symptoms, raw_text=raw_text):
             add_candidate("q_fever", 60)
-
-    elif is_msk:
-        # Musculoskeletal candidates
-        msk_primary = "wrist pain" if "wrist pain" in present_names else "joint pain"
-        if not is_target_addressed("numbness", all_symptoms, raw_text=raw_text):
-            add_candidate("q_numbness_tingling", 95)
-        if not is_target_addressed("reduced movement", all_symptoms, raw_text=raw_text):
-            add_candidate("q_limb_movement", 90)
-        if not is_target_addressed("fall/trauma", all_symptoms, raw_text=raw_text):
-            add_candidate("q_injury_mechanism", 85)
-        if not has_duration:
-            add_candidate("q_duration", 80, target_symptom=msk_primary)
-        if not is_target_addressed("severe swelling/deformity", all_symptoms, raw_text=raw_text):
-            add_candidate("q_severe_deformity", 70)
 
     elif is_respiratory:
         # Respiratory candidates
@@ -766,6 +794,7 @@ def _canonical_followup_target(value: str | None) -> str:
     text = re.sub(r"[^a-z0-9 ]+", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     aliases = {
+        "fall trauma": "fall/trauma",
         "shortness of breath": "difficulty breathing",
         "breathlessness": "difficulty breathing",
         "dyspnea": "difficulty breathing",

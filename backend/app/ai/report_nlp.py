@@ -140,10 +140,23 @@ TARGET_TESTS: list[dict[str, Any]] = [
         ],
         "domain": "inflammation",
     },
+    {
+        "canonical": "Erythrocyte Sedimentation Rate (ESR)",
+        "synonyms": [
+            r"erythrocyte sedimentation rate",
+            r"\besr\b",
+            r"sed\s*rate",
+            r"westergren\s*esr",
+        ],
+        "domain": "inflammation",
+    },
 ]
 
 # Comprehensive clinical unit patterns ordered from most specific/compound to least specific
 UNIT_PATTERNS = [
+    # Scaled cell count notation with ×, 10^3, 10^6, 10^9, or unicode superscripts
+    r"(?:[×x\u00d7*]?\s*10[\^]?(?:3|6|9|\u00b3|\u2076|\u2079)|\b10[\^]?(?:3|6|9|\u00b3|\u2076|\u2079))\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3|L|mL)",
+    r"(?:[×x\u00d7*]?\s*10[\^]?(?:3|6|9|\u00b3|\u2076|\u2079)|\b10[\^]?(?:3|6|9|\u00b3|\u2076|\u2079))\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3|L|mL)",
     # RBC, WBC, platelet and cell count compound units with multiplier phrases and volume
     r"(?:million\s+cells?|mil(?:lion)?|cells?|lakh)\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3)",
     r"(?:x\s*10\^?\d+|10\^?\d+|x\s*10\*\d+|10\*\d+)\s*\/\s*(?:[u\u00b5\u03bc]L|mcL|cumm|mm\^?3|L|mL)",
@@ -170,6 +183,9 @@ UNIT_PATTERNS = [
     r"IU\/L",
     r"ng\/mL",
     r"ng\/dL",
+    # Velocity / ESR units
+    r"mm\s*\/\s*h(?:ou)?r",
+    r"mm\s*\/\s*h",
     # Percentage (Hematocrit, differential counts)
     r"%",
     # Cell volume and hemoglobin weight indices
@@ -207,7 +223,17 @@ SYNTHETIC_INSTRUCTION_RE = re.compile(
 def is_synthetic_text(text: str | None) -> bool:
     if not text:
         return False
+    # If a line contains clinical findings or test names, it must not be discarded
+    clinical_keywords = re.search(
+        r"\b(?:fracture|dislocation|swelling|effusion|tenderness|edema|fullness|osseous|injury|"
+        r"wbc|platelet|crp|esr|hemoglobin|leukocyte|erythrocyte|glucose|creatinine)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if clinical_keywords:
+        return False
     return bool(SYNTHETIC_INSTRUCTION_RE.search(text))
+
 
 
 def _evaluate_range(val: float, low: Optional[float], high: Optional[float]) -> str:
@@ -843,6 +869,10 @@ def structure_report_text(
             ("clear lungs", "radiology", "respiratory"),
             ("joint effusion", "radiology", "musculoskeletal"),
             ("knee joint effusion", "radiology", "musculoskeletal"),
+            ("soft-tissue swelling", "radiology/soft_tissue", "musculoskeletal"),
+            ("soft tissue swelling", "radiology/soft_tissue", "musculoskeletal"),
+            ("periarticular soft-tissue fullness", "radiology/soft_tissue", "musculoskeletal"),
+            ("soft-tissue fullness", "radiology/soft_tissue", "musculoskeletal"),
             ("tibial plateau fracture", "radiology/bone", "musculoskeletal"),
             ("avulsion fragment", "radiology/bone", "musculoskeletal"),
             ("ossific fragment", "radiology/bone", "musculoskeletal"),
@@ -851,11 +881,6 @@ def structure_report_text(
         for term, cat, dom in resp_terms:
             state = classify_radiology_finding(cleaned_text, term)
 
-            # The report may first state that a fragment is seen, then qualify
-            # its nature or age in a nearby clause (for example, possible
-            # avulsion versus an old injury). Keep fragment findings uncertain
-            # rather than treating the fragment's cause as confirmed. Do not
-            # override an explicitly confirmed fracture elsewhere in the report.
             if (
                 term in {"ossific fragment", "avulsion fragment"}
                 and fragment_uncertainty
@@ -863,9 +888,16 @@ def structure_report_text(
             ):
                 state = "UNCERTAIN"
 
-            if state != "UNKNOWN":
+            finding_name = term
+            if term in {"soft-tissue swelling", "soft tissue swelling", "periarticular soft-tissue fullness", "soft-tissue fullness"}:
+                finding_name = "mild soft-tissue swelling" if "mild" in lower_text else "soft-tissue swelling"
+                already_has = any(q.get("finding") in {"soft-tissue swelling", "mild soft-tissue swelling"} for q in qualitative_findings)
+            else:
+                already_has = any(q.get("finding") == finding_name for q in qualitative_findings)
+
+            if state != "UNKNOWN" and not already_has:
                 qualitative_findings.append({
-                    "finding": term,
+                    "finding": finding_name,
                     "category": cat,
                     "domain": dom,
                     "state": state,

@@ -997,6 +997,19 @@ class MultimodalConditionPredictor(nn.Module):
         return logits * is_evidence_present, is_evidence_present
 
 
+class ModalityState:
+    """Standardized modality status tracking constants (Task 2)."""
+    NOT_PROVIDED = "NOT_PROVIDED"
+    NOT_ASKED = "NOT_ASKED"
+    UNAVAILABLE = "UNAVAILABLE"
+    UNSUPPORTED = "UNSUPPORTED"
+    FAILED = "FAILED"
+    UNVERIFIED = "UNVERIFIED"
+    VERIFIED = "VERIFIED"
+    ELIGIBLE = "ELIGIBLE"
+    EXCLUDED = "EXCLUDED"
+
+
 # ==============================================================================
 # FEATURE EXTRACTOR (BRIDGING RAW ASSESSMENT INPUTS TO MODEL TENSORS)
 # ==============================================================================
@@ -1019,10 +1032,10 @@ class MultimodalFeatureExtractor:
     def extract_tensors_from_record(
         cls,
         record: MultimodalPatientRecord,
-        max_symptoms: int = 32,
+        max_symptoms: int = 128,
     ) -> dict[str, torch.Tensor]:
         """Convert a MultimodalPatientRecord into verified model input tensors."""
-        # 1. Symptoms (Problem E: vocabulary-based, up to 32 symptoms, no loss of qualifiers/followups)
+        # 1. Symptoms (Problem E: vocabulary-based, up to 128 symptoms, no loss of qualifiers/followups)
         tokens = [0] * max_symptoms
         sym_feat = [[0.0] * 6 for _ in range(max_symptoms)]
         for i, sym in enumerate(record.symptoms[:max_symptoms]):
@@ -1205,11 +1218,19 @@ class MultimodalFeatureExtractor:
         xray_eligibility_t = torch.tensor([[is_xray_eligible]], dtype=torch.float32)
 
         # Modality mask: [m_sym, m_lab, m_rad, m_xray, m_exam] (5 dimensions)
-        m_sym = 1.0 if len(record.symptoms) > 0 else 0.0
-        m_lab = 1.0 if len(record.laboratory) > 0 else 0.0
-        m_rad = 1.0 if len(record.radiology) > 0 else 0.0
-        m_xray = 1.0 if is_xray_eligible > 0.0 else 0.0
-        m_exam = 1.0 if len(record.clinical_examination) > 0 else 0.0
+        # Strict validation (Task 2): Modality is ONLY active if genuine features were extracted and present.
+        # Zero-filled default vectors, unmapped tests, or unassessed findings NEVER activate fusion gates!
+        has_active_symptoms = any(tok != 0 for tok in tokens)
+        has_active_labs = any(lab_features[idx * 5 + 4] > 0.0 for idx in range(len(CANONICAL_LAB_TESTS)))
+        has_active_rad = any(rad_features[idx * 4 + 1] > 0.0 for idx in range(len(CANONICAL_RAD_FINDINGS)))
+        has_active_xray = is_xray_eligible > 0.0 and any(xray_pathology[idx * 3 + 1] > 0.0 for idx in range(len(CANONICAL_XRAY_PATHOLOGIES)))
+        has_active_exam = any(exam_features[idx * 3 + 1] > 0.0 for idx in range(len(CANONICAL_CLINICAL_EXAM_FINDINGS)))
+
+        m_sym = 1.0 if has_active_symptoms else 0.0
+        m_lab = 1.0 if has_active_labs else 0.0
+        m_rad = 1.0 if has_active_rad else 0.0
+        m_xray = 1.0 if has_active_xray else 0.0
+        m_exam = 1.0 if has_active_exam else 0.0
         modality_mask_t = torch.tensor([[m_sym, m_lab, m_rad, m_xray, m_exam]], dtype=torch.float32)
 
         return {

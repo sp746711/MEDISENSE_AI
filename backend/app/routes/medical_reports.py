@@ -203,11 +203,18 @@ async def upload_report(
         )
 
     filename = Path(file.filename or "report").name
-    if category == "xray_report" and Path(filename).suffix.lower() != ".pdf":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="X-ray reports must be PDF files.",
-        )
+    if category == "xray_report":
+        if Path(filename).suffix.lower() != ".pdf":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="X-ray reports must be PDF files.",
+            )
+        fn_lower = filename.lower()
+        if any(term in fn_lower for term in ("medical_report", "lab_report", "blood_report", "pathology_report")):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This file appears to be a general medical report. Please upload it under Medical Reports, not X-ray Reports.",
+            )
 
     settings = get_settings()
     max_bytes = int(settings.max_upload_size_mb) * 1024 * 1024

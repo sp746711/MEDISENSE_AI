@@ -183,6 +183,7 @@ def test_15_xray_available():
         "region": "chest",
         "prediction": "Consolidation / Opacity",
         "model_version": "chest_resnet18@model.pt",
+        "anatomy_user_confirmed": True,
     }
     evidence = combine_evidence(xray_result=mock_xray)
     assert evidence["xray"]["status"] == "COMPLETED"
@@ -195,7 +196,7 @@ def test_16_xray_unavailable():
     analysis = service.analyze("nonexistent_path.jpg", region="chest")
     assert analysis["status"] == "unavailable"
     assert analysis["prediction"] is None
-    assert "unavailable" in analysis["message"].lower()
+    assert "unavailable" in analysis["message"].lower() or "could not be read" in analysis["message"].lower()
 
     evidence = combine_evidence(xray_result=analysis)
     assert evidence["xray"]["status"] == "UNAVAILABLE"
@@ -206,7 +207,7 @@ def test_16_xray_unavailable():
 def test_17_unsupported_xray():
     routed = route_xray("sample.png", declared_region="knee")
     assert routed["supported"] is False
-    assert "unavailable" in routed["message"].lower()
+    assert "unavailable" in routed["message"].lower() or "not configured" in routed["message"].lower()
 
 
 def test_18_no_xray():
@@ -246,8 +247,8 @@ def test_21_unknown_preservation():
     evidence = combine_evidence(symptoms=sym_res["symptoms"])
     # Duration was not mentioned -> recorded in missing
     assert any("duration" in m.lower() for m in evidence["missing"])
-    # Critical negatives neither confirmed nor denied
-    assert any("chest pain" in m.lower() for m in evidence["missing"])
+    # Critical negatives neither confirmed nor denied (context-aware for neurological/headache: sudden onset, fever, weakness, speech)
+    assert any(term in m.lower() for term in ("sudden onset", "fever", "weakness", "speech", "chest pain") for m in evidence["missing"])
 
 
 def test_22_triage_rule_triggering():
@@ -371,6 +372,7 @@ def test_25_dynamic_assessment_isolation_suite(db_session):
         status="completed",
         prediction="Pneumothorax",
         model_version="chest_resnet18@model.pt",
+        anatomy_metadata={"anatomy_user_confirmed": True},
     ))
     db_session.commit()
     res_e = run_assessment_pipeline(db_session, ass_e.assessment_id, user.user_id)

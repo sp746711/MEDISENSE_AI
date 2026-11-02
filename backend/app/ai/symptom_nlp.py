@@ -641,6 +641,30 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "gi",
         "body_area": "abdomen",
     },
+    "abdominal cramps": {
+        "canonical": "abdominal pain",
+        "domain": "gi",
+        "body_area": "abdomen",
+        "quality": "cramping",
+    },
+    "abdominal cramp": {
+        "canonical": "abdominal pain",
+        "domain": "gi",
+        "body_area": "abdomen",
+        "quality": "cramping",
+    },
+    "stomach cramps": {
+        "canonical": "abdominal pain",
+        "domain": "gi",
+        "body_area": "abdomen",
+        "quality": "cramping",
+    },
+    "stomach cramp": {
+        "canonical": "abdominal pain",
+        "domain": "gi",
+        "body_area": "abdomen",
+        "quality": "cramping",
+    },
     "diarrhea": {
         "canonical": "diarrhea",
         "domain": "gi",
@@ -1008,6 +1032,213 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "musculoskeletal",
         "body_area": "knee",
     },
+    "medial knee pain": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "context": "medial knee pain",
+    },
+    "morning stiffness": {
+        "canonical": "morning stiffness",
+        "domain": "musculoskeletal",
+        "body_area": "joints",
+    },
+    "intermittent clicking and catching": {
+        "canonical": "joint clicking/catching",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "intermittent clicking/catching": {
+        "canonical": "joint clicking/catching",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "clicking and catching": {
+        "canonical": "joint clicking/catching",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "clicking/catching": {
+        "canonical": "joint clicking/catching",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "joint clicking": {
+        "canonical": "joint clicking/catching",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "joint catching": {
+        "canonical": "joint clicking/catching",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "twisting injury": {
+        "canonical": "trauma/injury",
+        "domain": "injury/trauma",
+        "body_area": "knee",
+        "trigger": "twisting injury while playing football",
+        "context": "twisting injury while playing football",
+    },
+    "twisted my right knee": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "RIGHT",
+        "trigger": "twisting injury",
+    },
+    "twisted right knee": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "RIGHT",
+        "trigger": "twisting injury",
+    },
+    "twisted my left knee": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "LEFT",
+        "trigger": "twisting injury",
+    },
+    "twisted left knee": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "LEFT",
+        "trigger": "twisting injury",
+    },
+    "twisted my knee": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "trigger": "twisting injury",
+    },
+    "twisted knee": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "trigger": "twisting injury",
+    },
+    "twisted my right ankle": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+        "laterality": "RIGHT",
+        "trigger": "twisting injury",
+    },
+    "twisted right ankle": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+        "laterality": "RIGHT",
+        "trigger": "twisting injury",
+    },
+    "twisted my left ankle": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+        "laterality": "LEFT",
+        "trigger": "twisting injury",
+    },
+    "twisted left ankle": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+        "laterality": "LEFT",
+        "trigger": "twisting injury",
+    },
+    "twisted my ankle": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+        "trigger": "twisting injury",
+    },
+    "twisted ankle": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+        "trigger": "twisting injury",
+    },
+    "right knee hurts": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "RIGHT",
+    },
+    "left knee hurts": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "LEFT",
+    },
+    "knee hurts": {
+        "canonical": "knee pain",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "right ankle hurts": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+        "laterality": "RIGHT",
+    },
+    "left ankle hurts": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+        "laterality": "LEFT",
+    },
+    "ankle hurts": {
+        "canonical": "ankle pain",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+    },
+    "other joint pain": {
+        "canonical": "arthralgia",
+        "domain": "musculoskeletal",
+        "body_area": "joints",
+    },
+    "pain in other joints": {
+        "canonical": "arthralgia",
+        "domain": "musculoskeletal",
+        "body_area": "joints",
+    },
+    "true locking": {
+        "canonical": "joint locking",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "joint locking": {
+        "canonical": "joint locking",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "joint instability": {
+        "canonical": "joint instability",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "instability": {
+        "canonical": "joint instability",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "redness or warmth": {
+        "canonical": "erythema/warmth",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "redness": {
+        "canonical": "erythema/warmth",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "warmth": {
+        "canonical": "erythema/warmth",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
     "ankle pain": {
         "canonical": "ankle pain",
         "domain": "musculoskeletal",
@@ -1135,9 +1366,27 @@ ONSET_PATTERNS = [
 ]
 
 DURATION_REGEX = re.compile(
-    r"\b(?:for|since|last|past)?\s*(\d+|a|an|few|several|couple of)\s*(days?|weeks?|months?|hours?|years?)\b",
+    r"\b(?:for|since|last|past|approx(?:imately)?|about|around|nearly|~)?\s*(\d+|a|an|few|several|couple of)\s*(days?|weeks?|months?|hours?|years?)\b",
     re.IGNORECASE,
 )
+
+NUMERIC_SEVERITY_REGEX = re.compile(
+    r"\b(?:severity\s*(?:is|was|of|rated|at)?\s*)?([0-9]|10)\s*(?:/|\s*out\s+of\s*)\s*10\b",
+    re.IGNORECASE,
+)
+
+
+def parse_numeric_severity(score_val: float | int) -> str:
+    """Map visual analog / numeric rating scale (0-10) to clinical severity."""
+    if score_val <= 0:
+        return "ABSENT"
+    elif score_val <= 3:
+        return "MILD"
+    elif score_val <= 6:
+        return "MODERATE"
+    else:
+        return "SEVERE"
+
 
 TEMP_REGEX = re.compile(
     r"(?:temperature|temp)[^.\n,:]*?[:\-]?\s*(\d{2,3}(?:\.\d+)?)\s*(?:[°\u00b0]?\s*([cf]|celsius|fahrenheit)|degrees?\s*([cf]|celsius|fahrenheit))?\b",
@@ -1226,7 +1475,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             clause_dur_m = DURATION_REGEX.search(clause)
             clause_duration = clause_dur_m.group(0).strip() if clause_dur_m else None
             if clause_duration:
-                clause_duration = re.sub(r"^(?:for|since|past|last)\s+", "", clause_duration, flags=re.IGNORECASE).strip()
+                clause_duration = re.sub(r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+", "", clause_duration, flags=re.IGNORECASE).strip()
 
             with_m = re.search(r"\bwith\b", clause, re.IGNORECASE)
 
@@ -1254,9 +1503,9 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     pre_dur_m = DURATION_REGEX.search(pre_sym)
 
                     if post_dur_m:
-                        sym_duration = re.sub(r"^(?:for|since|past|last)\s+", "", post_dur_m.group(0).strip(), flags=re.IGNORECASE).strip()
+                        sym_duration = re.sub(r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+", "", post_dur_m.group(0).strip(), flags=re.IGNORECASE).strip()
                     elif pre_dur_m:
-                        sym_duration = re.sub(r"^(?:for|since|past|last)\s+", "", pre_dur_m.group(0).strip(), flags=re.IGNORECASE).strip()
+                        sym_duration = re.sub(r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+", "", pre_dur_m.group(0).strip(), flags=re.IGNORECASE).strip()
                     else:
                         all_durs = list(DURATION_REGEX.finditer(clause))
                         if len(all_durs) == 1:
@@ -1270,7 +1519,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         elif all_durs:
                             closest_dur = min(all_durs, key=lambda d: min(abs(d.start() - end), abs(d.end() - start)))
                             if abs(closest_dur.start() - end) <= 70 or abs(start - closest_dur.end()) <= 70:
-                                sym_duration = re.sub(r"^(?:for|since|past|last)\s+", "", closest_dur.group(0).strip(), flags=re.IGNORECASE).strip()
+                                sym_duration = re.sub(r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+", "", closest_dur.group(0).strip(), flags=re.IGNORECASE).strip()
                             else:
                                 sym_duration = None
                         else:
@@ -1299,38 +1548,47 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         if is_uncertain:
                             break
 
-                    if not is_uncertain:
-                        if re.match(r"^\s*[:\-]?\s*(?:is\s+|seems\s+|appears\s+)?(?:not\s+sure|unsure|uncertain|possible|unconfirmed|questionable|unknown|unreported|not\s+reported|not\s+assessed|unspecified)\b", post_text, re.IGNORECASE):
-                            is_uncertain = True
+                    is_not_reported = bool(re.match(r"^\s*[:\-]?\s*(?:is\s+|was\s+|are\s+|were\s+)?(?:not\s+reported|unreported|not\s+provided|not\s+assessed)\b", post_text, re.IGNORECASE))
+                    is_not_asked = bool(re.match(r"^\s*[:\-]?\s*(?:is\s+|was\s+|are\s+|were\s+)?(?:not\s+asked)\b", post_text, re.IGNORECASE))
+                    is_unverified = bool(re.match(r"^\s*[:\-]?\s*(?:is\s+|was\s+|are\s+|were\s+)?(?:unverified|unconfirmed)\b", post_text, re.IGNORECASE))
 
-                    if is_uncertain:
+                    if is_not_reported:
+                        state = "NOT_REPORTED"
+                    elif is_not_asked:
+                        state = "NOT_ASKED"
+                    elif is_unverified:
+                        state = "UNVERIFIED"
+                    elif is_uncertain:
                         state = "UNKNOWN"
                     else:
-                        # Local negation check: only check text preceding the keyword in this specific subclause
-                        is_negated = False
-                        for neg_pat in NEGATION_PATTERNS:
-                            for neg_m in re.finditer(neg_pat, preceding, re.IGNORECASE):
-                                between = preceding[neg_m.end():]
-                                # Check if an affirmative phrase or subject assertion resets the negation
-                                if AFFIRMATIVE_RESETS.search(between):
-                                    continue
-                                if re.search(r",\s*(?:my\b|i\b|the\b|there\b|we\b)", between, re.IGNORECASE):
-                                    continue
-                                is_negated = True
-                                break
-                            if is_negated:
-                                break
-                        if not is_negated:
-                            if re.match(
-                                r"^\s*(?:[:\-]|is\s+|was\s+|are\s+|were\s+)?\s*(?:explicitly\s+)?(?:absent|none|negative|not\s+present|denied|ruled\s+out|no\s+longer\s+present)\b",
-                                post_text,
-                                re.IGNORECASE,
-                            ):
-                                is_negated = True
-                        if meta.get("explicit_state") == "ABSENT":
-                            state = "PRESENT" if is_negated else "ABSENT"
+                        if re.match(r"^\s*[:\-]?\s*(?:is\s+|seems\s+|appears\s+)?(?:not\s+sure|unsure|uncertain|possible|unconfirmed|questionable|unknown|unspecified)\b", post_text, re.IGNORECASE):
+                            state = "UNKNOWN"
                         else:
-                            state = "ABSENT" if is_negated else "PRESENT"
+                            # Local negation check: only check text preceding the keyword in this specific subclause
+                            is_negated = False
+                            for neg_pat in NEGATION_PATTERNS:
+                                for neg_m in re.finditer(neg_pat, preceding, re.IGNORECASE):
+                                    between = preceding[neg_m.end():]
+                                    # Check if an affirmative phrase or subject assertion resets the negation
+                                    if AFFIRMATIVE_RESETS.search(between):
+                                        continue
+                                    if re.search(r",\s*(?:my\b|i\b|the\b|there\b|we\b)", between, re.IGNORECASE):
+                                        continue
+                                    is_negated = True
+                                    break
+                                if is_negated:
+                                    break
+                            if not is_negated:
+                                if re.match(
+                                    r"^\s*(?:[:\-]|is\s+|was\s+|are\s+|were\s+)?\s*(?:explicitly\s+)?(?:absent|none|negative|not\s+present|denied|ruled\s+out|no\s+longer\s+present|no\b|nil\b|never\b|false\b)\b",
+                                    post_text,
+                                    re.IGNORECASE,
+                                ):
+                                    is_negated = True
+                            if meta.get("explicit_state") == "ABSENT":
+                                state = "PRESENT" if is_negated else "ABSENT"
+                            else:
+                                state = "ABSENT" if is_negated else "PRESENT"
 
                     # Severity: NEVER globally inferred. Must directly modify the symptom.
                     sev = ClinicalSeverity("UNKNOWN")
@@ -1338,26 +1596,33 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     if meta.get("explicit_severity"):
                         sev = ClinicalSeverity(meta["explicit_severity"].upper())
                     else:
+                        # 0. Numeric pain scale check (e.g. "pain severity 6/10", "6/10", "severity is 6/10")
+                        num_m = NUMERIC_SEVERITY_REGEX.search(clause)
+                        if num_m and ("pain" in canonical or canonical in {"headache", "migraine"} or meta.get("domain") in {"musculoskeletal", "general"}):
+                            score = float(num_m.group(1))
+                            sev = ClinicalSeverity(parse_numeric_severity(score))
+
                         # 1. Direct pre-modifier check (e.g. "mild fever", "severe right-sided throbbing headache", "no severe chest pain")
-                        sev_matches = list(SEVERITY_REGEX.finditer(preceding))
-                        if sev_matches:
-                            last_m = sev_matches[-1]
-                            between = preceding[last_m.end():]
-                            if not DISALLOWED_SEVERITY_INTERVENING.search(between):
-                                val = last_m.group(1).lower()
-                                if val in {"severe", "intense", "acute", "excruciating", "unbearable", "worst"}:
-                                    sev = ClinicalSeverity("SEVERE")
-                                elif val in {"moderate", "considerable", "medium", "significant"}:
-                                    sev = ClinicalSeverity("MODERATE")
-                                elif val in {"mild", "slight", "slightly", "minimal", "minor", "low", "a little", "a bit"}:
-                                    sev = ClinicalSeverity("MILD")
+                        if sev == ClinicalSeverity("UNKNOWN"):
+                            sev_matches = list(SEVERITY_REGEX.finditer(preceding))
+                            if sev_matches:
+                                last_m = sev_matches[-1]
+                                between = preceding[last_m.end():]
+                                if not DISALLOWED_SEVERITY_INTERVENING.search(between):
+                                    val = last_m.group(1).lower()
+                                    if val in {"severe", "intense", "acute", "excruciating", "unbearable", "worst"}:
+                                        sev = ClinicalSeverity("SEVERE")
+                                    elif val in {"moderate", "considerable", "medium", "significant"}:
+                                        sev = ClinicalSeverity("MODERATE")
+                                    elif val in {"mild", "slight", "slightly", "minimal", "minor", "low", "a little", "a bit"}:
+                                        sev = ClinicalSeverity("MILD")
 
                         # 2. Direct post-modifier check (predicative position, e.g. "headache is severe")
                         if sev == ClinicalSeverity("UNKNOWN"):
-                            post_text = clause[end:]
+                            post_text_sev = clause[end:]
                             post_m = re.match(
                                 r"^\s*(?:is|was|feels|became|feels\s+quite)?\s*(?:very|quite|extremely|fairly)?\s*(severe|intense|acute|excruciating|unbearable|worst|moderate|considerable|medium|significant|mild|slight|slightly|minimal|minor|low|a little|a bit)\b",
-                                post_text,
+                                post_text_sev,
                                 re.IGNORECASE,
                             )
                             if post_m:
@@ -1378,6 +1643,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     item_quality = None
                     item_trigger = None
                     item_context = None
+                    item_location = None
 
                     clause_lower = clause.lower()
 
@@ -1392,24 +1658,36 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         item_context = f"temperature around {temp_val}"
 
                     item_body_area = meta["body_area"]
-                    # Musculoskeletal & Wrist injury qualifiers
+                    # Musculoskeletal & Knee / Joint injury qualifiers
                     if meta.get("domain") in {"musculoskeletal", "injury/trauma"} and state == "PRESENT":
-                        # Use this clause only; a wrist mention elsewhere must not
-                        # change the body area of an unrelated symptom.
                         if "wrist" in clause_lower:
                             if meta.get("body_area") in {"extremity/joints", "musculoskeletal", "upper extremity", "unspecified"}:
                                 item_body_area = "wrist"
+                        elif "knee" in clause_lower or meta.get("body_area") == "knee":
+                            item_body_area = "knee"
                         if not item_laterality:
-                            if "right" in clause_lower:
+                            if "right" in clause_lower or "right knee" in full_text_lower:
                                 item_laterality = "RIGHT"
-                            elif "left" in clause_lower:
+                            elif "left" in clause_lower or "left knee" in full_text_lower:
                                 item_laterality = "LEFT"
                             else:
-                                # Laterality must be supported by the current clause.
                                 for lat_re, lat_val in LATERALITY_PATTERNS:
                                     if lat_re.search(clause):
                                         item_laterality = lat_val
                                         break
+
+                        knee_triggers = []
+                        if "stair" in full_text_lower:
+                            knee_triggers.append("stairs")
+                        if "bending" in full_text_lower:
+                            knee_triggers.append("bending")
+                        if "squatting" in full_text_lower:
+                            knee_triggers.append("squatting")
+                        if "walking" in full_text_lower:
+                            knee_triggers.append("walking")
+                        if knee_triggers and canonical in {"knee pain", "pain"}:
+                            item_trigger = f"pain on {', '.join(knee_triggers)}"
+                            item_context = f"pain on {', '.join(knee_triggers)}"
 
                         if "moving" in clause_lower or "gripping" in clause_lower:
                             item_trigger = "moving or gripping objects"
@@ -1419,6 +1697,33 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         elif "after fall" in clause_lower or "after falling" in clause_lower:
                             item_trigger = "fall"
                             item_context = "after fall"
+                        elif "twisting" in full_text_lower or "football" in full_text_lower:
+                            if canonical in {"trauma/injury", "knee pain"}:
+                                item_context = "twisting injury while playing football"
+                                if canonical == "trauma/injury":
+                                    item_trigger = "twisting injury while playing football"
+
+                    # Abdominal pain specific location qualifiers
+                    if canonical in {"abdominal pain", "stomach pain"} and state == "PRESENT":
+                        if re.search(r"\b(?:lower[- ]right|right[- ]lower|rlq)\b", clause_lower):
+                            item_location = "lower right side"
+                            item_laterality = "RIGHT"
+                            item_context = "lower right side of abdomen"
+                        elif re.search(r"\b(?:lower[- ]left|left[- ]lower|llq)\b", clause_lower):
+                            item_location = "lower left side"
+                            item_laterality = "LEFT"
+                            item_context = "lower left side of abdomen"
+                        elif re.search(r"\b(?:upper[- ]right|right[- ]upper|ruq)\b", clause_lower):
+                            item_location = "upper right side"
+                            item_laterality = "RIGHT"
+                            item_context = "upper right side of abdomen"
+                        elif re.search(r"\b(?:upper[- ]left|left[- ]upper|luq)\b", clause_lower):
+                            item_location = "upper left side"
+                            item_laterality = "LEFT"
+                            item_context = "upper left side of abdomen"
+                        elif re.search(r"\b(?:all over|generalized|diffuse)\b", clause_lower):
+                            item_location = "all over / generalized"
+                            item_context = "all over abdomen"
 
                     # Headache specific rich qualifiers
                     if canonical in {"headache", "migraine"} and state == "PRESENT":
@@ -1520,6 +1825,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         "severity": sev if state == "PRESENT" and not is_historical else None,
                         "negated_severity": negated_sev,
                         "body_area": item_body_area,
+                        "location": item_location,
                         "laterality": item_laterality,
                         "quality": item_quality,
                         "trigger": item_trigger,
@@ -1666,11 +1972,11 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             continue
         sent_lower = sent_clean.lower()
         dur_m = DURATION_REGEX.search(sent_clean)
-        if dur_m and ("symptom" in sent_lower or "started" in sent_lower):
+        if dur_m and ("symptom" in sent_lower or "started" in sent_lower or "pain" in sent_lower or "injury" in sent_lower):
             dur_str = dur_m.group(0).strip()
-            dur_val = re.sub(r"^(?:for|since|past|last)\s+", "", dur_str, flags=re.IGNORECASE).strip()
+            dur_val = re.sub(r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+", "", dur_str, flags=re.IGNORECASE).strip()
             primary_target = None
-            for candidate in ["cough", "headache", "chest pain", "wrist pain"]:
+            for candidate in ["knee pain", "wrist pain", "ankle pain", "joint pain", "cough", "headache", "chest pain", "pain"]:
                 for s in extracted:
                     if s.get("symptom", "").lower() == candidate and s.get("state") == "PRESENT":
                         primary_target = s
@@ -1679,6 +1985,21 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     break
             if primary_target and not primary_target.get("duration"):
                 primary_target["duration"] = dur_val
+
+    # Sentence-level / group-level numeric severity resolution (e.g. "Pain severity is 6/10")
+    for sent in raw_sentences:
+        sent_clean = sent.strip()
+        if not sent_clean:
+            continue
+        num_m = NUMERIC_SEVERITY_REGEX.search(sent_clean)
+        if num_m:
+            score = float(num_m.group(1))
+            num_sev = parse_numeric_severity(score)
+            for candidate in ["knee pain", "wrist pain", "ankle pain", "joint pain", "chest pain", "headache", "pain"]:
+                target_s = next((s for s in extracted if s.get("symptom", "").lower() == candidate and s.get("state") == "PRESENT"), None)
+                if target_s and (not target_s.get("severity") or target_s.get("severity") == "UNKNOWN"):
+                    target_s["severity"] = ClinicalSeverity(num_sev)
+                    break
 
     # Cough character and qualifier resolution (e.g. "mostly dry but sometimes produces a small amount of mucus")
     for s in extracted:
@@ -1707,7 +2028,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             if quals:
                 s["context"] = "; ".join(quals)
 
-    # Temperature objective finding: represent as measurement/qualifier on fever when present
+    # Temperature objective finding: represent as measurement/qualifier on fever when present, and preserve as discrete finding
     if temp_val:
         fever_symptom = next(
             (s for s in extracted if s.get("symptom") in {"fever", "high fever"}),
@@ -1718,7 +2039,8 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
             fever_symptom["context"] = f"{existing_ctx}; {temp_val}" if existing_ctx else temp_val
             fever_symptom["measurement"] = temp_val
             fever_symptom["temperature"] = temp_val
-        elif "temperature" not in seen_canonicals:
+        is_discrete_sentence = bool(re.search(r"(?:^|[\n;.!?])\s*(?:my\s+)?(?:body\s+)?(?:temperature|temp)\s*(?:is|was|around|of)?", cleaned, re.IGNORECASE))
+        if ("temperature" not in seen_canonicals) and (not fever_symptom or is_discrete_sentence):
             extracted.append({
                 "finding": "temperature",
                 "symptom": "temperature",
@@ -1757,6 +2079,29 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                 "source": "user_input",
             }
         )
+
+    # Deduplicate / reconcile specific joint pain vs generic pain
+    has_specific_present_pain = any(
+        s.get("symptom") in {"knee pain", "wrist pain", "ankle pain", "shoulder pain", "elbow pain", "headache", "chest pain"}
+        and s.get("state") == "PRESENT"
+        for s in extracted
+    )
+    if has_specific_present_pain:
+        # A single pain complaint must not become both PRESENT and ABSENT.
+        extracted = [
+            s for s in extracted
+            if not (s.get("symptom") == "pain" and s.get("state") == "ABSENT")
+        ]
+        # Remove redundant generic 'pain' with UNKNOWN duration/severity if specific knee/joint pain is present with duration/severity
+        specific_knee_pain = next(
+            (s for s in extracted if s.get("symptom") in {"knee pain", "wrist pain", "ankle pain"} and s.get("state") == "PRESENT"),
+            None,
+        )
+        if specific_knee_pain:
+            extracted = [
+                s for s in extracted
+                if not (s.get("symptom") == "pain" and s.get("state") == "PRESENT")
+            ]
 
     return {
         "status": "extracted",

@@ -226,6 +226,16 @@ def generate_assessment_pdf(assessment_id: UUID | str, db: Session) -> dict[str,
     if not negative_flags and evidence_info:
         negative_flags = _safe_list(_safe_dict(evidence_info.get("symptoms")).get("absent"))
 
+    # Fail-safe filter: Never render any finding in negative_flags if it is active in symptoms_present
+    present_lower_set = {
+        str(s.get("symptom") or s.get("finding") or "").strip().lower()
+        for s in symptoms_present
+    }
+    negative_flags = [
+        s for s in negative_flags
+        if str(s.get("symptom") or s.get("finding") or "").strip().lower() not in present_lower_set
+    ]
+
     historical_symptoms = _safe_list(feedback.get("historical_symptoms")) or _safe_list(feedback.get("historical_context"))
 
     if has_sym or symptoms_present or negative_flags or historical_symptoms:

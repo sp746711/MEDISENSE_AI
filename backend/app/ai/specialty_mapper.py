@@ -100,6 +100,8 @@ def map_evidence_to_specialty(evidence: dict[str, Any] | None) -> dict[str, Any]
             "candidates": ["General Physician", "Internal Medicine"],
             "message": "General evaluation recommended.",
             "wording": "Suggested specialty",
+            "specialty_selection_mode": "rule_based_evidence_mapping",
+            "is_ml_specialty_model": False,
         }
 
     # 1. From active present symptoms
@@ -108,11 +110,14 @@ def map_evidence_to_specialty(evidence: dict[str, Any] | None) -> dict[str, Any]
     for s in symptoms:
         s_name = s.get("symptom", "").lower()
         d = s.get("domain")
-        if s_name in {"cough", "sore throat", "shortness of breath", "wheezing"}:
+        if s_name in {"cough", "sore throat", "shortness of breath", "wheezing", "chest tightness"}:
             symptom_domains.append("respiratory")
-        elif s_name in {"headache", "migraine", "photophobia", "phonophobia"}:
+        elif s_name in {"headache", "migraine", "photophobia", "phonophobia", "facial weakness", "speech difficulty"}:
             symptom_domains.append("neurological")
-        elif s_name in {"wrist pain", "wrist injury", "fall/trauma", "wrist swelling"}:
+        elif (
+            s_name in {"wrist pain", "wrist injury", "fall/trauma", "wrist swelling", "knee pain", "medial knee pain", "joint pain", "morning stiffness", "joint clicking/catching", "reduced movement", "arthralgia"}
+            or any(part in s_name for part in ["knee", "joint", "wrist", "ankle", "shoulder", "elbow", "hip", "spine", "clicking", "stiffness", "movement"])
+        ):
             symptom_domains.append("musculoskeletal")
         elif d:
             for part in d.split("/"):
@@ -120,17 +125,35 @@ def map_evidence_to_specialty(evidence: dict[str, Any] | None) -> dict[str, Any]
                 if part_clean:
                     symptom_domains.append(part_clean)
 
-    # 2. From X-ray model
+    # 2. From X-ray image model (only if actionable prediction present)
     xray_domains: list[str] = []
     xray = evidence.get("xray") or {}
     if xray.get("prediction"):
         reg = (xray.get("region") or "").lower()
         if "chest" in reg:
             xray_domains.append("respiratory")
-        elif "bone" in reg or "joint" in reg:
+        elif any(part in reg for part in ["knee", "wrist", "bone", "joint", "elbow", "shoulder", "hand", "finger", "forearm", "humerus", "hip", "ankle"]):
             xray_domains.append("bones")
 
-    # 3. From abnormal report findings
+    # 3. From radiology report qualitative findings
+    rad_domains: list[str] = []
+    qual_findings = (
+        (evidence.get("report") or {}).get("qualitative_findings", [])
+        + (evidence.get("xray") or {}).get("qualitative_findings", [])
+    )
+    for q in qual_findings:
+        if q.get("state") in {"PRESENT", "POSITIVE"}:
+            q_dom = q.get("domain")
+            if q_dom:
+                rad_domains.append(q_dom.strip().lower())
+    for r in (evidence.get("xray") or {}).get("reports", []):
+        r_reg = (r.get("region") or "").lower()
+        if any(part in r_reg for part in ["knee", "wrist", "bone", "joint", "elbow", "shoulder", "hip", "ankle"]):
+            rad_domains.append("musculoskeletal")
+        elif "chest" in r_reg:
+            rad_domains.append("respiratory")
+
+    # 4. From abnormal laboratory report findings
     report_domains: list[str] = []
     reports = (evidence.get("report") or {}).get("abnormal_findings", [])
     for r in reports:
@@ -145,31 +168,52 @@ def map_evidence_to_specialty(evidence: dict[str, Any] | None) -> dict[str, Any]
         primary_mapping = map_specialty(specific_symptom_domains)
         primary_spec = primary_mapping["suggested_specialty"]
 
-        # Append secondary report candidates without changing the primary suggested specialty
+        # Append secondary radiology and lab candidates without changing the primary suggested specialty
         candidates = list(primary_mapping["candidates"])
-        if report_domains:
-            report_mapping = map_specialty(report_domains)
-            for c in report_mapping["candidates"]:
-                if c not in candidates:
-                    candidates.append(c)
+        for sec_domains in [rad_domains, report_domains]:
+            if sec_domains:
+                sec_mapping = map_specialty(sec_domains)
+                for c in sec_mapping["candidates"]:
+                    if c not in candidates:
+                        candidates.append(c)
 
         return {
             "suggested_specialty": primary_spec,
             "candidates": candidates,
             "message": f"Suggested specialty: {primary_spec}",
             "wording": "Suggested specialty",
+            "specialty_selection_mode": "rule_based_evidence_mapping",
+            "is_ml_specialty_model": False,
         }
 
+    if rad_domains:
+        rad_mapping = map_specialty(rad_domains)
+        res = dict(rad_mapping)
+        res["specialty_selection_mode"] = "rule_based_evidence_mapping"
+        res["is_ml_specialty_model"] = False
+        return res
+
     if xray_domains:
-        return map_specialty(xray_domains)
+        x_mapping = map_specialty(xray_domains)
+        res = dict(x_mapping)
+        res["specialty_selection_mode"] = "rule_based_evidence_mapping"
+        res["is_ml_specialty_model"] = False
+        return res
 
     if symptom_domains:
         if report_domains:
-            return map_specialty(report_domains)
-        return map_specialty(symptom_domains)
+            res = map_specialty(report_domains)
+        else:
+            res = map_specialty(symptom_domains)
+        res["specialty_selection_mode"] = "rule_based_evidence_mapping"
+        res["is_ml_specialty_model"] = False
+        return res
 
     if report_domains:
-        return map_specialty(report_domains)
+        res = map_specialty(report_domains)
+        res["specialty_selection_mode"] = "rule_based_evidence_mapping"
+        res["is_ml_specialty_model"] = False
+        return res
 
     normal_reports = (evidence.get("report") or {}).get("normal_findings", [])
     if normal_reports:
@@ -178,6 +222,11 @@ def map_evidence_to_specialty(evidence: dict[str, Any] | None) -> dict[str, Any]
             "candidates": ["General Physician", "Internal Medicine"],
             "message": "Routine preventive check / General Physician consultation.",
             "wording": "Suggested specialty",
+            "specialty_selection_mode": "rule_based_evidence_mapping",
+            "is_ml_specialty_model": False,
         }
 
-    return map_specialty(["general"])
+    res = map_specialty(["general"])
+    res["specialty_selection_mode"] = "rule_based_evidence_mapping"
+    res["is_ml_specialty_model"] = False
+    return res

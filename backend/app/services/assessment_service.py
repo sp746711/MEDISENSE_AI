@@ -640,6 +640,10 @@ def generate_assessment_feedback(
             if contra_msg not in contradictory_evidence:
                 contradictory_evidence.append(contra_msg)
 
+    present_symptom_names = {
+        str(s.get("symptom") or s.get("finding") or "").strip().lower()
+        for s in present
+    }
     # 7. Important Negative Findings (Negative Red Flags)
     negative_red_flags = [
         {
@@ -652,6 +656,7 @@ def generate_assessment_feedback(
             "source": s.get("source") or "user_input",
         }
         for s in absent
+        if str(s.get("symptom") or s.get("finding") or "").strip().lower() not in present_symptom_names
     ]
 
     # 8. Uncertain / Missing Information
@@ -741,7 +746,23 @@ def generate_assessment_feedback(
             or "Provide the requested missing information and contact a healthcare professional for assessment. If symptoms are severe or rapidly worsening, seek urgent medical care."
         )
     elif is_ortho_or_msk:
-        dynamic_guidance = "Orthopedic evaluation is advised to assess joint mobility, localized swelling, and structural integrity following trauma or limb strain."
+        has_injury = any(
+            str(s.get("symptom") or s.get("finding") or "").strip().lower() in {"fall/trauma", "trauma/injury", "twisting injury", "injury", "wrist injury"}
+            for s in present
+        )
+        trauma_denied = any(
+            str(s.get("symptom") or s.get("finding") or "").strip().lower() in {"fall/trauma", "trauma/injury", "fall", "injury"}
+            for s in absent
+        )
+        has_swelling_present = any("swelling" in str(s.get("symptom") or "").lower() for s in present)
+        swelling_phrase = "localized swelling, " if has_swelling_present else ""
+
+        if has_injury and not trauma_denied:
+            dynamic_guidance = f"Orthopedic evaluation is advised to assess joint mobility, {swelling_phrase}and structural integrity following the reported joint strain or injury."
+        elif trauma_denied:
+            dynamic_guidance = f"Orthopedic evaluation is advised to assess joint mobility, {swelling_phrase}structural alignment, and localized symptoms (no acute trauma reported)."
+        else:
+            dynamic_guidance = f"Orthopedic evaluation is advised to assess joint mobility, {swelling_phrase}and structural integrity."
         abn_text = ""
         if abnormal_rep:
             abn_list = ', '.join([r.get('test_name') for r in abnormal_rep if r.get('test_name')])
@@ -1204,6 +1225,22 @@ def run_assessment_pipeline(db: Session, assessment_id: UUID, user_id: UUID) -> 
                     n_copy["source_file"] = r.file_name
                     n_copy["source_id"] = str(r.report_id)
                     n_copy["source_type"] = "MEDICAL_REPORT"
+                    raw_narr_list.append(n_copy)
+        else:
+            struct = r.structured_findings or {}
+            if isinstance(struct, dict):
+                for q in struct.get("qualitative_findings", []):
+                    q_copy = dict(q)
+                    q_copy["source_file"] = r.file_name
+                    q_copy["source_id"] = str(r.report_id)
+                    q_copy["source_type"] = "XRAY_REPORT"
+                    raw_qual_list.append(q_copy)
+
+                for n in struct.get("narrative_findings", []):
+                    n_copy = dict(n)
+                    n_copy["source_file"] = r.file_name
+                    n_copy["source_id"] = str(r.report_id)
+                    n_copy["source_type"] = "XRAY_REPORT"
                     raw_narr_list.append(n_copy)
 
     # Exact duplicate deduplication (preserves distinct test values/states)

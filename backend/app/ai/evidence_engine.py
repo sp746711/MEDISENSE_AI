@@ -483,7 +483,7 @@ def combine_evidence(
                     break
 
     symptoms_present = current_present
-    symptoms_absent = [s for s in symptoms if _state(s) == "ABSENT"]
+    raw_absent = [s for s in symptoms if _state(s) == "ABSENT"]
     symptoms_unknown = [s for s in symptoms if _state(s) == "UNKNOWN" and s not in historical]
 
     report_abnormal = [f for f in report_findings if _status(f) in {"HIGH", "LOW", "ABNORMAL"}]
@@ -499,6 +499,45 @@ def combine_evidence(
     evidence_relationships: list[dict[str, Any]] = []
 
     present_names = {str(s.get("symptom") or "").strip().lower() for s in current_present} - {""}
+
+    symptoms_absent: list[dict[str, Any]] = []
+    for s in raw_absent:
+        s_name = str(s.get("symptom") or "").strip().lower()
+        s_area = str(s.get("body_area") or s.get("body_region") or "").strip().lower()
+        s_lat = str(s.get("laterality") or "").strip().upper()
+
+        matching_present = [
+            p for p in current_present
+            if str(p.get("symptom") or "").strip().lower() == s_name
+        ]
+
+        is_same_location_conflict = False
+        if matching_present:
+            for p in matching_present:
+                p_area = str(p.get("body_area") or p.get("body_region") or "").strip().lower()
+                p_lat = str(p.get("laterality") or "").strip().upper()
+                # If distinct body locations/lateralities are specified, they refer to different anatomical sites
+                if s_area and p_area and s_area != "unspecified" and p_area != "unspecified" and s_area != p_area:
+                    continue
+                if s_lat and p_lat and s_lat != p_lat:
+                    continue
+                is_same_location_conflict = True
+                break
+
+        if is_same_location_conflict:
+            contra_msg = f"Contradiction: '{s_name}' was reported as present, but a conflicting record indicates absence."
+            if contra_msg not in contradictory:
+                contradictory.append(contra_msg)
+            evidence_relationships.append({
+                "source_a": "symptom_present",
+                "source_b": "symptom_absent",
+                "finding": s_name,
+                "relationship": "CONFLICTING",
+                "reason": contra_msg,
+            })
+        else:
+            symptoms_absent.append(s)
+
     absent_names = {str(s.get("symptom") or "").strip().lower() for s in symptoms_absent} - {""}
     all_known_names = present_names.union(absent_names).union({str(s.get("symptom") or "").strip().lower() for s in historical} - {""})
 
@@ -1634,6 +1673,27 @@ def combine_evidence(
         }
         for s in historical
     ]
+
+    supporting = list(dict.fromkeys(supporting))
+    reassuring = list(dict.fromkeys(reassuring))
+    separate = list(dict.fromkeys(separate))
+    contradictory = list(dict.fromkeys(contradictory))
+    missing = list(dict.fromkeys(missing))
+    unassessed = list(dict.fromkeys(unassessed))
+
+    deduped_relationships: list[dict[str, Any]] = []
+    seen_rel_keys: set[tuple] = set()
+    for rel in evidence_relationships:
+        rel_key = (
+            str(rel.get("source_a", "")).strip().lower(),
+            str(rel.get("source_b", "")).strip().lower(),
+            str(rel.get("finding", "")).strip().lower(),
+            str(rel.get("relationship", "")).strip().upper(),
+        )
+        if rel_key not in seen_rel_keys:
+            seen_rel_keys.add(rel_key)
+            deduped_relationships.append(rel)
+    evidence_relationships = deduped_relationships
 
     return {
         "evidence_state": evidence_state,

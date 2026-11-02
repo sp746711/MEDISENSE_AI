@@ -837,13 +837,18 @@ def structure_report_text(
                 swelling_state = "UNCERTAIN"
             else:
                 swelling_state = swelling_states[0]
-            qualitative_findings.append({
-                "finding": "swelling",
-                "category": "examination",
-                "domain": "musculoskeletal",
-                "state": swelling_state,
-                "source": "medical_report_narrative",
-            })
+            has_soft_tissue_finding = any(
+                classify_radiology_finding(cleaned_text, term) != "UNKNOWN"
+                for term in ("soft-tissue swelling", "soft tissue swelling", "periarticular soft-tissue fullness", "soft-tissue fullness")
+            )
+            if not has_soft_tissue_finding:
+                qualitative_findings.append({
+                    "finding": "swelling",
+                    "category": "examination",
+                    "domain": "musculoskeletal",
+                    "state": swelling_state,
+                    "source": "medical_report_narrative",
+                })
 
         if re.search(r"\b(?:reduced|decreased|limited|restricted)\s+(?:range of motion|movement|mobility|rom)\b", lower_text):
             qualitative_findings.append({
@@ -877,6 +882,16 @@ def structure_report_text(
             ("avulsion fragment", "radiology/bone", "musculoskeletal"),
             ("ossific fragment", "radiology/bone", "musculoskeletal"),
             ("dislocation", "radiology/bone", "musculoskeletal"),
+            ("joint-space narrowing", "radiology/joint", "musculoskeletal"),
+            ("joint space narrowing", "radiology/joint", "musculoskeletal"),
+            ("marginal osteophyte-like changes", "radiology/bone", "musculoskeletal"),
+            ("marginal osteophytes", "radiology/bone", "musculoskeletal"),
+            ("marginal osteophyte", "radiology/bone", "musculoskeletal"),
+            ("osteophyte-like changes", "radiology/bone", "musculoskeletal"),
+            ("osteophytes", "radiology/bone", "musculoskeletal"),
+            ("osteophyte", "radiology/bone", "musculoskeletal"),
+            ("subchondral sclerosis", "radiology/bone", "musculoskeletal"),
+            ("chondrocalcinosis", "radiology/joint", "musculoskeletal"),
         ]
         for term, cat, dom in resp_terms:
             state = classify_radiology_finding(cleaned_text, term)
@@ -892,6 +907,22 @@ def structure_report_text(
             if term in {"soft-tissue swelling", "soft tissue swelling", "periarticular soft-tissue fullness", "soft-tissue fullness"}:
                 finding_name = "mild soft-tissue swelling" if "mild" in lower_text else "soft-tissue swelling"
                 already_has = any(q.get("finding") in {"soft-tissue swelling", "mild soft-tissue swelling"} for q in qualitative_findings)
+            elif "joint" in term and "narrowing" in term:
+                if "medial tibiofemoral" in lower_text:
+                    finding_name = "mild medial tibiofemoral joint-space narrowing" if "mild" in lower_text else "medial tibiofemoral joint-space narrowing"
+                elif "medial" in lower_text:
+                    finding_name = "mild medial joint-space narrowing" if "mild" in lower_text else "medial joint-space narrowing"
+                else:
+                    finding_name = "mild joint-space narrowing" if "mild" in lower_text else "joint-space narrowing"
+                already_has = any("narrowing" in q.get("finding", "") for q in qualitative_findings)
+            elif "osteophyte" in term:
+                if "marginal osteophyte-like" in lower_text or "marginal osteophyte" in lower_text:
+                    finding_name = "small marginal osteophyte-like changes" if "small" in lower_text else "marginal osteophyte-like changes"
+                elif "osteophyte-like" in lower_text:
+                    finding_name = "small osteophyte-like changes" if "small" in lower_text else "osteophyte-like changes"
+                else:
+                    finding_name = "marginal osteophytes" if "marginal" in lower_text else "osteophytes"
+                already_has = any("osteophyte" in q.get("finding", "") for q in qualitative_findings)
             else:
                 already_has = any(q.get("finding") == finding_name for q in qualitative_findings)
 

@@ -797,6 +797,105 @@ SYMPTOM_LEXICON: dict[str, dict[str, Any]] = {
         "domain": "musculoskeletal",
         "body_area": "extremity/joints",
     },
+    "right knee swelling": {
+        "canonical": "knee swelling",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "RIGHT",
+    },
+    "left knee swelling": {
+        "canonical": "knee swelling",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "LEFT",
+    },
+    "knee swelling": {
+        "canonical": "knee swelling",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "swollen knee": {
+        "canonical": "knee swelling",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "swelling in knee": {
+        "canonical": "knee swelling",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "swelling of knee": {
+        "canonical": "knee swelling",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+    },
+    "swollen right knee": {
+        "canonical": "knee swelling",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "RIGHT",
+    },
+    "swollen left knee": {
+        "canonical": "knee swelling",
+        "domain": "musculoskeletal",
+        "body_area": "knee",
+        "laterality": "LEFT",
+    },
+    "calf swelling": {
+        "canonical": "calf swelling",
+        "domain": "musculoskeletal",
+        "body_area": "calf",
+    },
+    "swollen calf": {
+        "canonical": "calf swelling",
+        "domain": "musculoskeletal",
+        "body_area": "calf",
+    },
+    "swelling in calf": {
+        "canonical": "calf swelling",
+        "domain": "musculoskeletal",
+        "body_area": "calf",
+    },
+    "ankle swelling": {
+        "canonical": "ankle swelling",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+    },
+    "swollen ankle": {
+        "canonical": "ankle swelling",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+    },
+    "swelling in ankle": {
+        "canonical": "ankle swelling",
+        "domain": "musculoskeletal",
+        "body_area": "ankle",
+    },
+    "foot swelling": {
+        "canonical": "foot swelling",
+        "domain": "musculoskeletal",
+        "body_area": "foot",
+    },
+    "swollen foot": {
+        "canonical": "foot swelling",
+        "domain": "musculoskeletal",
+        "body_area": "foot",
+    },
+    "leg swelling": {
+        "canonical": "leg swelling",
+        "domain": "musculoskeletal",
+        "body_area": "leg",
+    },
+    "swelling in other joints": {
+        "canonical": "swelling in other joints",
+        "domain": "musculoskeletal",
+        "body_area": "other joints",
+    },
+    "other swelling": {
+        "canonical": "other swelling",
+        "domain": "musculoskeletal",
+        "body_area": "other joints",
+    },
     "right wrist tenderness": {
         "canonical": "wrist tenderness",
         "domain": "musculoskeletal",
@@ -1366,9 +1465,53 @@ ONSET_PATTERNS = [
 ]
 
 DURATION_REGEX = re.compile(
-    r"\b(?:for|since|last|past|approx(?:imately)?|about|around|nearly|~)?\s*(\d+|a|an|few|several|couple of)\s*(days?|weeks?|months?|hours?|years?)\b",
+    r"\b(?:for|since|last|past|approx(?:imately)?|about|around|nearly|~)?\s*(\d+|a|an|few|several|couple\s+of|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|twenty|thirty)\s*(days?|weeks?|months?|hours?|years?)\b",
     re.IGNORECASE,
 )
+
+WORD_NUMBERS = {
+    "a": "1",
+    "an": "1",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+    "ten": "10",
+    "eleven": "11",
+    "twelve": "12",
+    "thirteen": "13",
+    "fourteen": "14",
+    "fifteen": "15",
+    "sixteen": "16",
+    "seventeen": "17",
+    "eighteen": "18",
+    "nineteen": "19",
+    "twenty": "20",
+    "thirty": "30",
+}
+
+
+def normalize_duration(raw_dur: str) -> str:
+    """Normalize extracted duration while preserving original clinical meaning and units."""
+    if not raw_dur:
+        return ""
+    clean = re.sub(
+        r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+",
+        "",
+        raw_dur.strip(),
+        flags=re.IGNORECASE,
+    ).strip()
+    parts = clean.split()
+    if len(parts) >= 2:
+        num_part = parts[0].lower()
+        if num_part in WORD_NUMBERS:
+            clean = f"{WORD_NUMBERS[num_part]} {' '.join(parts[1:])}"
+    return clean
 
 NUMERIC_SEVERITY_REGEX = re.compile(
     r"\b(?:severity\s*(?:is|was|of|rated|at)?\s*)?([0-9]|10)\s*(?:/|\s*out\s+of\s*)\s*10\b",
@@ -1503,13 +1646,13 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                     pre_dur_m = DURATION_REGEX.search(pre_sym)
 
                     if post_dur_m:
-                        sym_duration = re.sub(r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+", "", post_dur_m.group(0).strip(), flags=re.IGNORECASE).strip()
+                        sym_duration = normalize_duration(post_dur_m.group(0))
                     elif pre_dur_m:
-                        sym_duration = re.sub(r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+", "", pre_dur_m.group(0).strip(), flags=re.IGNORECASE).strip()
+                        sym_duration = normalize_duration(pre_dur_m.group(0))
                     else:
                         all_durs = list(DURATION_REGEX.finditer(clause))
                         if len(all_durs) == 1:
-                            sym_duration = clause_duration
+                            sym_duration = normalize_duration(clause_duration) if clause_duration else None
                             if clause_dur_m and with_m:
                                 dur_start = clause_dur_m.start()
                                 if dur_start < with_m.start() and start > with_m.end():
@@ -1519,7 +1662,7 @@ def extract_symptoms(raw_text: str) -> dict[str, Any]:
                         elif all_durs:
                             closest_dur = min(all_durs, key=lambda d: min(abs(d.start() - end), abs(d.end() - start)))
                             if abs(closest_dur.start() - end) <= 70 or abs(start - closest_dur.end()) <= 70:
-                                sym_duration = re.sub(r"^(?:for|since|past|last|approx(?:imately)?|about|around|nearly|~)\s+", "", closest_dur.group(0).strip(), flags=re.IGNORECASE).strip()
+                                sym_duration = normalize_duration(closest_dur.group(0))
                             else:
                                 sym_duration = None
                         else:

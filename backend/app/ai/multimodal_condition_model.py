@@ -68,6 +68,34 @@ CONDITION_CLASSES: list[str] = [
     "urinary tract infection",
 ]
 
+# Track B: Separate Inpatient Multimodal Research Taxonomy (Legacy 4 acute conditions)
+INPATIENT_MULTIMODAL_CLASSES: list[str] = [
+    "Pneumonia",
+    "Acute Asthma Exacerbation",
+    "Peptic Ulcer Disease",
+    "Urinary Tract Infection",
+]
+
+# Track B: Corrected Chest-Focused Research Taxonomy (5 acute conditions per Step 6.11 / Step 6.12)
+CHEST_MULTIMODAL_CLASSES: list[str] = [
+    "Pneumonia",
+    "Acute Decompensated Heart Failure",
+    "Pleural Effusion",
+    "Spontaneous Pneumothorax",
+    "Acute COPD Exacerbation",
+]
+
+# Modality order: [symptoms, laboratory, radiology, xray, clinical_examination]
+# Shape: (5, 5) float tensor
+# Mandatory Rule (Step 6.12 Fix 3): For Acute COPD Exacerbation (index 4), X-ray (index 3) is 0.0 (RULE_OUT_ONLY)
+CHEST_CONDITION_ELIGIBILITY_MATRIX: torch.Tensor = torch.tensor([
+    [1.0, 1.0, 1.0, 1.0, 1.0],  # Pneumonia
+    [1.0, 1.0, 1.0, 1.0, 1.0],  # Acute Decompensated Heart Failure
+    [1.0, 1.0, 1.0, 1.0, 1.0],  # Pleural Effusion
+    [1.0, 1.0, 1.0, 1.0, 1.0],  # Spontaneous Pneumothorax
+    [1.0, 1.0, 1.0, 0.0, 1.0],  # Acute COPD Exacerbation: X-ray is RULE_OUT_ONLY -> Diagnostic weight is 0.0!
+], dtype=torch.float32)
+
 # Supported canonical laboratory tests (21 tests aligned with report_nlp.py TARGET_TESTS)
 CANONICAL_LAB_TESTS: list[str] = [
     "White Blood Cell Count (WBC)",
@@ -621,6 +649,144 @@ class ClinicalSymptomObservation:
     qualifiers: list[str] = field(default_factory=list)
     body_area: Optional[str] = None
     follow_up_answer: Optional[str] = None
+    laterality: Optional[str] = None
+
+
+def parse_duration_to_days(raw_duration: Any) -> Optional[float]:
+    """Parse raw duration representations (e.g. '3 weeks', '14 days', 21, '48 hours') into float days."""
+    if raw_duration is None:
+        return None
+    if isinstance(raw_duration, (int, float)):
+        return float(raw_duration) if raw_duration >= 0 else None
+
+    text = str(raw_duration).strip().lower()
+    if not text or text in {"none", "null", "unknown", "unspecified"}:
+        return None
+
+    try:
+        val = float(text)
+        return max(0.0, val)
+    except ValueError:
+        pass
+
+    m = re.search(r"(\d+(?:\.\d+)?)\s*([a-z]+)", text)
+    if not m:
+        return None
+
+    num = float(m.group(1))
+    unit = m.group(2)
+
+    if "hour" in unit or unit in {"hr", "hrs", "h"}:
+        return round(num / 24.0, 3)
+    elif "day" in unit or unit in {"d", "days"}:
+        return num
+    elif "week" in unit or unit in {"wk", "wks", "w"}:
+        return num * 7.0
+    elif "month" in unit or unit in {"mo", "mos", "m"}:
+        return num * 30.0
+    elif "year" in unit or unit in {"yr", "yrs", "y"}:
+        return num * 365.0
+    return num
+
+
+def parse_symptom_observation(s: Any, default_state: str = "PRESENT") -> Optional[ClinicalSymptomObservation]:
+    """Convert any symptom input (evidence engine dict, legacy dict, object, or string) into a ClinicalSymptomObservation."""
+    if s is None:
+        return None
+    if isinstance(s, ClinicalSymptomObservation):
+        return s
+    if isinstance(s, str):
+        name = s.strip()
+        if not name or name.lower() in {"none", "null"}:
+            return None
+        return ClinicalSymptomObservation(
+            symptom=name,
+            canonical=name.lower(),
+            state=default_state,
+        )
+    if not isinstance(s, dict):
+        return None
+
+    # 1. Symptom name extraction (support symptom, name, finding, symptom_name, canonical)
+    name = None
+    for k in ("symptom", "name", "finding", "symptom_name", "canonical"):
+        v = s.get(k)
+        if isinstance(v, str) and v.strip() and v.strip().lower() not in {"none", "null"}:
+            name = v.strip()
+            break
+    if not name:
+        return None
+
+    # 2. State distinction: PRESENT, ABSENT, UNKNOWN, HISTORICAL, NOT_ASKED
+    raw_type = str(s.get("type") or "").strip().upper()
+    raw_state = str(s.get("state") or "").strip().upper()
+    raw_status = str(s.get("status") or "").strip().upper()
+
+    if raw_type == "HISTORICAL" or raw_state == "HISTORICAL" or raw_status == "HISTORICAL" or default_state == "HISTORICAL":
+        resolved_state = "HISTORICAL"
+    elif raw_state == "NOT_ASKED" or raw_status == "NOT_ASKED" or default_state == "NOT_ASKED":
+        resolved_state = "NOT_ASKED"
+    elif raw_state in {"ABSENT", "NEGATIVE"} or raw_status in {"ABSENT", "NEGATIVE"} or raw_type == "NEGATIVE" or default_state == "ABSENT":
+        resolved_state = "ABSENT"
+    elif raw_state in {"UNKNOWN", "UNCERTAIN", "UNASSESSED"} or raw_status in {"UNKNOWN", "UNCERTAIN"} or raw_type == "UNCERTAIN" or default_state == "UNKNOWN":
+        resolved_state = "UNKNOWN"
+    elif raw_state in {"PRESENT", "POSITIVE"} or raw_status in {"PRESENT", "POSITIVE"} or raw_type == "CURRENT" or default_state == "PRESENT":
+        resolved_state = "PRESENT"
+    else:
+        resolved_state = default_state
+
+    # 3. Duration parsing
+    dur_raw = s.get("duration_days") if s.get("duration_days") is not None else s.get("duration")
+    duration_days = parse_duration_to_days(dur_raw)
+
+    # 4. Severity
+    raw_sev = str(s.get("severity") or "UNKNOWN").strip().upper()
+    severity = raw_sev if raw_sev in {"MILD", "MODERATE", "SEVERE"} else "UNKNOWN"
+
+    # 5. Body area and laterality
+    body_area = s.get("body_area") or s.get("location") or s.get("region")
+    body_area = str(body_area).strip() if body_area else None
+
+    laterality = s.get("laterality")
+    laterality = str(laterality).strip().upper() if laterality else None
+
+    # 6. Follow-up answer
+    follow_up_answer = s.get("follow_up_answer") or s.get("answer")
+    follow_up_answer = str(follow_up_answer).strip() if follow_up_answer else None
+
+    # 7. Qualifiers preservation
+    raw_quals = s.get("qualifiers", [])
+    if isinstance(raw_quals, list):
+        qualifiers = [str(q).strip() for q in raw_quals if str(q).strip()]
+    elif isinstance(raw_quals, str) and raw_quals.strip():
+        qualifiers = [raw_quals.strip()]
+    else:
+        qualifiers = []
+
+    if laterality and not any("laterality" in q.lower() for q in qualifiers):
+        qualifiers.append(f"laterality={laterality}")
+    if s.get("quality") and not any("quality" in q.lower() for q in qualifiers):
+        qualifiers.append(f"quality={s.get('quality')}")
+    if s.get("onset") and not any("onset" in q.lower() for q in qualifiers):
+        qualifiers.append(f"onset={s.get('onset')}")
+    if s.get("trigger") and not any("trigger" in q.lower() for q in qualifiers):
+        qualifiers.append(f"trigger={s.get('trigger')}")
+    if s.get("context") and str(s.get("context")).strip() not in qualifiers:
+        qualifiers.append(str(s.get("context")).strip())
+
+    canonical = str(s.get("canonical") or name).strip().lower()
+
+    return ClinicalSymptomObservation(
+        symptom=name,
+        canonical=canonical,
+        state=resolved_state,
+        duration_days=duration_days,
+        severity=severity,
+        qualifiers=qualifiers,
+        body_area=body_area,
+        follow_up_answer=follow_up_answer,
+        laterality=laterality,
+    )
 
 
 @dataclass
@@ -826,17 +992,44 @@ class XRayModalityAdapter(nn.Module):
         return h * is_pathology_eligible
 
 
+def safe_masked_softmax(logits: torch.Tensor, mask: torch.Tensor, dim: int = -1) -> torch.Tensor:
+    """
+    Computes softmax over masked logits safely without producing NaNs when all items are masked (-inf logits).
+    If all items are masked, returns all 0.0 tensor (never NaN).
+    """
+    if logits.numel() == 0:
+        return logits
+    masked_logits = logits.masked_fill(mask == 0, -1e9)
+    has_active = (mask.sum(dim=dim, keepdim=True) > 0)
+    safe_for_max = torch.where(mask > 0, logits, torch.full_like(logits, -1e9))
+    max_val = torch.where(has_active, safe_for_max.max(dim=dim, keepdim=True).values, torch.zeros_like(safe_for_max.sum(dim=dim, keepdim=True)))
+    exp_logits = torch.exp(masked_logits - max_val) * mask
+    sum_exp = exp_logits.sum(dim=dim, keepdim=True)
+    safe_denom = torch.where(has_active, sum_exp, torch.ones_like(sum_exp))
+    weights = torch.where(has_active, exp_logits / safe_denom, torch.zeros_like(exp_logits))
+    return weights
+
+
 # ==============================================================================
 # GATED MULTIMODAL FUSION
 # ==============================================================================
 
 class GatedMultimodalFusion(nn.Module):
-    """Gated Multimodal Unit (GMU) fusing up to 5 modalities using explicit missingness masks."""
+    """
+    Gated Multimodal Unit (GMU) supporting:
+    1. Encounter-level missingness masking (legacy shared fusion).
+    2. Condition-specific isolated fusion (Step 6.12 Fix 3 & Step 6.13):
+       h_fused_condition = Fuse(modality_embeddings, encounter_availability_mask, condition_eligibility_mask)
+       Mathematically guarantees ineligible modalities CANNOT contribute to a condition's positive prediction.
+    3. All-masked fusion safety:
+       Zero NaNs, zero division-by-zero, explicit zero gating when all modalities are masked or ineligible.
+    """
 
-    def __init__(self, hidden_dim: int = 64, num_modalities: int = 5):
+    def __init__(self, hidden_dim: int = 64, num_modalities: int = 5, num_conditions: Optional[int] = None):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_modalities = num_modalities
+        self.num_conditions = num_conditions
         self.gate_layers = nn.ModuleList([
             nn.Linear(hidden_dim, 1) for _ in range(num_modalities)
         ])
@@ -850,10 +1043,12 @@ class GatedMultimodalFusion(nn.Module):
         self,
         modality_embeds: list[torch.Tensor],
         modality_mask: torch.Tensor,
+        condition_eligibility_mask: Optional[torch.Tensor] = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         modality_embeds: List of N tensors, each (B, hidden_dim) [sym, lab, rad, xray, exam]
         modality_mask: (B, N) float tensor (1.0 = available, 0.0 = omitted/unavailable)
+        condition_eligibility_mask: Optional (K, N) or (B, K, N) condition eligibility matrix.
         """
         batch_size = modality_embeds[0].size(0)
         n_mods = len(modality_embeds)
@@ -870,17 +1065,67 @@ class GatedMultimodalFusion(nn.Module):
             gate = self.gate_layers[i](modality_embeds[i])
             raw_gates.append(gate)
         all_gates = torch.cat(raw_gates, dim=1)  # (B, N)
+        sigmoid_gates = torch.sigmoid(all_gates)  # (B, N)
 
-        # Apply modality mask
-        masked_gates = torch.sigmoid(all_gates) * modality_mask  # (B, N)
-        sum_gates = masked_gates.sum(dim=1, keepdim=True)
-        is_evidence_present = (sum_gates > 1e-5).float()
+        if condition_eligibility_mask is None:
+            # Shared fusion path (legacy / baseline)
+            masked_gates = sigmoid_gates * modality_mask  # (B, N)
+            sum_gates = masked_gates.sum(dim=1, keepdim=True)
+            is_evidence_present = (sum_gates > 1e-5).float()
 
-        normalized_gates = masked_gates / torch.clamp(sum_gates, min=1e-6)
-        stacked_embeds = torch.stack(modality_embeds, dim=1)  # (B, N, hidden_dim)
-        fused = (stacked_embeds * normalized_gates.unsqueeze(-1)).sum(dim=1)  # (B, hidden_dim)
-        out = self.fusion_proj(fused)
-        return out * is_evidence_present, is_evidence_present
+            safe_denom = torch.clamp(sum_gates, min=1e-6)
+            normalized_gates = torch.where(
+                is_evidence_present > 0,
+                masked_gates / safe_denom,
+                torch.zeros_like(masked_gates),
+            )
+            stacked_embeds = torch.stack(modality_embeds, dim=1)  # (B, N, hidden_dim)
+            fused = (stacked_embeds * normalized_gates.unsqueeze(-1)).sum(dim=1)  # (B, hidden_dim)
+            out = self.fusion_proj(fused)
+            return out * is_evidence_present, is_evidence_present
+        else:
+            # Condition-Specific Gated Fusion path (Step 6.12 Fix 3 & Step 6.13)
+            # Conceptually: h_fused_condition = Fuse(modality_embeddings, encounter_availability_mask, condition_eligibility_mask)
+            # Mathematically enforces that ineligible modalities CANNOT contribute to positive diagnostic prediction
+            stacked_embeds = torch.stack(modality_embeds, dim=1)  # (B, N, hidden_dim)
+
+            if condition_eligibility_mask.dim() == 2:
+                # (K, N) -> expand to (B, K, N)
+                K = condition_eligibility_mask.size(0)
+                c_mask = condition_eligibility_mask.unsqueeze(0).expand(batch_size, K, n_mods).to(modality_mask.device)
+            else:
+                K = condition_eligibility_mask.size(1)
+                c_mask = condition_eligibility_mask.to(modality_mask.device)
+
+            m_enc = modality_mask.unsqueeze(1).expand(batch_size, K, n_mods)  # (B, K, N)
+            effective_mask = m_enc * c_mask  # (B, K, N)
+
+            # Masked gates per condition
+            g_expanded = sigmoid_gates.unsqueeze(1).expand(batch_size, K, n_mods)  # (B, K, N)
+            cond_masked_gates = g_expanded * effective_mask  # (B, K, N)
+            sum_cond_gates = cond_masked_gates.sum(dim=-1, keepdim=True)  # (B, K, 1)
+            is_cond_evidence = (effective_mask.sum(dim=-1, keepdim=True) > 1e-5).float()  # (B, K, 1)
+
+            # Numerical safety: zero out weights when evidence is absent (prevent NaNs and fabricated gate weights)
+            safe_cond_sum = torch.clamp(sum_cond_gates, min=1e-6)
+            norm_cond_gates = torch.where(
+                is_cond_evidence > 0,
+                cond_masked_gates / safe_cond_sum,
+                torch.zeros_like(cond_masked_gates),
+            )  # (B, K, N)
+            
+            # (B, 1, N, hidden_dim) * (B, K, N, 1) -> sum over N -> (B, K, hidden_dim)
+            fused_per_condition = (stacked_embeds.unsqueeze(1) * norm_cond_gates.unsqueeze(-1)).sum(dim=2)  # (B, K, hidden_dim)
+            
+            # Apply projection per condition
+            projected = []
+            for k in range(K):
+                proj_k = self.fusion_proj(fused_per_condition[:, k, :])
+                projected.append(proj_k * is_cond_evidence[:, k, :])
+            
+            fused_out = torch.stack(projected, dim=1)  # (B, K, hidden_dim)
+            is_overall_evidence = (is_cond_evidence.sum(dim=1) > 1e-5).float()  # (B, 1)
+            return fused_out, is_overall_evidence
 
 
 # ==============================================================================
@@ -895,10 +1140,12 @@ class MultimodalConditionPredictor(nn.Module):
         num_classes: int = len(CONDITION_CLASSES),
         hidden_dim: int = 64,
         dropout_rate: float = 0.2,
+        condition_eligibility_mask: Optional[torch.Tensor] = None,
     ):
         super().__init__()
         self.num_classes = num_classes
         self.hidden_dim = hidden_dim
+        self.condition_eligibility_mask = condition_eligibility_mask
 
         self.symptom_encoder = SymptomModalityEncoder(vocab_size=512, embed_dim=hidden_dim, out_dim=hidden_dim)
         self.lab_encoder = LaboratoryModalityEncoder(num_tests=len(CANONICAL_LAB_TESTS), out_dim=hidden_dim)
@@ -910,7 +1157,7 @@ class MultimodalConditionPredictor(nn.Module):
             out_dim=hidden_dim,
         )
 
-        self.fusion = GatedMultimodalFusion(hidden_dim=hidden_dim, num_modalities=5)
+        self.fusion = GatedMultimodalFusion(hidden_dim=hidden_dim, num_modalities=5, num_conditions=num_classes)
 
         self.classifier = nn.Sequential(
             nn.Dropout(dropout_rate),
@@ -920,6 +1167,19 @@ class MultimodalConditionPredictor(nn.Module):
             nn.Dropout(dropout_rate),
             nn.Linear(hidden_dim, num_classes),
         )
+
+        # Condition-specific prediction heads for isolated condition fusion (Fix 3)
+        self.condition_heads = nn.ModuleList([
+            nn.Sequential(
+                nn.Dropout(dropout_rate),
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.LayerNorm(hidden_dim),
+                nn.Dropout(dropout_rate),
+                nn.Linear(hidden_dim, 1),
+            )
+            for _ in range(num_classes)
+        ])
 
     def forward(
         self,
@@ -932,11 +1192,7 @@ class MultimodalConditionPredictor(nn.Module):
         **kwargs: Any,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Flexible forward pass supporting 4-modality legacy calls and 5-modality calls:
-        Supported signatures:
-        1. 5-modality standard: (tokens, sym_feat, lab, rad, xray_path, exam_feat, xray_anat, xray_elig, mask)
-        2. 4-modality 8-arg: (tokens, sym_feat, lab, rad, xray_path, xray_anat, xray_elig, mask)
-        3. 4-modality 7-arg: (tokens, sym_feat, lab, rad, xray_path, xray_elig, mask)
+        Flexible forward pass supporting 4-modality legacy calls, 5-modality calls, and condition-specific fusion.
         """
         batch_size = symptom_tokens.size(0)
         device = symptom_tokens.device
@@ -991,10 +1247,137 @@ class MultimodalConditionPredictor(nn.Module):
             m_exam = (exam_features.abs().sum(dim=-1, keepdim=True) > 1e-5).float()
             modality_mask = torch.cat([modality_mask, m_exam], dim=1)
 
+        # Check condition-specific eligibility mask (Step 6.12 Fix 3)
+        c_elig = kwargs.get("condition_eligibility_mask", self.condition_eligibility_mask)
+
         modality_embeds = [h_sym, h_lab, h_rad, h_xray, h_exam]
-        h_fused, is_evidence_present = self.fusion(modality_embeds, modality_mask)
-        logits = self.classifier(h_fused)
-        return logits * is_evidence_present, is_evidence_present
+
+        if c_elig is None:
+            # Shared legacy fusion path (unconstrained)
+            h_fused, is_evidence_present = self.fusion(modality_embeds, modality_mask)
+            logits = self.classifier(h_fused)
+            return logits * is_evidence_present, is_evidence_present
+        else:
+            # Condition-Specific Gated Fusion path (Step 6.12 Fix 3 & Step 6.13)
+            # h_fused_condition = Fuse(modality_embeddings, encounter_availability_mask, condition_eligibility_mask)
+            fused_per_cond, is_evidence_present = self.fusion(
+                modality_embeds,
+                modality_mask,
+                condition_eligibility_mask=c_elig,
+            )
+            logits_list = []
+            for k in range(self.num_classes):
+                h_k = fused_per_cond[:, k, :]
+                logit_k = self.condition_heads[k](h_k)
+                logits_list.append(logit_k)
+            logits = torch.cat(logits_list, dim=-1)
+            return logits * is_evidence_present, is_evidence_present
+
+    def evaluate_condition_differential(
+        self,
+        symptom_tokens: torch.Tensor,
+        symptom_features: torch.Tensor,
+        lab_features: torch.Tensor,
+        rad_features: torch.Tensor,
+        xray_pathology_features: torch.Tensor,
+        exam_features: Optional[torch.Tensor] = None,
+        xray_anatomy_probs: Optional[torch.Tensor] = None,
+        xray_pathology_eligible: Optional[torch.Tensor] = None,
+        modality_mask: Optional[torch.Tensor] = None,
+        condition_eligibility_mask: Optional[torch.Tensor] = None,
+        condition_names: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
+        """
+        Safely evaluates condition differential predictions with explicit DATA_UNAVAILABLE handling.
+        Guarantees:
+        - When all modalities are unavailable or ineligible, returns defined DATA_UNAVAILABLE abstention state.
+        - Never replaces unavailable outputs with zero probabilities or uniform probabilities.
+        - Handles all-masked and partially masked conditions independently.
+        """
+        batch_size = symptom_tokens.size(0)
+        device = symptom_tokens.device
+        conds = condition_names or (CHEST_MULTIMODAL_CLASSES if self.num_classes == 5 else CONDITION_CLASSES[:self.num_classes])
+
+        if modality_mask is None:
+            modality_mask = torch.ones(batch_size, 5, device=device)
+        if condition_eligibility_mask is None:
+            condition_eligibility_mask = self.condition_eligibility_mask
+        if exam_features is None:
+            exam_features = torch.zeros(batch_size, len(CANONICAL_CLINICAL_EXAM_FINDINGS) * 3, device=device)
+        if xray_anatomy_probs is None:
+            xray_anatomy_probs = torch.zeros(batch_size, 33, device=device)
+        if xray_pathology_eligible is None:
+            xray_pathology_eligible = torch.zeros(batch_size, 1, device=device)
+
+        encounter_all_masked = bool((modality_mask.sum().item() < 1e-5))
+
+        logits, is_ev = self.forward(
+            symptom_tokens,
+            symptom_features,
+            lab_features,
+            rad_features,
+            xray_pathology_features,
+            exam_features,
+            xray_anatomy_probs,
+            xray_pathology_eligible,
+            modality_mask,
+            condition_eligibility_mask=condition_eligibility_mask,
+        )
+
+        cond_states = {}
+        evaluated_candidates = []
+
+        if condition_eligibility_mask is not None:
+            c_mask = condition_eligibility_mask.to(device)
+            m_enc = modality_mask
+        else:
+            c_mask = torch.ones(self.num_classes, 5, device=device)
+            m_enc = modality_mask
+
+        for k in range(min(self.num_classes, len(conds))):
+            cond_name = conds[k]
+            eff_k = (m_enc[0] * c_mask[k]).sum().item()
+            has_positive_evidence = (eff_k > 1e-5) and not encounter_all_masked
+
+            if not has_positive_evidence:
+                cond_states[cond_name] = {
+                    "condition": cond_name,
+                    "state": "DATA_UNAVAILABLE",
+                    "status": "DATA_UNAVAILABLE",
+                    "has_positive_evidence": False,
+                    "probability": None,
+                    "model_score": None,
+                    "abstain": True,
+                    "reason": "all_eligible_modalities_unavailable_or_ineligible",
+                }
+            else:
+                prob = float(torch.sigmoid(logits[0, k]).item())
+                entry = {
+                    "condition": cond_name,
+                    "state": "EVALUATED",
+                    "status": "EVALUATED",
+                    "has_positive_evidence": True,
+                    "probability": prob,
+                    "model_score": prob,
+                    "abstain": False,
+                    "confidence_tier": "High Confidence" if prob >= 0.6 else ("Moderate Confidence" if prob >= 0.3 else "Possible Candidate"),
+                }
+                cond_states[cond_name] = entry
+                evaluated_candidates.append(entry)
+
+        evaluated_candidates.sort(key=lambda x: x["probability"], reverse=True)
+        for rank, c in enumerate(evaluated_candidates, start=1):
+            c["rank"] = rank
+
+        all_abstain = len(evaluated_candidates) == 0
+        return {
+            "status": "DATA_UNAVAILABLE" if all_abstain else ("PARTIALLY_EVALUATED" if len(evaluated_candidates) < self.num_classes else "COMPLETED"),
+            "abstain": all_abstain,
+            "message": "All modalities unavailable. Abstaining from prediction." if all_abstain else "Differential evaluation complete for eligible conditions.",
+            "condition_states": cond_states,
+            "evaluated_conditions": evaluated_candidates,
+            "encounter_all_masked": encounter_all_masked,
+        }
 
 
 class ModalityState:
@@ -1059,7 +1442,7 @@ class MultimodalFeatureExtractor:
             sev_map = {"MILD": 0.33, "MODERATE": 0.66, "SEVERE": 1.0}
             sev_val = sev_map.get(str(sym.severity).upper(), 0.0)
 
-            has_qual = 1.0 if (sym.qualifiers and len(sym.qualifiers) > 0) else 0.0
+            has_qual = 1.0 if ((sym.qualifiers and len(sym.qualifiers) > 0) or bool(sym.laterality) or bool(sym.body_area)) else 0.0
             has_followup = 1.0 if bool(sym.follow_up_answer) else 0.0
             sym_feat[i] = [st_val, dur_clamped, sev_val, has_qual, has_followup, 1.0]
 
@@ -1341,40 +1724,38 @@ class MultimodalInferenceService:
         xray_reports: list[dict[str, Any]] | None = None,
         xray_images: list[dict[str, Any]] | None = None,
         raw_text: str | None = None,
+        symptoms_historical: list[Any] | None = None,
+        symptoms_not_asked: list[Any] | None = None,
+        **kwargs: Any,
     ) -> tuple[MultimodalPatientRecord, dict[str, Any]]:
         """Construct a validated MultimodalPatientRecord and provenance bundle from assessment inputs."""
         symptom_obs: list[ClinicalSymptomObservation] = []
 
-        # Process symptoms
+        # Process symptoms across all state categories with schema fidelity
         for s in (symptoms_present or []):
-            name = str(s.get("name") if isinstance(s, dict) else s).strip()
-            if name:
-                symptom_obs.append(ClinicalSymptomObservation(
-                    symptom=name,
-                    canonical=name.lower(),
-                    state="PRESENT",
-                    duration_days=s.get("duration_days") if isinstance(s, dict) else None,
-                    severity=str(s.get("severity") or "UNKNOWN").upper() if isinstance(s, dict) else "UNKNOWN",
-                    qualifiers=s.get("qualifiers", []) if isinstance(s, dict) else [],
-                    body_area=s.get("body_area") if isinstance(s, dict) else None,
-                    follow_up_answer=s.get("follow_up_answer") if isinstance(s, dict) else None,
-                ))
+            item = parse_symptom_observation(s, default_state="PRESENT")
+            if item:
+                symptom_obs.append(item)
+
         for s in (symptoms_absent or []):
-            name = str(s.get("name") if isinstance(s, dict) else s).strip()
-            if name:
-                symptom_obs.append(ClinicalSymptomObservation(
-                    symptom=name,
-                    canonical=name.lower(),
-                    state="ABSENT",
-                ))
+            item = parse_symptom_observation(s, default_state="ABSENT")
+            if item:
+                symptom_obs.append(item)
+
         for s in (symptoms_unknown or []):
-            name = str(s.get("name") if isinstance(s, dict) else s).strip()
-            if name:
-                symptom_obs.append(ClinicalSymptomObservation(
-                    symptom=name,
-                    canonical=name.lower(),
-                    state="UNKNOWN",
-                ))
+            item = parse_symptom_observation(s, default_state="UNKNOWN")
+            if item:
+                symptom_obs.append(item)
+
+        for s in (symptoms_historical or []):
+            item = parse_symptom_observation(s, default_state="HISTORICAL")
+            if item:
+                symptom_obs.append(item)
+
+        for s in (symptoms_not_asked or []):
+            item = parse_symptom_observation(s, default_state="NOT_ASKED")
+            if item:
+                symptom_obs.append(item)
 
         # Process laboratory findings from medical reports (with alias resolution)
         lab_params: list[StructuredLabParameter] = []
@@ -1581,17 +1962,31 @@ class MultimodalInferenceService:
         modality_mask = tensor_bundle["modality_mask"].squeeze(0).tolist()
 
         if not self.is_trained or self.model is None:
+            # Check symptom-only fallback eligibility (Step 6.13 Requirement 6)
+            # Rule: Ensure symptom-only fallback is NOT invoked without usable, verified symptom input.
+            symptoms_verified = bool(record.provenance.get("symptoms_verified", True)) and has_sym
+            if not symptoms_verified and not (has_lab or has_rad or has_xray or has_exam):
+                return {
+                    "status": "DATA_UNAVAILABLE",
+                    "abstain": True,
+                    "model_scope": "fallback_rejected",
+                    "message": "Symptom-only fallback cannot be invoked without usable, verified symptom input.",
+                    "conditions": [],
+                    "is_experimental": True,
+                }
+
             return {
                 "status": "blocked_untrained",
                 "is_multimodal_trained": False,
-                "model_scope": "unimodal_symptom_baseline_active",
-                "active_baseline_model": "condition_pred_v2.0-calibrated_logistic",
+                "model_scope": "unimodal_symptom_baseline_active" if symptoms_verified else "multimodal_blocked",
+                "active_baseline_model": "condition_pred_v2.0-calibrated_logistic" if symptoms_verified else None,
                 "multimodal_model_version": self.model_version,
                 "message": (
                     "Authentic patient-linked multimodal ML training is currently blocked pending "
                     "credentialed clinical EHR access (MIMIC-IV/MIMIC-CXR). The active production "
                     "assessment relies on the validated unimodal symptom baseline and downstream "
-                    "evidence reconciliation."
+                    "evidence reconciliation." if symptoms_verified else
+                    "Multimodal training blocked and symptom-only baseline unavailable without verified symptoms."
                 ),
                 "is_experimental": True,
                 "modality_mask": modality_mask,

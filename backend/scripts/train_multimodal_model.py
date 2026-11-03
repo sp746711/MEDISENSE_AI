@@ -51,6 +51,7 @@ from app.ai.multimodal_condition_model import (
     CANONICAL_RAD_FINDINGS,
     CANONICAL_XRAY_PATHOLOGIES,
     CONDITION_CLASSES,
+    INPATIENT_MULTIMODAL_CLASSES,
     FEATURE_SCHEMA_VERSION,
     LAB_SCHEMA_VERSION,
     SYMPTOM_VOCAB_VERSION,
@@ -93,15 +94,17 @@ class PatientLinkedMultimodalDataset(Dataset):
         }
 
 
-def check_authentic_data_availability(data_dir: Path) -> dict[str, Any]:
+def check_authentic_data_availability(data_dir: Path, taxonomy: str = "baseline") -> dict[str, Any]:
     """
     Rigorously audit local filesystem for genuine patient-level linked multimodal cohorts (Problem H).
     Rejects missing IDs, synthetic tags, unlinked files, and missing clinical provenance.
+    Taxonomy: 'baseline' (24-class Track A) or 'inpatient' (4-class Track B).
     """
     status: dict[str, Any] = {
         "is_available": False,
         "is_authentic": False,
         "cohort_name": "None",
+        "taxonomy": taxonomy,
         "sample_count": 0,
         "patient_count": 0,
         "encounter_count": 0,
@@ -143,6 +146,8 @@ def check_authentic_data_availability(data_dir: Path) -> dict[str, Any]:
             status["rejection_reasons"].append("Manifest contains empty record list.")
             return status
 
+        active_classes = INPATIENT_MULTIMODAL_CLASSES if taxonomy.lower() in ("inpatient", "track_b") else CONDITION_CLASSES
+
         # Strict authenticity audit of every record
         reasons: list[str] = []
         subjects: set[str] = set()
@@ -164,8 +169,8 @@ def check_authentic_data_availability(data_dir: Path) -> dict[str, Any]:
                 break
             # 3. Target class validation
             tgt = r.get("target_class_idx")
-            if tgt is None or tgt < 0 or tgt >= len(CONDITION_CLASSES):
-                reasons.append(f"Record {idx} contains invalid target class index {tgt}.")
+            if tgt is None or tgt < 0 or tgt >= len(active_classes):
+                reasons.append(f"Record {idx} contains invalid target class index {tgt} for taxonomy {taxonomy} (expected 0..{len(active_classes)-1}).")
                 break
 
             subjects.add(sid)
@@ -385,13 +390,18 @@ def train_multimodal_model(
     epochs: int = 20,
     batch_size: int = 32,
     lr: float = 1e-3,
+    taxonomy: str = "baseline",
+    condition_classes: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     """Train MultimodalConditionPredictor on patient-partitioned cohort with GMU fusion."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Training on device: {device}")
+    logger.info(f"Training on device: {device} | Taxonomy: {taxonomy}")
+
+    if condition_classes is None:
+        condition_classes = INPATIENT_MULTIMODAL_CLASSES if taxonomy.lower() in ("inpatient", "track_b") else CONDITION_CLASSES
 
     model = MultimodalConditionPredictor(
-        num_classes=len(CONDITION_CLASSES),
+        num_classes=len(condition_classes),
         hidden_dim=64,
         dropout_rate=0.2,
     ).to(device)
@@ -527,7 +537,8 @@ def train_multimodal_model(
         "status": status_str,
         "acceptance_passed": acceptance_passed,
         "acceptance_reasons": gate_reasons,
-        "condition_classes": CONDITION_CLASSES,
+        "taxonomy": taxonomy,
+        "condition_classes": condition_classes,
         "model_state": best_model_state,
         "val_metrics": {
             "best_loss": round(best_val_loss, 4),
@@ -567,10 +578,17 @@ def main():
     parser.add_argument("--epochs", type=int, default=20, help="Training epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Batch size")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument(
+        "--taxonomy",
+        type=str,
+        default="baseline",
+        choices=["baseline", "inpatient", "track_a", "track_b"],
+        help="Target taxonomy: 'baseline' (24-class Track A) or 'inpatient' (4-class Track B research)",
+    )
     args = parser.parse_args()
 
     logger.info("=== AUDITING MULTIMODAL TRAINING PREREQUISITES ===")
-    audit = check_authentic_data_availability(args.data_dir)
+    audit = check_authentic_data_availability(args.data_dir, taxonomy=args.taxonomy)
 
     if not audit["is_available"] or not audit["is_authentic"]:
         logger.warning("CRITICAL TRAINING DATA RULE ACTIVATED: Authentic patient-linked multimodal dataset is UNAVAILABLE on disk.")
@@ -593,7 +611,7 @@ def main():
     records = data["records"]
 
     train_recs, val_recs, test_recs = split_patient_cohort(records)
-    res = train_multimodal_model(train_recs, val_recs, test_recs, args.output_dir, args.epochs, args.batch_size, args.lr)
+    res = train_multimodal_model(train_recs, val_recs, test_recs, args.output_dir, args.epochs, args.batch_size, args.lr, taxonomy=args.taxonomy)
     logger.info(f"Pipeline finished with status: {res['status']}")
 
 

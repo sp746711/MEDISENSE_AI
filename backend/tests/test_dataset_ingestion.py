@@ -11,8 +11,10 @@ import sys
 from app.ai.multimodal_condition_model import CONDITION_CLASSES
 from app.ai.multimodal_dataset_ingestion import (
     AuthenticMultimodalDatasetIngester,
+    CrosswalkSigningAuthority,
     ICD_TO_CONDITION_MAP,
     IngestionAuditReport,
+    create_authenticated_imaging_crosswalk,
 )
 
 
@@ -67,6 +69,14 @@ def test_reject_synthetic_and_placeholder_records():
             "symptoms": ["cough", "fever", "dyspnea"],
             "symptom_tokens": [1, 2, 3] + [0] * 29,
             "laboratory": {"wbc": 14.5},
+            "study_hadm_crosswalk": create_authenticated_imaging_crosswalk(
+                subject_id="10002430",
+                hadm_id="21400215",
+                study_id="50412891",
+                source="MIMIC_IV_CXR_ED_TRANSFER",
+                source_record_reference="MIMIC_IV_ED.ED_RADIOLOGY",
+                signing_authority=CrosswalkSigningAuthority.get_test_authority(),
+            ),
             "xray": {"study_id": "50412891", "findings": ["consolidation"]},
         },
     ]

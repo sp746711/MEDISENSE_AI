@@ -48,6 +48,25 @@ def main() -> int:
     )
     parser.add_argument("--source", type=str, default="MIMIC-IV-CXR", help="Name of authentic source dataset.")
     parser.add_argument("--version", type=str, default="v2.2", help="Version identifier of source dataset.")
+    parser.add_argument(
+        "--taxonomy",
+        type=str,
+        default="baseline",
+        choices=["baseline", "inpatient", "track_a", "track_b"],
+        help="Disease taxonomy: 'baseline' (Track A: 24-class) or 'inpatient' (Track B: 4-class research).",
+    )
+    parser.add_argument(
+        "--enforce-primary",
+        action="store_true",
+        default=False,
+        help="Strictly reject secondary comorbidities as primary targets.",
+    )
+    parser.add_argument(
+        "--require-study-time",
+        action="store_true",
+        default=False,
+        help="Require imaging studies to possess verified study timestamps.",
+    )
 
     args = parser.parse_args()
     input_path = Path(args.input)
@@ -78,7 +97,13 @@ def main() -> int:
         return 1
 
     logger.info(f"Read {len(raw_records)} raw records. Initializing {args.source} ({args.version}) ingester...")
-    ingester = AuthenticMultimodalDatasetIngester(data_source_name=args.source, source_version=args.version)
+    ingester = AuthenticMultimodalDatasetIngester(
+        data_source_name=args.source,
+        source_version=args.version,
+        target_taxonomy=args.taxonomy,
+        enforce_primary_diagnosis=args.enforce_primary,
+        require_study_timestamp=args.require_study_time,
+    )
     valid_records, audit_report = ingester.validate_and_ingest_records(raw_records, source_file_path=input_path)
 
     output_path = Path(args.output)

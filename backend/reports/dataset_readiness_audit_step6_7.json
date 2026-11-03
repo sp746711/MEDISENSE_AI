@@ -1,0 +1,403 @@
+{
+  "step": "Goal 2 Step 6.7",
+  "timestamp": "2026-11-03T00:16:27.726483",
+  "free_tools_enforced": true,
+  "paid_services_detected": false,
+  "verdict": "FAIL",
+  "can_safely_proceed_to_training": false,
+  "primary_blocking_reasons": [
+    "Only symptom-level text data is present locally. Multimodal cohort is entirely absent.",
+    "Zero verified patient-encounter-study relationships exist in local storage.",
+    "Chest X-ray modality has no clinical indication or diagnostic validity for Peptic Ulcer Disease, Urinary Tract Infection."
+  ],
+  "task_results": {
+    "task_1_dataset_availability": {
+      "available_datasets": [
+        {
+          "name": "Symptom2Disease",
+          "path": "backend\\data\\symptom_to_disease\\Symptom2Disease.csv",
+          "format": "CSV",
+          "size_bytes": 229852,
+          "num_records": 1200,
+          "columns": [
+            "Unnamed: 0",
+            "label",
+            "text"
+          ],
+          "patient_identifiers": "NONE",
+          "encounter_identifiers": "NONE",
+          "imaging_study_identifiers": "NONE",
+          "timestamps": "NONE",
+          "modalities": [
+            "Symptoms (Patient narrative)"
+          ],
+          "unique_classes": 24,
+          "status": "AVAILABLE_LOCAL"
+        }
+      ],
+      "missing_datasets": [
+        {
+          "name": "MIMIC-IV-ED edstays.csv",
+          "expected_location": "backend/data/mimic/edstays.csv",
+          "expected_modalities": [
+            "Encounter timeline",
+            "Acuity"
+          ],
+          "identifiers": [
+            "subject_id",
+            "stay_id",
+            "hadm_id"
+          ],
+          "status": "MISSING_LOCAL"
+        },
+        {
+          "name": "MIMIC-IV-ED ed_radiology.csv",
+          "expected_location": "backend/data/mimic/ed_radiology.csv",
+          "expected_modalities": [
+            "Radiology reports"
+          ],
+          "identifiers": [
+            "subject_id",
+            "stay_id",
+            "study_id"
+          ],
+          "status": "MISSING_LOCAL"
+        },
+        {
+          "name": "MIMIC-IV Core admissions.csv",
+          "expected_location": "backend/data/mimic/admissions.csv",
+          "expected_modalities": [
+            "Inpatient encounter records"
+          ],
+          "identifiers": [
+            "subject_id",
+            "hadm_id"
+          ],
+          "status": "MISSING_LOCAL"
+        },
+        {
+          "name": "MIMIC-IV Hosp labevents.csv",
+          "expected_location": "backend/data/mimic/labevents.csv",
+          "expected_modalities": [
+            "Laboratory test measurements"
+          ],
+          "identifiers": [
+            "subject_id",
+            "hadm_id",
+            "labevent_id"
+          ],
+          "status": "MISSING_LOCAL"
+        },
+        {
+          "name": "MIMIC-CXR cxr-record-list.csv",
+          "expected_location": "backend/data/mimic/cxr-record-list.csv",
+          "expected_modalities": [
+            "Chest radiograph image index"
+          ],
+          "identifiers": [
+            "subject_id",
+            "study_id",
+            "dicom_id"
+          ],
+          "status": "MISSING_LOCAL"
+        },
+        {
+          "name": "MIMIC-CXR cxr_ed.csv (derived bridge crosswalk)",
+          "expected_location": "backend/data/mimic/cxr_ed.csv",
+          "expected_modalities": [
+            "Emergency imaging crosswalk"
+          ],
+          "identifiers": [
+            "stay_id",
+            "study_id"
+          ],
+          "status": "MISSING_LOCAL"
+        },
+        {
+          "name": "Multimodal Linked Patient Cohort (linked_patient_cohort.json)",
+          "expected_location": "backend/data/multimodal_linked/linked_patient_cohort.json",
+          "expected_modalities": [
+            "Symptoms",
+            "Labs",
+            "X-ray",
+            "Notes"
+          ],
+          "identifiers": [
+            "subject_id",
+            "hadm_id",
+            "study_id"
+          ],
+          "status": "MISSING_LOCAL"
+        }
+      ]
+    },
+    "task_2_free_sources_investigation": [
+      {
+        "dataset_name": "MIMIC-IV (v2.2)",
+        "provider": "PhysioNet / MIT Laboratory for Computational Physiology",
+        "monetary_cost": "$0.00 (100% Free)",
+        "registration_required": true,
+        "training_required": "CITI Training ('Data or Specimens Only Research' or 'Human Subjects Research')",
+        "data_use_agreement": "PhysioNet Credentialed Data Use Agreement (DUA) v1.5.0",
+        "reproducible_url": "https://physionet.org/content/mimiciv/2.2/",
+        "available_modalities": [
+          "Inpatient EHR",
+          "Laboratory",
+          "ICU Vitals",
+          "Prescriptions",
+          "Diagnoses (ICD-9/10)"
+        ],
+        "patient_encounter_linkage": "Authentic subject_id and hadm_id deterministic keys",
+        "licensing": "PhysioNet Credentialed Health Data License (Non-commercial / Research only)",
+        "download_authorization": "CREDENTIALED_RESTRICTED (Cannot be downloaded automatically without human CITI cert)"
+      },
+      {
+        "dataset_name": "MIMIC-IV-ED (v2.2)",
+        "provider": "PhysioNet / MIT Laboratory for Computational Physiology",
+        "monetary_cost": "$0.00 (100% Free)",
+        "registration_required": true,
+        "training_required": "CITI Training ('Data or Specimens Only Research')",
+        "data_use_agreement": "PhysioNet Credentialed Data Use Agreement",
+        "reproducible_url": "https://physionet.org/content/mimic-iv-ed/2.2/",
+        "available_modalities": [
+          "Emergency Department Stays",
+          "Triage Vitals",
+          "Chief Complaints",
+          "Acuity"
+        ],
+        "patient_encounter_linkage": "Authentic subject_id, stay_id, and hadm_id keys",
+        "licensing": "PhysioNet Credentialed Health Data License",
+        "download_authorization": "CREDENTIALED_RESTRICTED"
+      },
+      {
+        "dataset_name": "MIMIC-CXR (v2.0.0) / MIMIC-CXR-JPG (v2.1.0)",
+        "provider": "PhysioNet / MIT Laboratory for Computational Physiology & Beth Israel Deaconess",
+        "monetary_cost": "$0.00 (100% Free)",
+        "registration_required": true,
+        "training_required": "CITI Training required",
+        "data_use_agreement": "PhysioNet Credentialed Data Use Agreement",
+        "reproducible_url": "https://physionet.org/content/mimic-cxr-jpg/2.1.0/",
+        "available_modalities": [
+          "Chest Radiographs (377,110 images)",
+          "Radiology Free-Text Reports"
+        ],
+        "patient_encounter_linkage": "Authentic subject_id and study_id; requires MIMIC-IV-ED bridge for stay_id/hadm_id",
+        "licensing": "PhysioNet Credentialed Health Data License",
+        "download_authorization": "CREDENTIALED_RESTRICTED"
+      },
+      {
+        "dataset_name": "NIH ChestX-ray14",
+        "provider": "NIH Clinical Center",
+        "monetary_cost": "$0.00 (100% Free)",
+        "registration_required": false,
+        "training_required": "None",
+        "data_use_agreement": "Open access (NIH Clinical Center CC-BY)",
+        "reproducible_url": "https://nihcc.app.box.com/v/ChestXray-NIHCC",
+        "available_modalities": [
+          "Frontal-view Chest X-rays (112,120 images)",
+          "NLP-mined labels for 14 chest conditions"
+        ],
+        "patient_encounter_linkage": "Anonymous Patient ID only; NO encounter ID, NO labs, NO clinical notes",
+        "licensing": "Public domain / Open Research",
+        "download_authorization": "OPEN_ACCESS_UNLINKED (Cannot serve multimodal EHR linkage)"
+      },
+      {
+        "dataset_name": "CheXpert",
+        "provider": "Stanford ML Group",
+        "monetary_cost": "$0.00 (100% Free)",
+        "registration_required": true,
+        "training_required": "None",
+        "data_use_agreement": "CheXpert Research Use Agreement",
+        "reproducible_url": "https://stanfordmlgroup.github.io/competitions/chexpert/",
+        "available_modalities": [
+          "Chest Radiographs (224,316 images)",
+          "14 observation labels from reports"
+        ],
+        "patient_encounter_linkage": "Patient ID and Study ID only; NO inpatient EHR, NO labs, NO symptoms",
+        "licensing": "CheXpert Non-commercial Research Agreement",
+        "download_authorization": "OPEN_RESEARCH_UNLINKED (Cannot serve multimodal EHR linkage)"
+      }
+    ],
+    "task_3_source_relationships": {
+      "summary": "ZERO authentic cross-modal links exist in local storage.",
+      "relationships": {
+        "Patient_to_Encounter": {
+          "status": "UNAVAILABLE",
+          "evidence": "No encounter or admission tables exist locally."
+        },
+        "Encounter_to_Symptoms": {
+          "status": "UNAVAILABLE",
+          "evidence": "Symptom2Disease contains isolated text snippets unlinked to any encounter ID."
+        },
+        "Encounter_to_Labs": {
+          "status": "UNAVAILABLE",
+          "evidence": "Zero laboratory records (labevents) exist locally."
+        },
+        "Encounter_to_Radiology_Report": {
+          "status": "UNAVAILABLE",
+          "evidence": "Zero radiology reports or ed_radiology records exist locally."
+        },
+        "Radiology_Report_to_Xray": {
+          "status": "UNAVAILABLE",
+          "evidence": "Zero DICOM or chest X-ray image series are linked locally."
+        },
+        "Encounter_to_Clinical_Exam": {
+          "status": "UNAVAILABLE",
+          "evidence": "Zero physical exam or vitals records exist locally."
+        }
+      },
+      "temporal_proximity_heuristic": "REJECTED (Fail-closed per Step 6.1/6.2 policy)",
+      "synthetic_crosswalks": "PROHIBITED (Fail-closed per Step 6.4/6.6 policy)",
+      "overall_linkage_status": "FAIL"
+    },
+    "task_4_four_condition_matrix": {
+      "Pneumonia": {
+        "Symptoms": {
+          "status": "PARTIALLY_AVAILABLE",
+          "notes": "50 symptom narratives exist in Symptom2Disease.csv; not linked to EHR encounters."
+        },
+        "Laboratory": {
+          "status": "UNAVAILABLE",
+          "notes": "CBC, WBC, sputum cultures, blood cultures, CRP unavailable locally."
+        },
+        "Radiology_Reports": {
+          "status": "UNAVAILABLE",
+          "notes": "Chest radiograph reports unavailable locally."
+        },
+        "Xray_Images": {
+          "status": "NOT_VERIFIED",
+          "notes": "Only musculoskeletal (MURA) models exist locally; chest X-ray cohort unlinked & absent."
+        },
+        "Clinical_Examination": {
+          "status": "UNAVAILABLE",
+          "notes": "Lung auscultation (crackles, bronchial breathing), vitals unavailable locally."
+        }
+      },
+      "Acute Asthma Exacerbation": {
+        "Symptoms": {
+          "status": "PARTIALLY_AVAILABLE",
+          "notes": "50 narratives under 'Bronchial Asthma' in Symptom2Disease.csv; unlinked."
+        },
+        "Laboratory": {
+          "status": "UNAVAILABLE",
+          "notes": "Arterial blood gas, eosinophils unavailable locally."
+        },
+        "Radiology_Reports": {
+          "status": "UNAVAILABLE",
+          "notes": "Chest X-ray reports unavailable locally (only used to rule out pneumothorax/pneumonia)."
+        },
+        "Xray_Images": {
+          "status": "UNAVAILABLE",
+          "notes": "Chest X-ray is NOT diagnostic for asthma (typically normal/hyperinflation); unlinked locally."
+        },
+        "Clinical_Examination": {
+          "status": "UNAVAILABLE",
+          "notes": "Wheezing, peak expiratory flow (PEF), accessory muscle use unavailable locally."
+        }
+      },
+      "Peptic Ulcer Disease": {
+        "Symptoms": {
+          "status": "PARTIALLY_AVAILABLE",
+          "notes": "50 narratives under 'peptic ulcer disease' in Symptom2Disease.csv; unlinked."
+        },
+        "Laboratory": {
+          "status": "UNAVAILABLE",
+          "notes": "H. pylori stool antigen/urea breath test, hemoglobin for bleeding unavailable locally."
+        },
+        "Radiology_Reports": {
+          "status": "UNAVAILABLE",
+          "notes": "Radiology reports unavailable; endoscopy is primary diagnostic tool, not CXR."
+        },
+        "Xray_Images": {
+          "status": "UNAVAILABLE",
+          "notes": "Chest/abdominal X-ray has ZERO diagnostic utility for uncomplicated PUD (only for perforation)."
+        },
+        "Clinical_Examination": {
+          "status": "UNAVAILABLE",
+          "notes": "Epigastric tenderness, signs of peritonitis unavailable locally."
+        }
+      },
+      "Urinary Tract Infection": {
+        "Symptoms": {
+          "status": "PARTIALLY_AVAILABLE",
+          "notes": "50 narratives under 'urinary tract infection' in Symptom2Disease.csv; unlinked."
+        },
+        "Laboratory": {
+          "status": "UNAVAILABLE",
+          "notes": "Urinalysis (leukocyte esterase, nitrites), urine culture unavailable locally."
+        },
+        "Radiology_Reports": {
+          "status": "UNAVAILABLE",
+          "notes": "Radiology reports unavailable; imaging not indicated for uncomplicated UTI."
+        },
+        "Xray_Images": {
+          "status": "UNAVAILABLE",
+          "notes": "Chest X-ray has ZERO clinical relevance to UTI; forcing X-ray violates medical grounds."
+        },
+        "Clinical_Examination": {
+          "status": "UNAVAILABLE",
+          "notes": "Costovertebral angle tenderness, suprapubic tenderness unavailable locally."
+        }
+      }
+    },
+    "task_6_duplicate_detection": {
+      "exact_duplicates": 0,
+      "text_duplicates": 47,
+      "conflicting_label_texts": 0,
+      "clean_status": "PASS"
+    },
+    "task_6_patient_leakage": {
+      "has_patient_id": false,
+      "leakage_risk_assessment": "CRITICAL WARNING: Dataset lacks authentic patient identifiers (subject_id). Grouped k-fold or patient-stratified train/test splitting is IMPOSSIBLE. Row-level random splitting may leak intra-subject linguistic patterns if multiple records originated from the same patient or prompt generator.",
+      "mitigation_required": "For Track B multimodal training, authentic subject_id must be present to enforce GroupShuffleSplit / GroupKFold across all modalities.",
+      "status": "WARNING"
+    },
+    "schema_details": {
+      "file_name": "Symptom2Disease.csv",
+      "total_rows": 1200,
+      "total_columns": 3,
+      "column_names": [
+        "Unnamed: 0",
+        "label",
+        "text"
+      ],
+      "null_values": {
+        "Unnamed: 0": 0,
+        "label": 0,
+        "text": 0
+      },
+      "dtypes": {
+        "Unnamed: 0": "int64",
+        "label": "object",
+        "text": "object"
+      },
+      "unique_classes_count": 24,
+      "classes": [
+        "Psoriasis",
+        "Varicose Veins",
+        "Typhoid",
+        "Chicken pox",
+        "Impetigo",
+        "Dengue",
+        "Fungal infection",
+        "Common Cold",
+        "Pneumonia",
+        "Dimorphic Hemorrhoids",
+        "Arthritis",
+        "Acne",
+        "Bronchial Asthma",
+        "Hypertension",
+        "Migraine",
+        "Cervical spondylosis",
+        "Jaundice",
+        "Malaria",
+        "urinary tract infection",
+        "allergy",
+        "gastroesophageal reflux disease",
+        "drug reaction",
+        "peptic ulcer disease",
+        "diabetes"
+      ]
+    }
+  }
+}

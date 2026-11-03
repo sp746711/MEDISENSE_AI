@@ -352,16 +352,58 @@ def test_live_evidence_engine_output_to_multimodal_record():
 
 
 def test_protected_xray_assets_sha256_unmodified():
-    """Verify that zero protected X-ray assets were modified or corrupted."""
-    manifest_path = Path("models/xray_protected_manifest.json")
-    assert manifest_path.exists(), "Protected manifest missing"
+    """Verify every protected X-ray asset against the flat repository manifest.
 
-    with open(manifest_path, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
+    The manifest stores paths as top-level keys (not under an ``assets`` key).
+    Resolve paths from the repository root so this test works regardless of
+    the current working directory used to invoke pytest.
+    """
+    backend_root = Path(__file__).resolve().parents[1]
+    repository_root = backend_root.parent
+    manifest_path = backend_root / "models" / "xray_protected_manifest.json"
 
-    for rel_path, expected_hash in manifest.get("assets", {}).items():
-        file_path = Path(rel_path)
-        assert file_path.exists(), f"Protected asset {rel_path} missing!"
-        with open(file_path, "rb") as f:
-            computed_hash = hashlib.sha256(f.read()).hexdigest()
-        assert computed_hash == expected_hash, f"Protected asset {rel_path} hash mismatch!"
+    assert manifest_path.is_file(), (
+        f"Protected X-ray manifest missing: {manifest_path}"
+    )
+
+    with manifest_path.open("r", encoding="utf-8") as file:
+        manifest = json.load(file)
+
+    assert isinstance(manifest, dict), "Manifest must be a JSON object."
+    assert len(manifest) == 15, (
+        f"Expected exactly 15 protected assets; found {len(manifest)}."
+    )
+
+    for relative_path, expected_hash in manifest.items():
+        assert isinstance(relative_path, str) and relative_path.strip(), (
+            "Manifest contains an invalid asset path."
+        )
+        assert isinstance(expected_hash, str), (
+            f"Invalid hash value for {relative_path}."
+        )
+        assert len(expected_hash) == 64 and all(
+            char in "0123456789abcdefABCDEF" for char in expected_hash
+        ), f"Invalid SHA-256 format for {relative_path}."
+
+        relative = Path(relative_path)
+        assert not relative.is_absolute(), (
+            f"Absolute paths are not permitted: {relative_path}"
+        )
+        assert ".." not in relative.parts, (
+            f"Path traversal detected: {relative_path}"
+        )
+
+        asset_path = repository_root / relative
+        assert asset_path.is_file(), (
+            f"Protected asset missing: {relative_path}"
+        )
+
+        digest = hashlib.sha256()
+        with asset_path.open("rb") as file:
+            for chunk in iter(lambda: file.read(1024 * 1024), b""):
+                digest.update(chunk)
+
+        actual_hash = digest.hexdigest()
+        assert actual_hash.lower() == expected_hash.lower(), (
+            f"Protected asset SHA-256 mismatch: {relative_path}"
+        )

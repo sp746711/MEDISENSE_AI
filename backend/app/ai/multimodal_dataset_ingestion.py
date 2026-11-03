@@ -1856,40 +1856,80 @@ class ClinicalTemporalPolicy:
         admit_time: Optional[Union[datetime, str]],
         disch_time: Optional[Union[datetime, str]] = None,
         treatment_time: Optional[Union[datetime, str]] = None,
+        *,
+        onset_time: Optional[Union[datetime, str]] = None,
+        documentation_time: Optional[Union[datetime, str]] = None,
     ) -> dict[str, Any]:
-        """
-        Evaluates clinical timestamp against modality-specific temporal boundaries.
-        Returns: {
-            "is_within_window": bool,
-            "is_presentation_phase": bool,
-            "temporal_category": str,
-            "exclusion_reason": Optional[str],
-        }
+        """Evaluate modality timing without conflating symptom onset and recording time.
+
+        ``timestamp`` remains supported for existing callers. For SYMPTOMS/TRIAGE,
+        callers may instead supply the explicit ``onset_time`` and
+        ``documentation_time`` fields. Once either explicit field is supplied,
+        onset_time is required for temporal eligibility: documentation_time is
+        metadata only and is NEVER substituted for a missing onset time.
         """
         mod_upper = str(modality or "").strip().upper()
+        uses_explicit_symptom_times = (
+            mod_upper in ("SYMPTOMS", "TRIAGE")
+            and (onset_time is not None or documentation_time is not None)
+        )
 
-        t_dt, t_err = parse_clinical_timestamp(timestamp) if isinstance(timestamp, str) else (timestamp, None)
-        adm_dt, adm_err = parse_clinical_timestamp(admit_time) if isinstance(admit_time, str) else (admit_time, None)
-        dis_dt, dis_err = parse_clinical_timestamp(disch_time) if isinstance(disch_time, str) else (disch_time, None)
+        # For symptom/triage records, eligibility is based on symptom onset.
+        # Documentation time is retained separately as provenance metadata.
+        effective_timestamp = onset_time if uses_explicit_symptom_times else timestamp
 
-        if not t_dt or not adm_dt:
+        def _parse(value: Optional[Union[datetime, str]]) -> tuple[Optional[datetime], Optional[str]]:
+            if value is None:
+                return None, "missing_timestamp"
+            if isinstance(value, str):
+                return parse_clinical_timestamp(value)
+            if isinstance(value, datetime):
+                if value.tzinfo is None:
+                    return value.replace(tzinfo=timezone.utc), None
+                return value.astimezone(timezone.utc), None
+            return None, f"unsupported_timestamp_type:{type(value).__name__}"
+
+        t_dt, t_err = _parse(effective_timestamp)
+        adm_dt, adm_err = _parse(admit_time)
+        dis_dt, dis_err = _parse(disch_time)
+        doc_dt, doc_err = _parse(documentation_time) if documentation_time is not None else (None, None)
+
+        time_metadata = {
+            "onset_time_iso": t_dt.isoformat() if uses_explicit_symptom_times and t_dt else None,
+            "documentation_time_iso": doc_dt.isoformat() if doc_dt else None,
+            "onset_time_error": t_err if uses_explicit_symptom_times else None,
+            "documentation_time_error": doc_err,
+            "temporal_reference": "SYMPTOM_ONSET" if uses_explicit_symptom_times else "LEGACY_TIMESTAMP",
+        }
+
+        if uses_explicit_symptom_times and t_dt is None:
+            return {
+                "is_within_window": False,
+                "is_presentation_phase": False,
+                "temporal_category": "UNKNOWN_ONSET_TIME",
+                "exclusion_reason": "symptom_onset_time_missing_or_invalid",
+                **time_metadata,
+            }
+
+        if t_dt is None or adm_dt is None:
             return {
                 "is_within_window": False,
                 "is_presentation_phase": False,
                 "temporal_category": "MISSING_TIMESTAMP",
-                "exclusion_reason": "missing_modality_or_admission_timestamp",
+                "exclusion_reason": "missing_or_invalid_modality_or_admission_timestamp",
+                **time_metadata,
             }
 
         diff_seconds = (adm_dt - t_dt).total_seconds()
         diff_hours = diff_seconds / 3600.0  # Positive means BEFORE admission, negative means AFTER admission
 
-        # Post-discharge check
         if dis_dt and t_dt > dis_dt:
             return {
                 "is_within_window": False,
                 "is_presentation_phase": False,
                 "temporal_category": "POST_DISCHARGE",
                 "exclusion_reason": f"{mod_upper.lower()}_timestamp_after_discharge",
+                **time_metadata,
             }
 
         if mod_upper in ("SYMPTOMS", "TRIAGE"):
@@ -1899,45 +1939,34 @@ class ClinicalTemporalPolicy:
                 "is_presentation_phase": in_window,
                 "temporal_category": "PRESENTATION" if in_window else ("PRE_ENCOUNTER" if diff_hours > cls.SYMPTOM_WINDOW_HOURS_PRE else "INPATIENT_PROGRESSION"),
                 "exclusion_reason": None if in_window else "symptom_outside_presentation_window",
+                **time_metadata,
             }
 
         elif mod_upper in ("LABORATORY", "LAB"):
             if diff_hours > cls.LAB_MAX_ENCOUNTER_WINDOW_HOURS_PRE:
-                return {
-                    "is_within_window": False,
-                    "is_presentation_phase": False,
-                    "temporal_category": "PRE_ENCOUNTER_OUTPATIENT",
-                    "exclusion_reason": "lab_precedes_admission_window",
-                }
+                return {"is_within_window": False, "is_presentation_phase": False,
+                        "temporal_category": "PRE_ENCOUNTER_OUTPATIENT",
+                        "exclusion_reason": "lab_precedes_admission_window", **time_metadata}
             is_pres = (-cls.LAB_PRESENTATION_WINDOW_HOURS_POST <= diff_hours <= cls.LAB_PRESENTATION_WINDOW_HOURS_PRE)
-            return {
-                "is_within_window": True,
-                "is_presentation_phase": is_pres,
-                "temporal_category": "PRESENTATION_PANEL" if is_pres else "INPATIENT_MONITORING",
-                "exclusion_reason": None,
-            }
+            return {"is_within_window": True, "is_presentation_phase": is_pres,
+                    "temporal_category": "PRESENTATION_PANEL" if is_pres else "INPATIENT_MONITORING",
+                    "exclusion_reason": None, **time_metadata}
 
         elif mod_upper in ("XRAY", "CHEST_XRAY", "RADIOLOGY"):
             if diff_hours > cls.XRAY_MAX_ENCOUNTER_WINDOW_HOURS_PRE:
-                return {
-                    "is_within_window": False,
-                    "is_presentation_phase": False,
-                    "temporal_category": "PRE_ENCOUNTER_HISTORICAL",
-                    "exclusion_reason": "imaging_precedes_admission_window",
-                }
+                return {"is_within_window": False, "is_presentation_phase": False,
+                        "temporal_category": "PRE_ENCOUNTER_HISTORICAL",
+                        "exclusion_reason": "imaging_precedes_admission_window", **time_metadata}
             is_pres = (-cls.XRAY_PRESENTATION_WINDOW_HOURS_POST <= diff_hours <= cls.XRAY_PRESENTATION_WINDOW_HOURS_PRE)
-            return {
-                "is_within_window": True,
-                "is_presentation_phase": is_pres,
-                "temporal_category": "PRESENTATION_STUDY" if is_pres else "INPATIENT_MONITORING_STUDY",
-                "exclusion_reason": None,
-            }
+            return {"is_within_window": True, "is_presentation_phase": is_pres,
+                    "temporal_category": "PRESENTATION_STUDY" if is_pres else "INPATIENT_MONITORING_STUDY",
+                    "exclusion_reason": None, **time_metadata}
 
         elif mod_upper in ("CLINICAL_EXAM", "EXAM"):
             in_window = (-cls.EXAM_WINDOW_HOURS_POST <= diff_hours <= cls.EXAM_WINDOW_HOURS_PRE)
             precedes_tx = True
             if treatment_time:
-                tx_dt, _ = parse_clinical_timestamp(treatment_time) if isinstance(treatment_time, str) else (treatment_time, None)
+                tx_dt, _ = _parse(treatment_time)
                 if tx_dt and t_dt > tx_dt:
                     precedes_tx = False
             return {
@@ -1945,14 +1974,12 @@ class ClinicalTemporalPolicy:
                 "is_presentation_phase": in_window and precedes_tx,
                 "temporal_category": "INITIAL_EXAM" if (in_window and precedes_tx) else ("POST_TREATMENT_EXAM" if not precedes_tx else "OUT_OF_WINDOW"),
                 "exclusion_reason": None if (in_window and precedes_tx) else ("exam_follows_treatment" if not precedes_tx else "exam_outside_window"),
+                **time_metadata,
             }
 
-        return {
-            "is_within_window": True,
-            "is_presentation_phase": True,
-            "temporal_category": "GENERAL_ENCOUNTER",
-            "exclusion_reason": None,
-        }
+        return {"is_within_window": True, "is_presentation_phase": True,
+                "temporal_category": "GENERAL_ENCOUNTER", "exclusion_reason": None,
+                **time_metadata}
 
 
 @dataclass
